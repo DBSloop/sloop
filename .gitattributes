@@ -1,0 +1,10 @@
+# Text is stored with LF and checked out with LF on every platform.
+#
+# Without this, a shell script committed from Windows reaches a Linux runner with CRLF
+# line endings and dies as `bad interpreter: /bin/sh^M` — a red CI job whose cause is
+# invisible in the diff. `ci/no-http-client.sh` is the guarantee check, so it is the last
+# thing that should fail for a reason nobody can see.
+* text=auto eol=lf
+
+# PowerShell is the exception: `install.ps1` is run by Windows, where CRLF is native.
+*.ps1 text eol=crlf

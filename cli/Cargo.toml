@@ -1,0 +1,54 @@
+[workspace]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/DBSloop/sloop"
+homepage = "https://dbsloop.github.io"
+
+[package]
+name = "dbsloop"
+description = "Register your databases once, then back them up, restore, mirror and sync them. No credential ever leaves the machine."
+categories = ["command-line-utilities", "database"]
+keywords = ["backup", "restore", "postgresql", "mysql", "database"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# The command is `sloop`; the crate is `dbsloop`, because `sloop` on crates.io belongs to
+# an abandoned 2019 project. Cargo lets the two be named independently.
+[[bin]]
+name = "sloop"
+path = "src/main.rs"
+
+[dependencies]
+# `clap` is the whole dependency list for now, and the graph stays auditable on purpose:
+# the guarantee is that `cargo tree` shows nothing here that could open a socket.
+clap = { version = "4.5", features = ["derive", "wrap_help"] }
+
+[workspace.lints.rust]
+# There is no reason for this tool to contain unsafe code, and "no reason yet" is how it
+# gets in. CI adds `-D warnings` on top; the source does not, so a compiler upgrade
+# cannot break a working checkout.
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+[lints]
+workspace = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+# `panic = "abort"` is deliberately NOT set. The interactive UI owns the alternate screen
+# buffer and has to give the terminal back on the way out of a panic, and unwinding is
+# what runs the guard that does it.

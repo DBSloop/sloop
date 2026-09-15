@@ -1,0 +1,101 @@
+# The CLI's gate. Nothing merges past a red one.
+#
+# Only first-party actions are used here. A tool whose headline claim is about what it
+# does *not* depend on should not hand a third-party action a checkout of itself, and the
+# GitHub runners already ship stable Rust with rustfmt and clippy, so nothing is gained by
+# doing so. The paths lists are written out twice on purpose: GitHub's workflow parser
+# does not support YAML anchors.
+
+name: cli
+
+on:
+  push:
+    # The repository's default branch is `master`. `main` is listed alongside it so
+    # that renaming the default later cannot silently stop CI from running.
+    branches: [master, main]
+    paths:
+      - cli/**
+      - ci/**
+      - .github/workflows/cli.yml
+  pull_request:
+    paths:
+      - cli/**
+      - ci/**
+      - .github/workflows/cli.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # `#![deny(warnings)]` belongs in CI and not in the source: a compiler upgrade must
+  # never break a checkout that was working yesterday. Cargo passes `--cap-lints allow`
+  # to every registry dependency, so this bites our code and nothing else.
+  RUSTFLAGS: -D warnings
+
+defaults:
+  run:
+    working-directory: cli
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --all-features
+
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+    env:
+      # This job asks whether the crate still compiles on the oldest toolchain we claim,
+      # not whether that toolchain agrees with today's lints.
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v4
+      - name: Take the MSRV from Cargo.toml, so there is one place it is written
+        run: |
+          msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          test -n "$msrv" || { echo "cli/Cargo.toml has no rust-version"; exit 1; }
+          echo "MSRV=$msrv" >> "$GITHUB_ENV"
+          echo "Claimed MSRV: $msrv"
+      - name: Install that toolchain
+        run: rustup toolchain install "$MSRV" --profile minimal --no-self-update
+      - name: A claimed MSRV that does not build is a lie in the package metadata
+        run: cargo "+$MSRV" check --all-targets --all-features
+
+  guarantee:
+    name: no HTTP client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # One runner is enough: the check passes `--target all`, so a dependency hiding
+      # behind `cfg(windows)` is caught from here.
+      - name: cargo tree must contain nothing that can open a socket
+        working-directory: .
+        run: sh ci/no-http-client.sh
