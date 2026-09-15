@@ -1,0 +1,38 @@
+# How the project gets built, not what ships. Owner's direction — these never reach the
+# public repository.
+docs/
+.claude/
+CLAUDE.md
+
+# Rust
+cli/target/
+**/*.rs.bk
+
+# Angular / Node
+web/node_modules/
+web/dist/
+web/.angular/
+web/.nx/
+*.tsbuildinfo
+
+# The tool's own working folder, when sloop is run inside this repo during development.
+.sloop/
+
+# Secrets and keys — nothing here is ever committed, whatever it is called.
+*.age
+*.key
+*.pem
+.secrets/
+*.env
+!*.env.example
+
+# Backups hold real production data.
+backups/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json
