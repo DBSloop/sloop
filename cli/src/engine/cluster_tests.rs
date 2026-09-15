@@ -35,7 +35,11 @@ struct Cluster {
 }
 
 impl Cluster {
-    /// Build and start one, or `None` when this machine has no `initdb`.
+    /// Build, start and seed one, or `None` when this machine cannot host a server.
+    ///
+    /// Everything up to and including the fixture happens here, so a test is handed a
+    /// cluster that is ready or handed nothing at all. There is no half-built state for an
+    /// assertion to trip over and report as a bug.
     fn start(label: &str) -> Option<Self> {
         let (binaries, asked) = find_server_binaries()?;
 
@@ -62,8 +66,12 @@ impl Cluster {
         if let Err(why) = cluster.launch() {
             return refuse_or_skip(asked, &why);
         }
-
         cluster.running = true;
+
+        if let Err(why) = cluster.seed() {
+            return refuse_or_skip(asked, &why);
+        }
+
         Some(cluster)
     }
 
@@ -179,7 +187,11 @@ impl Cluster {
     }
 
     /// Run SQL as the superuser, against `database`.
-    fn psql(&self, database: &str, sql: &str) {
+    ///
+    /// Fallible, because building the fixture is not what these tests are about. A server
+    /// that will not take `CREATE ROLE` is a machine that cannot host the fixture, and that
+    /// is a skip — the assertions further down are where a real bug shows up.
+    fn psql(&self, database: &str, sql: &str) -> Result<(), String> {
         let output = Command::new(self.tool("psql"))
             .arg("--host=127.0.0.1")
             .arg(format!("--port={}", self.port))
@@ -195,18 +207,20 @@ impl Cluster {
             .arg(sql)
             .env("PGPASSWORD", SUPERUSER_PASSWORD)
             .stdin(Stdio::null())
-            .output()
-            .expect("running psql");
+            .output();
 
-        assert!(
-            output.status.success(),
-            "psql failed: {sql}\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        match output {
+            Ok(output) if output.status.success() => Ok(()),
+            Ok(output) => Err(format!(
+                "the fixture would not build: {}",
+                first_line(&output.stdout, &output.stderr)
+            )),
+            Err(error) => Err(format!("psql would not run: {error}")),
+        }
     }
 
     /// Two roles with different passwords, two databases, and real rows in one of them.
-    fn seed(&self) {
+    fn seed(&self) -> Result<(), String> {
         self.psql(
             "postgres",
             &format!(
@@ -215,9 +229,9 @@ impl Cluster {
                 sql_literal(ALPHA_PASSWORD),
                 sql_literal(BETA_PASSWORD)
             ),
-        );
-        self.psql("postgres", "CREATE DATABASE source_db OWNER alpha;");
-        self.psql("postgres", "CREATE DATABASE target_db OWNER beta;");
+        )?;
+        self.psql("postgres", "CREATE DATABASE source_db OWNER alpha;")?;
+        self.psql("postgres", "CREATE DATABASE target_db OWNER beta;")?;
 
         self.psql(
             "source_db",
@@ -231,9 +245,9 @@ impl Cluster {
              ALTER TABLE public.notes OWNER TO alpha; \
              ALTER TABLE app.widgets OWNER TO alpha; \
              ALTER SEQUENCE app.widgets_id_seq OWNER TO alpha;",
-        );
+        )?;
         // The destination starts empty and owned by someone else entirely.
-        self.psql("target_db", "ALTER SCHEMA public OWNER TO beta;");
+        self.psql("target_db", "ALTER SCHEMA public OWNER TO beta;")
     }
 
     fn database(&self, name: &str, user: &str) -> Connection {
@@ -474,7 +488,6 @@ fn a_dump_by_one_role_restores_under_another_and_the_counts_match() {
         skip("initdb is not on this machine");
         return;
     };
-    cluster.seed();
 
     let adapter = Postgres::default();
     let alpha_password = Secret::new(ALPHA_PASSWORD.to_owned());
@@ -550,7 +563,6 @@ fn the_failures_are_told_apart_and_carry_the_right_codes() {
         skip("initdb is not on this machine");
         return;
     };
-    cluster.seed();
 
     let adapter = Postgres::default();
     let source = cluster.database("source_db", "alpha");
