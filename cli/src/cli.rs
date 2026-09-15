@@ -39,6 +39,14 @@ pub struct Cli {
     #[arg(short = 'C', long = "project", value_name = "PATH|NAME", global = true)]
     pub project: Option<String>,
 
+    /// Take the password from this command's output instead of wherever the registry
+    /// says.
+    ///
+    /// For a team password manager: `--password-command "op read op://vault/db/password"`.
+    /// The password comes back through a pipe, so it never appears in `ps`.
+    #[arg(long, value_name = "COMMAND", global = true)]
+    pub password_command: Option<String>,
+
     /// Left empty on purpose: no command opens the interactive menu.
     #[command(subcommand)]
     pub command: Option<Command>,

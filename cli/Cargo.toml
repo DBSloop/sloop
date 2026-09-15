@@ -36,6 +36,14 @@ clap = { version = "4.5", features = ["derive", "wrap_help"] }
 # when the destination is a pipe or NO_COLOR is set, and the width to fit inside.
 anstream = "1.0"
 terminal_size = "0.4"
+argon2 = "0.6.0"
+chacha20poly1305 = "0.11.0"
+zeroize = { version = "1.9.0", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.6"
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
+getrandom = "0.4.3"
+rpassword = "7.5.4"
 
 [workspace.lints.rust]
 # There is no reason for this tool to contain unsafe code, and "no reason yet" is how it

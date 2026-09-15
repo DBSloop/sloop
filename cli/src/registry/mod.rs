@@ -16,6 +16,7 @@
 //! the world — is there a `.sloop` here, and does this name point anywhere — arrive through
 //! [`World`] rather than straight off the disk.
 
+pub mod file;
 pub mod locations;
 pub mod projects;
 

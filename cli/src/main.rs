@@ -10,6 +10,7 @@ mod commands;
 mod exit;
 mod failure;
 mod registry;
+mod secret;
 mod style;
 mod wordmark;
 
@@ -22,6 +23,7 @@ use clap::Parser as _;
 use crate::cli::{Cli, Command};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
+use crate::registry::file::{self, Registry};
 use crate::registry::locations::Locations;
 use crate::registry::{Disk, projects, resolve};
 
@@ -78,6 +80,12 @@ fn run(cli: &Cli) -> Outcome<Exit> {
                 environment_project().as_deref(),
             )?;
 
+            // Reading the registry here is what makes R3 visible from outside: a file
+            // that will not parse fails now, with the file named, instead of surprising
+            // someone in the middle of a backup.
+            let registry_dir = resolution.registry_dir().unwrap_or_else(|| global.clone());
+            let registry = Registry::load(&registry_dir.join(file::FILE))?;
+
             Ok(unimplemented(
                 &format!("'{}'", command.path()),
                 Some(&[
@@ -86,6 +94,7 @@ fn run(cli: &Cli) -> Outcome<Exit> {
                         "A name would be looked for in {}.",
                         resolution.describe_lookup(&global)
                     ),
+                    describe_registry(&registry, cli.password_command.as_deref()),
                 ]),
             ))
         }
@@ -122,6 +131,35 @@ fn init_target(flag: Option<&str>, global: &Path) -> Outcome<PathBuf> {
         Failure::usage(format!("-C says {argument}, which is not a directory")).hint(
             "sloop init needs a directory that already exists, or the name of a project it knows",
         ),
+    )
+}
+
+/// What the registry holds, and where each password would be fetched from.
+///
+/// Routes only. Not one of these phrases can contain a password, because a route is a
+/// direction and never a value — which is the property that lets this be printed at all.
+fn describe_registry(registry: &Registry, password_command: Option<&str>) -> String {
+    if registry.is_empty() {
+        return "It has no databases in it yet.".to_owned();
+    }
+
+    let listed: Vec<String> = registry
+        .entries()
+        .map(|(name, database)| {
+            let route = database.password.overridden_by(password_command);
+            format!("{name} via {}", route.describe())
+        })
+        .collect();
+
+    let plural = if registry.len() == 1 {
+        "database"
+    } else {
+        "databases"
+    };
+    format!(
+        "It holds {} {plural}: {}.",
+        registry.len(),
+        listed.join(", ")
     )
 }
 

@@ -40,6 +40,36 @@ impl Failure {
         self
     }
 
+    /// The sentence itself.
+    ///
+    /// Read by the tests today and by R16's `--json`, which has to put the message and
+    /// the hint in fields of their own rather than in the middle of a printed line.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// The same failure with something in front of it — a file name, a database name.
+    ///
+    /// The hint and the exit code come along. Rebuilding the failure instead loses the
+    /// hint, which is the half that tells the user what to do.
+    #[must_use]
+    pub fn prefixed(mut self, prefix: impl std::fmt::Display) -> Self {
+        self.message = format!("{prefix}: {}", self.message);
+        self
+    }
+
+    /// The line that says what to do about it, when there is one. See `message`.
+    #[allow(dead_code)]
+    ///
+    /// Named apart from the builder above, which took the good name first and deserves
+    /// it: `.hint("...")` at thirty call sites reads better than `.with_hint("...")`.
+    #[must_use]
+    pub fn hint_text(&self) -> Option<&str> {
+        self.hint.as_deref()
+    }
+
     /// The code this leaves the process with.
     #[must_use]
     pub const fn exit(&self) -> Exit {
