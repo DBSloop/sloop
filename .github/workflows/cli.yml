@@ -89,6 +89,38 @@ jobs:
       - name: A claimed MSRV that does not build is a lie in the package metadata
         run: cargo "+$MSRV" check --all-targets --all-features
 
+  postgres:
+    name: postgres ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    strategy:
+      # One version failing must not hide the others: which majors work is the whole
+      # question this job exists to answer.
+      fail-fast: false
+      matrix:
+        # Adding a major is one line here, and nothing else.
+        version: ["15", "16", "17", "18"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL ${{ matrix.version }} from PGDG
+        working-directory: .
+        # The upstream repository, because Ubuntu ships one major and this job is about
+        # several. `apt.postgresql.org.sh` is PostgreSQL's own setup script, which handles
+        # the signing key so this workflow does not have to.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y "postgresql-${{ matrix.version }}"
+          "/usr/lib/postgresql/${{ matrix.version }}/bin/initdb" --version
+
+      - name: Dump and restore against it
+        env:
+          # Set, so the tests use this major and no other — and fail rather than skip if it
+          # is not where they were told to look.
+          SLOOP_TEST_PG_BIN: /usr/lib/postgresql/${{ matrix.version }}/bin
+        run: cargo test --bin sloop engine::cluster_tests -- --nocapture
+
   guarantee:
     name: no HTTP client
     runs-on: ubuntu-latest
