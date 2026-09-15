@@ -17,9 +17,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::engine::{Engine, Target, connection_string};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
-use crate::secret::Route;
+use crate::secret::{Route, Secret};
 
 /// The registry file's name, inside `.sloop` or inside the global store.
 pub const FILE: &str = "registry.toml";
@@ -30,41 +31,6 @@ pub const SEALED_FILE: &str = "secrets.sealed";
 
 /// Bumped only when the shape below changes in a way an older sloop could misread.
 const VERSION: u32 = 1;
-
-/// The engines. Nothing else in v1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Engine {
-    /// PostgreSQL.
-    Postgres,
-    /// MySQL.
-    Mysql,
-    /// MariaDB — a separate engine, not an alias, because it ships `mariadb-dump`.
-    Mariadb,
-}
-
-impl Engine {
-    /// The port this engine listens on when nobody says otherwise.
-    #[must_use]
-    pub const fn default_port(self) -> u16 {
-        match self {
-            Self::Postgres => 5432,
-            Self::Mysql | Self::Mariadb => 3306,
-        }
-    }
-
-    /// The scheme this engine uses in a URL. Used by `Database::credential_key`, which
-    /// waits for R7.
-    #[allow(dead_code)]
-    #[must_use]
-    pub const fn scheme(self) -> &'static str {
-        match self {
-            Self::Postgres => "postgres",
-            Self::Mysql => "mysql",
-            Self::Mariadb => "mariadb",
-        }
-    }
-}
 
 /// One registered database, exactly as the file holds it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,14 +87,29 @@ impl Database {
     /// it is the same thing that shows up in a connection log.
     #[must_use]
     pub fn credential_key(&self) -> String {
-        format!(
-            "{}://{}@{}:{}/{}",
-            self.engine.scheme(),
-            self.user,
-            self.host,
+        connection_string(
+            self.engine,
+            &self.user,
+            &self.host,
             self.port,
-            self.database
+            &self.database,
         )
+    }
+
+    /// This entry as something an adapter can act on.
+    ///
+    /// The one place the registry hands over to `engine`, and the reason nothing in
+    /// `engine` has to know what a registry file looks like.
+    #[must_use]
+    pub fn target<'a>(&'a self, password: &'a Secret) -> Target<'a> {
+        Target {
+            engine: self.engine,
+            host: &self.host,
+            port: self.port,
+            database: &self.database,
+            user: &self.user,
+            password,
+        }
     }
 }
 

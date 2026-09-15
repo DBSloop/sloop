@@ -7,6 +7,7 @@
 
 mod cli;
 mod commands;
+mod engine;
 mod exit;
 mod failure;
 mod registry;

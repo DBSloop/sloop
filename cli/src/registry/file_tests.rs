@@ -1,6 +1,7 @@
 //! The registry file, read under the rules it has to be read under.
 
-use super::{Engine, Registry};
+use super::Registry;
+use crate::engine::Engine;
 use crate::secret::Route;
 
 const SAMPLE: &str = r#"
