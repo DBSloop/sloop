@@ -39,6 +39,17 @@ impl Sandbox {
             NEXT.fetch_add(1, Ordering::Relaxed)
         );
         let root = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&root).expect("a temporary directory should be creatable");
+
+        // macOS puts its temporary directory under `/var`, which is a symlink to
+        // `/private/var`, and `getcwd` in the child process resolves it. Without this the
+        // sandbox and the binary hold two spellings of the same directory, and every path
+        // assertion fails on exactly one platform. Not on Windows, where `canonicalize`
+        // hands back a verbatim `\\?\` path that `getcwd` never produces — and where
+        // nothing is symlinked anyway.
+        #[cfg(not(windows))]
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
+
         let home = root.join("home");
         let work = root.join("work");
 
