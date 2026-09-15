@@ -121,6 +121,61 @@ jobs:
           SLOOP_TEST_PG_BIN: /usr/lib/postgresql/${{ matrix.version }}/bin
         run: cargo test --bin sloop engine::cluster_tests -- --nocapture
 
+  # One version each, which is what these two ship in the distribution. Several majors is
+  # the shape the `postgres` job above already has — a matrix and a vendor repository — and
+  # it goes here the same way if it is ever wanted. A one-entry matrix in the meantime would
+  # only be a version number waiting to go stale.
+  mysql:
+    name: mysql
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MySQL
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-server
+          # The tests build a server of their own in a temporary directory, and Ubuntu's
+          # AppArmor profile confines `mysqld` to `/var/lib/mysql` — so without this the
+          # data directory cannot be written, and the failure is about permissions rather
+          # than about sloop. The packaged server is stopped for a related reason: nothing
+          # here talks to it, and it should not be holding port 3306 either.
+          sudo systemctl stop mysql || true
+          sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.mysqld || true
+          /usr/sbin/mysqld --version
+
+      - name: Dump and restore against it
+        env:
+          # Set, so the tests use this server and no other — and fail rather than skip if
+          # it is not where they were told to look. It names the directory of the *client*
+          # programs; Debian and Ubuntu put the daemon in `/usr/sbin`, which the harness
+          # knows to look in.
+          SLOOP_TEST_MYSQL_BIN: /usr/bin
+        # One at a time: each test starts a database server, and three of those at once on
+        # a shared runner turns a real failure into a timeout that looks like one.
+        run: cargo test --bin sloop engine::mysql_cluster_tests::mysql -- --nocapture --test-threads=1
+
+  mariadb:
+    name: mariadb
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MariaDB
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mariadb-server
+          sudo systemctl stop mariadb || true
+          sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.mysqld || true
+          /usr/sbin/mariadbd --version
+
+      - name: Dump and restore against it
+        env:
+          SLOOP_TEST_MARIADB_BIN: /usr/bin
+        run: cargo test --bin sloop engine::mysql_cluster_tests::mariadb -- --nocapture --test-threads=1
+
   guarantee:
     name: no HTTP client
     runs-on: ubuntu-latest

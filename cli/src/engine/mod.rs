@@ -32,11 +32,15 @@
 //! is allowed to sit unused rather than each item carrying its own excuse.
 #![allow(dead_code)]
 
+pub mod mysql;
 pub mod postgres;
 
 #[cfg(test)]
 #[path = "cluster_tests.rs"]
 mod cluster_tests;
+#[cfg(test)]
+#[path = "mysql_cluster_tests.rs"]
+mod mysql_cluster_tests;
 #[cfg(test)]
 mod tests;
 
@@ -45,8 +49,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::exit::Exit;
-use crate::failure::{Failure, Outcome};
+use crate::failure::Outcome;
 use crate::secret::Secret;
 
 /// The engines. Three today; the shape of this module is what keeps a fourth cheap.
@@ -95,14 +98,17 @@ impl fmt::Display for Engine {
 ///
 /// No catch-all arm, on purpose. Add a variant to [`Engine`] and this stops compiling
 /// until the new engine is handled, which is a better reminder than a comment.
-pub fn adapter_for(engine: Engine) -> Outcome<Box<dyn Adapter>> {
+///
+/// It cannot fail, and says so. Every engine there is now has an adapter, and building one
+/// is only ever a matter of naming the programs to run — whether those programs are on the
+/// machine is a question for the first command that tries to run one, which is where the
+/// failure has a database to name and an exit code to carry.
+#[must_use]
+pub fn adapter_for(engine: Engine) -> Box<dyn Adapter> {
     match engine {
-        Engine::Postgres => Ok(Box::new(postgres::Postgres::default())),
-        Engine::Mysql | Engine::Mariadb => Err(Failure::new(
-            Exit::Usage,
-            format!("{engine} is not supported by this build yet"),
-        )
-        .hint("PostgreSQL works today; MySQL and MariaDB are the next entry on the list")),
+        Engine::Postgres => Box::new(postgres::Postgres::default()),
+        Engine::Mysql => Box::new(mysql::mysql()),
+        Engine::Mariadb => Box::new(mysql::mariadb()),
     }
 }
 
