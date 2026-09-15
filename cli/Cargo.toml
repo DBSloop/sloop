@@ -31,6 +31,11 @@ path = "src/main.rs"
 # `clap` is the whole dependency list for now, and the graph stays auditable on purpose:
 # the guarantee is that `cargo tree` shows nothing here that could open a socket.
 clap = { version = "4.5", features = ["derive", "wrap_help"] }
+# Both of these are already in the graph underneath clap. Naming them here costs no
+# new crate and buys the two things every printed line needs: colour that disappears
+# when the destination is a pipe or NO_COLOR is set, and the width to fit inside.
+anstream = "1.0"
+terminal_size = "0.4"
 
 [workspace.lints.rust]
 # There is no reason for this tool to contain unsafe code, and "no reason yet" is how it

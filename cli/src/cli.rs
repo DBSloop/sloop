@@ -29,6 +29,16 @@ in it that could phone home even if it wanted to.";
     max_term_width = 100,
 )]
 pub struct Cli {
+    /// Use the global registry, whichever directory you are standing in.
+    #[arg(long, global = true, conflicts_with = "project")]
+    pub global: bool,
+
+    /// Work on this project: a directory, or a name `sloop init` recorded.
+    ///
+    /// `SLOOP_PROJECT` says the same thing from the environment, and this outranks it.
+    #[arg(short = 'C', long = "project", value_name = "PATH|NAME", global = true)]
+    pub project: Option<String>,
+
     /// Left empty on purpose: no command opens the interactive menu.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -37,7 +47,7 @@ pub struct Cli {
 /// Everything `sloop` can be asked to do.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Start a project registry in this directory.
+    /// Start a project registry in this directory, or in the one `-C` names.
     Init,
 
     /// Report which client tools are present, missing or too old.
@@ -115,6 +125,26 @@ pub enum KeyCommand {
 }
 
 impl Command {
+    /// Does this command read a registry?
+    ///
+    /// The ones that do resolve which registry before they do anything else, so `-C` at a
+    /// project that does not exist fails as usage rather than halfway through the work.
+    /// `doctor` inspects the machine, `uninstall` removes the binary and `init` creates
+    /// the thing the others read, so none of the three needs one.
+    #[must_use]
+    pub const fn uses_registry(&self) -> bool {
+        matches!(
+            self,
+            Self::Db { .. }
+                | Self::Backup
+                | Self::Backups { .. }
+                | Self::Restore
+                | Self::Mirror
+                | Self::Sync
+                | Self::Key { .. }
+        )
+    }
+
     /// What the user typed, for the messages that have to name it back to them.
     #[must_use]
     pub fn path(&self) -> &'static str {

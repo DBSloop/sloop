@@ -7,7 +7,7 @@
 //! from clap rather than depending on `anstyle` directly means the styles here and the
 //! styles clap renders can never be two incompatible versions of the same type.
 
-use clap::builder::styling::{Ansi256Color, Color, RgbColor, Style, Styles};
+use clap::builder::styling::{Ansi256Color, AnsiColor, Color, RgbColor, Style, Styles};
 
 /// Claude Code orange, the single accent.
 const ACCENT_RGB: RgbColor = RgbColor(0xD9, 0x77, 0x57);
@@ -56,6 +56,29 @@ pub fn heading(text: &str) -> String {
     format!("{style}{text}{style:#}")
 }
 
+/// Text in the accent, with no weight added — the wordmark, and values worth noticing.
+#[must_use]
+pub fn paint(text: &str) -> String {
+    let style = accent();
+    format!("{style}{text}{style:#}")
+}
+
+/// The `error:` prefix, red and bold, exactly as clap sets its own. Red here is meaning
+/// rather than decoration, which is why it is the one colour allowed beside the accent.
+#[must_use]
+pub fn error_prefix() -> String {
+    let style = Style::new()
+        .fg_color(Some(Color::Ansi(AnsiColor::Red)))
+        .bold();
+    format!("{style}error:{style:#}")
+}
+
+/// A label beside a value: present, but never louder than what it labels.
+#[must_use]
+pub fn label(text: &str) -> String {
+    dim(text)
+}
+
 /// Dim text, for the lines that support a heading rather than compete with it.
 #[must_use]
 pub fn dim(text: &str) -> String {
@@ -80,7 +103,7 @@ pub fn clap_styles() -> Styles {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCENT_256, ACCENT_RGB, accent, dim, heading};
+    use super::{ACCENT_256, ACCENT_RGB, accent, dim, error_prefix, heading, paint};
 
     /// Strip every SGR sequence, the way `anstream` does when the destination is a pipe
     /// or the user has said `NO_COLOR`. What is left has to be the text we asked for —
@@ -112,6 +135,8 @@ mod tests {
         for (painted, text) in [
             (heading("Commands"), "Commands"),
             (dim("optional"), "optional"),
+            (paint("sloop"), "sloop"),
+            (error_prefix(), "error:"),
         ] {
             assert!(painted.starts_with('\x1b'), "{painted:?} never opened");
             assert!(painted.ends_with("\x1b[0m"), "{painted:?} never reset");
