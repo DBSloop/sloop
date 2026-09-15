@@ -75,6 +75,22 @@ impl Cluster {
         Some(cluster)
     }
 
+    /// The client tools that belong to *this* server.
+    ///
+    /// Two reasons, and the second is the one that matters. A runner can have a PostgreSQL
+    /// server installed without its client tools on `PATH`, and then the adapter cannot find
+    /// `pg_dump` even though the cluster started — which looks like a failed assertion rather
+    /// than a machine without the tools. And the version matrix is pointless otherwise: it
+    /// would exercise whatever `pg_dump` is on `PATH` against each server in turn, instead of
+    /// version N's client against version N's server, which is the whole question.
+    fn tools(&self) -> Tools {
+        Tools {
+            dump: self.tool("pg_dump"),
+            restore: self.tool("pg_restore"),
+            query: self.tool("psql"),
+        }
+    }
+
     /// The path to one of the PostgreSQL programs. An empty directory means `PATH`.
     fn tool(&self, name: &str) -> PathBuf {
         self.binaries.join(name)
@@ -489,7 +505,7 @@ fn a_dump_by_one_role_restores_under_another_and_the_counts_match() {
         return;
     };
 
-    let adapter = Postgres::default();
+    let adapter = Postgres::new(cluster.tools());
     let alpha_password = Secret::new(ALPHA_PASSWORD.to_owned());
     let beta_password = Secret::new(BETA_PASSWORD.to_owned());
     let source = cluster.database("source_db", "alpha");
@@ -564,7 +580,7 @@ fn the_failures_are_told_apart_and_carry_the_right_codes() {
         return;
     };
 
-    let adapter = Postgres::default();
+    let adapter = Postgres::new(cluster.tools());
     let source = cluster.database("source_db", "alpha");
     let right = Secret::new(ALPHA_PASSWORD.to_owned());
 
@@ -598,7 +614,8 @@ fn the_failures_are_told_apart_and_carry_the_right_codes() {
 
     // --- a client older than the server is refused before anything is written ---------
     let server = adapter.probe(&source.target(&right)).expect("probing");
-    let old = Postgres::default().pretending_to_be(Version::new(server.version.major - 1, 0));
+    let old =
+        Postgres::new(cluster.tools()).pretending_to_be(Version::new(server.version.major - 1, 0));
     let dump_path = cluster.root.join("never-written.dump");
     let failure = old
         .dump(&source.target(&right), &dump_path)
