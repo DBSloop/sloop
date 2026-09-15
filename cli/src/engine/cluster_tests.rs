@@ -37,8 +37,9 @@ struct Cluster {
 impl Cluster {
     /// Build and start one, or `None` when this machine has no `initdb`.
     fn start(label: &str) -> Option<Self> {
-        let binaries = find_server_binaries()?;
+        let (binaries, asked) = find_server_binaries()?;
 
+        announce(&binaries);
         sweep_stale_clusters(&binaries);
 
         let port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
@@ -55,8 +56,13 @@ impl Cluster {
             running: false,
         };
 
-        cluster.initdb();
-        cluster.launch();
+        if let Err(why) = cluster.initdb() {
+            return refuse_or_skip(asked, &why);
+        }
+        if let Err(why) = cluster.launch() {
+            return refuse_or_skip(asked, &why);
+        }
+
         cluster.running = true;
         Some(cluster)
     }
@@ -66,11 +72,11 @@ impl Cluster {
         self.binaries.join(name)
     }
 
-    fn initdb(&self) {
+    fn initdb(&self) -> Result<(), String> {
         let password_file = self.root.join("superuser-password");
         std::fs::write(&password_file, SUPERUSER_PASSWORD).expect("writing the password file");
 
-        let output = Command::new(self.tool("initdb"))
+        let built = Command::new(self.tool("initdb"))
             .arg("--pgdata")
             .arg(&self.data)
             .arg("--username=sloop_super")
@@ -83,19 +89,25 @@ impl Cluster {
             // A cluster that is about to be deleted does not need to survive a power cut.
             .arg("--no-sync")
             .stdin(Stdio::null())
-            .output()
-            .expect("running initdb");
+            .output();
 
-        assert!(
-            output.status.success(),
-            "initdb failed\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        // The password is only needed to create the cluster. It lives in the keyring-free
-        // fixture from here on, so the file goes.
+        // The password was only needed to create the cluster; the file goes either way.
         let _ = std::fs::remove_file(&password_file);
+
+        let Ok(output) = built else {
+            return Err(format!("{} would not run", self.tool("initdb").display()));
+        };
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        // The usual reason on a hosted runner: initdb refuses to run as an administrator,
+        // which is exactly what a Windows CI runner is.
+        Err(format!(
+            "initdb refused: {}",
+            first_line(&output.stdout, &output.stderr)
+        ))
     }
 
     /// Start the server.
@@ -108,17 +120,14 @@ impl Cluster {
     ///
     /// The server's own output goes to `--log`, which is where anything worth reading after a
     /// failure ends up anyway.
-    fn launch(&self) {
+    fn launch(&self) -> Result<(), String> {
         let status = Command::new(self.tool("pg_ctl"))
             .arg("--pgdata")
             .arg(&self.data)
             .arg("--log")
             .arg(self.root.join("server.log"))
             .arg("--options")
-            .arg(format!(
-                "-p {} -c listen_addresses=127.0.0.1 -c fsync=off -c max_connections=40",
-                self.port
-            ))
+            .arg(self.server_options())
             // Bounded, so a cluster that will not come up fails the test instead of
             // hanging it.
             .arg("--timeout=60")
@@ -127,15 +136,46 @@ impl Cluster {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .expect("running pg_ctl start");
+            .status();
 
-        assert!(
-            status.success(),
-            "pg_ctl start failed on port {}\n--- server log ---\n{}",
+        if status.is_ok_and(|status| status.success()) {
+            return Ok(());
+        }
+
+        Err(format!(
+            "the server would not start on port {}: {}",
             self.port,
-            std::fs::read_to_string(self.root.join("server.log")).unwrap_or_default()
+            std::fs::read_to_string(self.root.join("server.log"))
+                .unwrap_or_default()
+                .lines()
+                .map(str::trim)
+                .rfind(|line| !line.is_empty())
+                .unwrap_or("it left no log")
+                .to_owned()
+        ))
+    }
+
+    /// The settings the throwaway server runs with.
+    ///
+    /// The socket directory is the interesting one. Debian and Ubuntu build PostgreSQL with
+    /// `unix_socket_directories` defaulting to `/var/run/postgresql`, which belongs to the
+    /// `postgres` user — so on a CI runner the server refuses to start, and the message is
+    /// about a socket rather than about a permission. Pointing it inside the cluster's own
+    /// directory sidesteps that. Not on Windows, which has no such socket.
+    fn server_options(&self) -> String {
+        let mut options = format!(
+            "-p {} -c listen_addresses=127.0.0.1 -c fsync=off -c max_connections=40",
+            self.port
         );
+        if !cfg!(windows) {
+            use std::fmt::Write as _;
+            let _ = write!(
+                options,
+                " -c unix_socket_directories={}",
+                self.root.display()
+            );
+        }
+        options
     }
 
     /// Run SQL as the superuser, against `database`.
@@ -291,19 +331,92 @@ fn sweep_stale_clusters(binaries: &Path) {
     }
 }
 
+/// Why these tests have a server to talk to at all.
+///
+/// The distinction decides what a setup failure means. Asked for one by name and it will
+/// not run: that is a red test, because somebody wanted that server exercised. Found one
+/// lying around and it will not run: that is a skip, because nobody promised this machine
+/// could host a database — a hosted runner will not let `initdb` run as an administrator,
+/// and a preinstalled PostgreSQL there is scenery rather than a server.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Asked {
+    /// `SLOOP_TEST_PG_BIN` named it.
+    Explicitly,
+    /// It turned up on `PATH` or in a package manager's directory.
+    ByLookingAround,
+}
+
+/// Skip, or fail — whichever the caller earned.
+fn refuse_or_skip(asked: Asked, why: &str) -> Option<Cluster> {
+    assert!(
+        asked == Asked::ByLookingAround,
+        "{BIN_DIR_VAR} named a PostgreSQL that will not run: {why}"
+    );
+    eprintln!("skipping the PostgreSQL cluster tests: {why}");
+    None
+}
+
+/// The first line either stream had to say.
+fn first_line(stdout: &[u8], stderr: &[u8]) -> String {
+    for stream in [stderr, stdout] {
+        let text = String::from_utf8_lossy(stream);
+        if let Some(line) = text.lines().map(str::trim).find(|line| !line.is_empty()) {
+            return line.to_owned();
+        }
+    }
+    "it said nothing".to_owned()
+}
+
+/// The variable that says which PostgreSQL to test against.
+///
+/// Set it to a `bin` directory and these tests use that server and no other, which is how
+/// one machine — or one CI matrix — covers several majors.
+const BIN_DIR_VAR: &str = "SLOOP_TEST_PG_BIN";
+
+/// Print which server is about to be exercised.
+///
+/// Without this a passing run says nothing about *what* it proved, and the whole point of
+/// testing several versions is knowing which one each result belongs to.
+fn announce(binaries: &Path) {
+    let said = Command::new(binaries.join("initdb"))
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .unwrap_or_default();
+    eprintln!("cluster tests are using {said}");
+}
+
 /// Where the server programs are, or `None` if this machine has none.
 ///
-/// `PATH` first. Then the places a package manager puts them, because `initdb` is in the
-/// server package and distributions leave it off `PATH` — a CI runner with PostgreSQL
+/// `SLOOP_TEST_PG_BIN` first, and when it is set and wrong this **panics** rather than
+/// skipping. A test that quietly skips because a variable was mistyped is a green tick that
+/// proved nothing, which is worse than a red one.
+///
+/// Otherwise `PATH`, then the places a package manager puts them — `initdb` ships in the
+/// server package and distributions leave it off `PATH`, so a runner with PostgreSQL
 /// installed would otherwise look like a machine without it.
-fn find_server_binaries() -> Option<PathBuf> {
+fn find_server_binaries() -> Option<(PathBuf, Asked)> {
+    if let Some(named) = std::env::var_os(BIN_DIR_VAR) {
+        let directory = PathBuf::from(named);
+        assert!(
+            directory.join(initdb_file_name()).is_file(),
+            "{BIN_DIR_VAR} is set to {} but there is no {} in it. These tests were asked \
+             for a specific PostgreSQL, so not finding it is a failure and not something \
+             to skip past.",
+            directory.display(),
+            initdb_file_name()
+        );
+        return Some((directory, Asked::Explicitly));
+    }
+
     if Command::new("initdb")
         .arg("--version")
         .stdin(Stdio::null())
         .output()
         .is_ok_and(|output| output.status.success())
     {
-        return Some(PathBuf::new());
+        return Some((PathBuf::new(), Asked::ByLookingAround));
     }
 
     let roots = [
@@ -330,7 +443,7 @@ fn find_server_binaries() -> Option<PathBuf> {
     // Newest last, so the highest version wins. Version directories sort well enough for
     // this: what matters is that something is found at all.
     found.sort();
-    found.pop()
+    found.pop().map(|dir| (dir, Asked::ByLookingAround))
 }
 
 fn initdb_file_name() -> &'static str {
