@@ -664,6 +664,142 @@ impl Adapter for MysqlFamily {
         Ok(())
     }
 
+    fn restore_into(&self, target: &Target<'_>, source: &mut dyn std::io::Read) -> Outcome<()> {
+        let mut child = self
+            .spawn(&self.tools.client, target)
+            .args(Self::connection_args(target))
+            .arg(format!("--connect-timeout={CONNECT_TIMEOUT_SECONDS}"))
+            .arg(format!("--database={}", target.database))
+            // Batch mode, which is also what makes an error fatal: reading statements from
+            // anything but a terminal, the client stops at the first one that fails and
+            // exits non-zero unless `--force` says otherwise. A restore that partly worked
+            // is a failure, so `--force` is exactly what this must never pass.
+            .arg("--batch")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| self.missing_tool(&self.tools.client, &error))?;
+
+        // Both output pipes drained on threads of their own: a full pipe stops the client
+        // reading the input this call is still writing, which would be a restore that hangs
+        // rather than one that fails.
+        let mut complaining = child.stderr.take().expect("stderr was piped");
+        let draining = std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut complaining, &mut said);
+            said
+        });
+        let mut talking = child.stdout.take().expect("stdout was piped");
+        let listening = std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut talking, &mut said);
+        });
+
+        let fed = {
+            let mut sink = child.stdin.take().expect("stdin was piped");
+            let copied = std::io::copy(source, &mut sink);
+            // Dropped before the wait, so the client sees the end of the script.
+            drop(sink);
+            copied
+        };
+
+        let status = child.wait().map_err(|error| {
+            Failure::new(
+                Exit::Restore,
+                format!("{} would not finish: {error}", self.tools.client.display()),
+            )
+        })?;
+        let said = String::from_utf8_lossy(&draining.join().unwrap_or_default()).into_owned();
+        let _ = listening.join();
+
+        if !status.success() {
+            return Err(from_stderr(
+                &self.tools.client,
+                &said,
+                Exit::Restore,
+                target,
+            ));
+        }
+
+        fed.map(|_| ()).map_err(|error| {
+            Failure::new(
+                Exit::Restore,
+                format!("could not feed the dump in: {error}"),
+            )
+        })
+    }
+
+    fn clear_contents(&self, target: &Target<'_>) -> Outcome<u64> {
+        // The script is built in a `String`, which takes `fmt::Write` rather than the
+        // `io::Write` this module imports for the pipes.
+        use std::fmt::Write as _;
+
+        // A MySQL database *is* its schema, so there is nothing below it to drop and start
+        // again with: what goes is every object in it that a dump of it would have carried.
+        // `--routines --triggers --events` are all on the dump, so all of them are cleared;
+        // triggers go with the tables they are attached to.
+        let objects = self
+            .query(
+                target,
+                "SELECT table_name, table_type FROM information_schema.tables \
+                 WHERE table_schema = DATABASE() ORDER BY table_type DESC, table_name",
+            )
+            .map_err(|failure| failure.at(Exit::Restore))?;
+
+        let mut tables = 0_u64;
+        // **Foreign keys off for the duration, and only for this session.** Dropping tables
+        // in an order that satisfies every constraint means sorting a graph that may have a
+        // cycle in it; switching the checks off for one session is what the engine's own
+        // tooling does and is undone the moment the connection closes.
+        let mut script = String::from("SET FOREIGN_KEY_CHECKS = 0;\n");
+        for row in &objects {
+            let Some(name) = row.first() else { continue };
+            let quoted = quote_identifier(name);
+            if row.get(1).is_some_and(|kind| kind == "VIEW") {
+                let _ = writeln!(script, "DROP VIEW IF EXISTS {quoted};");
+            } else {
+                let _ = writeln!(script, "DROP TABLE IF EXISTS {quoted};");
+                tables += 1;
+            }
+        }
+
+        let routines = self
+            .query(
+                target,
+                "SELECT routine_name, routine_type FROM information_schema.routines \
+                 WHERE routine_schema = DATABASE() ORDER BY routine_name",
+            )
+            .map_err(|failure| failure.at(Exit::Restore))?;
+        for row in &routines {
+            let Some(name) = row.first() else { continue };
+            let quoted = quote_identifier(name);
+            if row.get(1).is_some_and(|kind| kind == "FUNCTION") {
+                let _ = writeln!(script, "DROP FUNCTION IF EXISTS {quoted};");
+            } else {
+                let _ = writeln!(script, "DROP PROCEDURE IF EXISTS {quoted};");
+            }
+        }
+
+        let events = self
+            .query(
+                target,
+                "SELECT event_name FROM information_schema.events \
+                 WHERE event_schema = DATABASE() ORDER BY event_name",
+            )
+            .map_err(|failure| failure.at(Exit::Restore))?;
+        for row in &events {
+            let Some(name) = row.first() else { continue };
+            let _ = writeln!(script, "DROP EVENT IF EXISTS {};", quote_identifier(name));
+        }
+
+        // One connection for the whole script, because `SET FOREIGN_KEY_CHECKS` only holds
+        // for the session that set it.
+        self.restore_into(target, &mut script.as_bytes())?;
+
+        Ok(tables)
+    }
+
     fn terminate_connections(&self, target: &Target<'_>) -> Outcome<u64> {
         // **`information_schema.processlist` rather than `SHOW PROCESSLIST`**, because this
         // needs a filter and a machine-readable answer, and both engines still have the

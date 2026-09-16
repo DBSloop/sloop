@@ -74,116 +74,135 @@ fn run(cli: &Cli) -> Outcome<Exit> {
             Ok(Exit::Success)
         }
 
-        Some(command) if command.uses_registry() => {
-            let global = locations.global_dir()?;
-            let world = Disk::new(&global);
-            let cwd = working_directory()?;
-            let resolution = resolve(
-                &cwd,
-                &world,
-                cli.global,
-                cli.project.as_deref(),
-                environment_project().as_deref(),
-            )?;
-
-            // Reading the registries here is what makes R3 visible from outside: a file
-            // that will not parse fails now, with the file named, instead of surprising
-            // someone in the middle of a backup. Both scopes, because R2's rule is that a
-            // bare name searches the project and then the global store.
-            let registries = Registries::open(resolution.clone(), &global)?;
-
-            // One place, once: what this run was given permission to do. Every
-            // command that asks a question or destroys something reads it from here,
-            // so there is one implementation of rule 4 and one of rule 5 rather than
-            // a copy per command drifting apart. See `consent`.
-            let consent = Consent::given(cli.yes, cli.force, cli.confirm.as_deref());
-
-            if let Some(Command::Doctor { offline }) = &cli.command {
-                // Only offer to install when there is somebody there to answer. Without a
-                // terminal `doctor` is a report and nothing else, which is what a health
-                // check in a pipeline wants it to be.
-                let interactive = std::io::stdin().is_terminal();
-                return Ok(commands::doctor::run(
-                    &global,
-                    interactive,
-                    &commands::doctor::Registered {
-                        registries: &registries,
-                        from: resolution.describe(&global),
-                        password_command: cli.password_command.as_deref(),
-                        offline: *offline,
-                    },
-                ));
-            }
-
-            if let Some(Command::Backup {
-                name,
-                all,
-                sequential: _,
-                replace,
-            }) = &cli.command
-            {
-                let mut context = commands::backup::Context {
-                    registries,
-                    global: &global,
-                    password_command: cli.password_command.as_deref(),
-                };
-                // `--sequential` is the default, so it is read for what it says rather than
-                // for what it changes: a cron line that spells the mode out stays correct
-                // whatever a later release makes the default.
-                let mode = if *replace {
-                    commands::backup::Mode::Replace
-                } else {
-                    commands::backup::Mode::Sequential
-                };
-                return commands::backup::run(&mut context, name.as_deref(), *all, mode);
-            }
-
-            if let Some(Command::Backups { command }) = &cli.command {
-                let context = commands::backups::Context {
-                    consent,
-                    registries,
-                    global: &global,
-                };
-                return backups(&context, command);
-            }
-
-            if let Some(Command::Key { command }) = &cli.command {
-                let mut context = commands::key::Context {
-                    registries,
-                    global: &global,
-                };
-                return match command {
-                    KeyCommand::Export => commands::key::export(&mut context),
-                    KeyCommand::Import => commands::key::import(&mut context),
-                };
-            }
-
-            if let Some(Command::Db { command }) = &cli.command {
-                let mut context = commands::db::Context {
-                    consent,
-                    registries,
-                    password_command: cli.password_command.as_deref(),
-                    global: &global,
-                };
-                return db(&mut context, command);
-            }
-
-            Ok(unimplemented(
-                &format!("'{}'", command.path()),
-                Some(&[
-                    format!("It would have read {}.", resolution.describe(&global)),
-                    format!(
-                        "A name would be looked for in {}.",
-                        resolution.describe_lookup(&global)
-                    ),
-                    describe_registry(&registries, cli.password_command.as_deref()),
-                ]),
-            ))
-        }
+        Some(command) if command.uses_registry() => with_registry(cli, &locations, command),
 
         Some(command) => Ok(unimplemented(&format!("'{}'", command.path()), None)),
         None => Ok(unimplemented("the interactive menu", None)),
     }
+}
+
+/// Every command that reads a registry, once the registry has been read.
+///
+/// **Its own function because it is the whole tool.** Resolving which registry, opening
+/// both, and settling what this run has permission to do are three things every one of
+/// these commands needs and none of them should repeat — and `run` above stays short
+/// enough to read in one go, which is the only way the two commands that *don't* read a
+/// registry stay visible in it.
+fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome<Exit> {
+    let global = locations.global_dir()?;
+    let world = Disk::new(&global);
+    let cwd = working_directory()?;
+    let resolution = resolve(
+        &cwd,
+        &world,
+        cli.global,
+        cli.project.as_deref(),
+        environment_project().as_deref(),
+    )?;
+
+    // Reading the registries here is what makes R3 visible from outside: a file
+    // that will not parse fails now, with the file named, instead of surprising
+    // someone in the middle of a backup. Both scopes, because R2's rule is that a
+    // bare name searches the project and then the global store.
+    let registries = Registries::open(resolution.clone(), &global)?;
+
+    // One place, once: what this run was given permission to do. Every
+    // command that asks a question or destroys something reads it from here,
+    // so there is one implementation of rule 4 and one of rule 5 rather than
+    // a copy per command drifting apart. See `consent`.
+    let consent = Consent::given(cli.yes, cli.force, cli.confirm.as_deref());
+
+    if let Some(Command::Doctor { offline }) = &cli.command {
+        // Only offer to install when there is somebody there to answer. Without a
+        // terminal `doctor` is a report and nothing else, which is what a health
+        // check in a pipeline wants it to be.
+        let interactive = std::io::stdin().is_terminal();
+        return Ok(commands::doctor::run(
+            &global,
+            interactive,
+            &commands::doctor::Registered {
+                registries: &registries,
+                from: resolution.describe(&global),
+                password_command: cli.password_command.as_deref(),
+                offline: *offline,
+            },
+        ));
+    }
+
+    if let Some(Command::Backup {
+        name,
+        all,
+        sequential: _,
+        replace,
+    }) = &cli.command
+    {
+        let mut context = commands::backup::Context {
+            registries,
+            global: &global,
+            password_command: cli.password_command.as_deref(),
+        };
+        // `--sequential` is the default, so it is read for what it says rather than
+        // for what it changes: a cron line that spells the mode out stays correct
+        // whatever a later release makes the default.
+        let mode = if *replace {
+            commands::backup::Mode::Replace
+        } else {
+            commands::backup::Mode::Sequential
+        };
+        return commands::backup::run(&mut context, name.as_deref(), *all, mode);
+    }
+
+    if let Some(Command::Backups { command }) = &cli.command {
+        let context = commands::backups::Context {
+            consent,
+            registries,
+            global: &global,
+        };
+        return backups(&context, command);
+    }
+
+    if let Some(Command::Restore { name, from }) = &cli.command {
+        let context = commands::restore::Context {
+            registries,
+            global: &global,
+            password_command: cli.password_command.as_deref(),
+            consent,
+        };
+        return commands::restore::run(&context, name, from.as_deref());
+    }
+
+    if let Some(Command::Key { command }) = &cli.command {
+        let mut context = commands::key::Context {
+            registries,
+            global: &global,
+        };
+        return match command {
+            KeyCommand::Export => commands::key::export(&mut context),
+            KeyCommand::Import => commands::key::import(&mut context),
+        };
+    }
+
+    if let Some(Command::Db { command }) = &cli.command {
+        let mut context = commands::db::Context {
+            consent,
+            registries,
+            password_command: cli.password_command.as_deref(),
+            global: &global,
+        };
+        return db(&mut context, command);
+    }
+
+    Ok(unimplemented(
+        &format!("'{}'", command.path()),
+        Some(&[
+            format!("It would have read {}.", resolution.describe(&global)),
+            format!(
+                "A name would be looked for in {}.",
+                resolution.describe_lookup(&global)
+            ),
+            describe_registry(&registries, cli.password_command.as_deref()),
+        ]),
+    ))
 }
 
 /// Hand a `backups` subcommand its arguments.

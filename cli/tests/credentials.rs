@@ -58,9 +58,9 @@ fn a_registry_is_read_and_each_route_named() {
     // The count comes from a command that still only describes what it would read, which
     // keeps the other half of the same reader — `describe_registry` — under test. It has
     // to be a command that is still a stub, so it moves down the list as tasks land: it
-    // was `backup` until R9 gave that one a body.
+    // was `backup` until R9 gave that one a body, and `restore` until R13.
     sandbox
-        .sloop_in(&project, &["restore"])
+        .sloop_in(&project, &["mirror"])
         .expect_said("It holds 3 databases");
 }
 
@@ -197,7 +197,7 @@ fn a_project_with_no_registry_file_yet_is_not_an_error() {
     // Whichever command is still a stub — see the note in `a_registry_is_read_and_each_
     // route_named`.
     sandbox
-        .sloop_in(&project, &["restore"])
+        .sloop_in(&project, &["mirror"])
         .expect_code(1)
         .expect_said("no databases in it yet");
 }

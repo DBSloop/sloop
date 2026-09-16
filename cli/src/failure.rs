@@ -40,6 +40,19 @@ impl Failure {
         self
     }
 
+    /// The same failure, reported as a different kind of failure.
+    ///
+    /// **For a statement that means one thing in one command and another elsewhere.** A
+    /// `DROP SCHEMA` that will not run is a connection problem when `doctor` asks about it
+    /// and a restore failure when `restore` is clearing a destination with it — same
+    /// sentence, different code, and the code is what a scheduler acts on. The message and
+    /// the hint are kept, because what went wrong has not changed.
+    #[must_use]
+    pub fn at(mut self, exit: Exit) -> Self {
+        self.exit = exit;
+        self
+    }
+
     /// The sentence itself.
     ///
     /// Read by the tests today and by R16's `--json`, which has to put the message and

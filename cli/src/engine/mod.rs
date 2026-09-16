@@ -434,6 +434,32 @@ pub trait Adapter {
     /// Load a dump written by [`Adapter::dump`] into `target`.
     fn restore(&self, target: &Target<'_>, from: &Path) -> Outcome<()>;
 
+    /// Load a dump into `target` from a stream rather than a file.
+    ///
+    /// **This is how an encrypted backup is restored without ever becoming a file.** The
+    /// plaintext is decrypted in memory and written straight into the client's standard
+    /// input, so the thing the encryption was protecting never lands on the disk it was
+    /// being protected from. Writing it to a temporary file and restoring that would be
+    /// easier and would undo `R11`.
+    ///
+    /// The cost is parallelism: a PostgreSQL archive can only be restored in parallel from
+    /// a seekable file, so this path is single-threaded. [`Adapter::restore`] stays for an
+    /// unencrypted dump, where there is nothing to protect and the file is already there.
+    fn restore_into(&self, target: &Target<'_>, source: &mut dyn std::io::Read) -> Outcome<()>;
+
+    /// Empty the database `target` names, without dropping the database itself.
+    ///
+    /// **What "replaces the destination's contents" means, per engine.** A restore has to
+    /// leave the destination holding what the backup holds and nothing else, and it has to
+    /// do that without dropping a database whose owner, grants and connection string
+    /// somebody else's application depends on. PostgreSQL drops every schema that is not
+    /// the system's and puts `public` back; the MySQL family has no schemas below the
+    /// database, so it drops every table, view, routine and trigger in it.
+    ///
+    /// Returns how many objects went, which is worth printing: somebody restoring into a
+    /// database they believed was empty should be told it was not.
+    fn clear_contents(&self, target: &Target<'_>) -> Outcome<u64>;
+
     /// Cut every other session on this database loose, so a drop is not blocked by one.
     ///
     /// **Its own method rather than part of [`Adapter::drop_database`]**, because it is the

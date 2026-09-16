@@ -425,6 +425,116 @@ impl Adapter for Postgres {
         Ok(())
     }
 
+    fn restore_into(&self, target: &Target<'_>, source: &mut dyn std::io::Read) -> Outcome<()> {
+        // **No `--jobs`.** A parallel restore seeks around inside the archive, and this one
+        // is arriving down a pipe one byte at a time. The trade is deliberate and is the
+        // reason [`Adapter::restore`] still exists: an encrypted backup restores
+        // single-threaded and never becomes a file, an unencrypted one is already a file.
+        let mut child = self
+            .spawn_restore(target)
+            .args(Self::connection_args(target))
+            .arg("--no-owner")
+            .arg("--no-privileges")
+            // Without this pg_restore prints warnings, carries on, and exits 0 with a
+            // half-restored database. A restore that partly worked is a failure.
+            .arg("--exit-on-error")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| missing_tool(&self.tools.restore, &error))?;
+
+        // Both of the child's output pipes are drained on threads of their own. A full pipe
+        // stops the child reading its standard input, and this call is the thing writing to
+        // that input — so not draining them is a restore that hangs rather than one that
+        // fails.
+        let mut complaining = child.stderr.take().expect("stderr was piped");
+        let draining = std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut complaining, &mut said);
+            said
+        });
+        let mut talking = child.stdout.take().expect("stdout was piped");
+        let listening = std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut talking, &mut said);
+        });
+
+        let fed = {
+            let mut sink = child.stdin.take().expect("stdin was piped");
+            let copied = std::io::copy(source, &mut sink);
+            // Dropped before the wait, so the child sees the end of its input rather than
+            // waiting for more of an archive that has all arrived.
+            drop(sink);
+            copied
+        };
+
+        let status = child.wait().map_err(|error| {
+            Failure::new(
+                Exit::Restore,
+                format!("{} would not finish: {error}", self.tools.restore.display()),
+            )
+        })?;
+        let said = String::from_utf8_lossy(&draining.join().unwrap_or_default()).into_owned();
+        let _ = listening.join();
+
+        if !status.success() {
+            // The tool's own complaint outranks a write that failed: if the restore died,
+            // a broken pipe is the symptom rather than the cause.
+            return Err(from_stderr(
+                &self.tools.restore,
+                &said,
+                Exit::Restore,
+                target,
+            ));
+        }
+
+        fed.map(|_| ()).map_err(|error| {
+            Failure::new(
+                Exit::Restore,
+                format!("could not feed the dump in: {error}"),
+            )
+        })
+    }
+
+    fn clear_contents(&self, target: &Target<'_>) -> Outcome<u64> {
+        let had = self.tables(target)?.len();
+
+        // Every schema that is not the system's. `pg_catalog`, `information_schema` and
+        // anything else starting `pg_` belong to PostgreSQL; the rest is what a dump of this
+        // database would have carried, so the rest is what a restore has to replace.
+        let schemas = self
+            .query(
+                target,
+                // `left(nspname, 3)` rather than `LIKE 'pg\_%'`: the underscore is a
+                // wildcard in `LIKE` and would have to be escaped, and an escape inside a
+                // Rust string inside a SQL literal is three readings of the same character
+                // for no gain.
+                "SELECT nspname FROM pg_namespace \
+                 WHERE left(nspname, 3) <> 'pg_' AND nspname <> 'information_schema' \
+                 ORDER BY nspname",
+            )
+            .map_err(|failure| failure.at(Exit::Restore))?;
+
+        for row in &schemas {
+            let Some(schema) = row.first() else { continue };
+            self.query(
+                target,
+                &format!("DROP SCHEMA {} CASCADE", quote_identifier(schema)),
+            )
+            .map_err(|failure| failure.at(Exit::Restore))?;
+        }
+
+        // **`public` goes back.** A database with no `public` is not an empty database, it
+        // is a broken one: a dump that does not create the schema itself will fail to
+        // restore into it, and anything else connecting afterwards finds a search path
+        // pointing at nothing.
+        self.query(target, "CREATE SCHEMA IF NOT EXISTS public")
+            .map_err(|failure| failure.at(Exit::Restore))?;
+
+        Ok(u64::try_from(had).unwrap_or(u64::MAX))
+    }
+
     fn terminate_connections(&self, target: &Target<'_>) -> Outcome<u64> {
         // From the maintenance database, so this session is not one of the ones being
         // counted — and `pid <> pg_backend_pid()` as well, in case somebody points the

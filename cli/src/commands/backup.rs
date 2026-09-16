@@ -663,6 +663,6 @@ pub fn describe_bytes(bytes: u64) -> String {
 ///
 /// Enough to tell two dumps apart by eye; the whole thing is in the manifest, which is
 /// what anything actually verifying it reads.
-fn short(sha256: &str) -> String {
+pub fn short(sha256: &str) -> String {
     sha256.chars().take(12).collect()
 }

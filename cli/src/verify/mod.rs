@@ -41,7 +41,8 @@ mod tests;
 
 use std::collections::BTreeMap;
 
-use crate::engine::{Adapter, Engine, TableCount, Target};
+use crate::backup::manifest::Manifest;
+use crate::engine::{Adapter, Engine, Table, TableCount, Target};
 use crate::exit::Exit;
 use crate::failure::Outcome;
 use crate::style;
@@ -128,6 +129,32 @@ impl Side {
             database: target.database.to_owned(),
             counts: mode.count(adapter, target)?,
         })
+    }
+
+    /// Build one from what a backup's manifest recorded.
+    ///
+    /// **A restore has no live source to count.** What it has is the exact `count(*)` per
+    /// table taken from the source immediately before the dump — which is a better source
+    /// than a second query would be, because it is the moment the dump describes rather than
+    /// whatever the source holds now. So `restore` verifies against the manifest and gets the
+    /// same comparison, in the same words, as `mirror` and `sync` get from two connections.
+    #[must_use]
+    pub fn from_manifest(manifest: &Manifest) -> Self {
+        Self {
+            engine: manifest.engine,
+            database: manifest.database.clone(),
+            counts: manifest
+                .tables
+                .iter()
+                .map(|count| TableCount {
+                    table: Table {
+                        schema: count.schema.clone(),
+                        name: count.name.clone(),
+                    },
+                    rows: count.rows,
+                })
+                .collect(),
+        }
     }
 
     /// Does this engine put the database's own name where a schema goes?

@@ -125,7 +125,15 @@ pub enum Command {
     },
 
     /// Restore a stored backup into a registered database.
-    Restore,
+    #[command(after_long_help = RESTORE_NOTES)]
+    Restore {
+        /// Which registered database to restore into.
+        name: String,
+
+        /// Which backup, by its directory's own name. The newest whole one by default.
+        #[arg(long, value_name = "WHEN")]
+        from: Option<String>,
+    },
 
     /// Copy a database exactly, leaving the destination identical to the source.
     Mirror,
@@ -469,7 +477,7 @@ impl Command {
                 | Self::Db { .. }
                 | Self::Backup { .. }
                 | Self::Backups { .. }
-                | Self::Restore
+                | Self::Restore { .. }
                 | Self::Mirror
                 | Self::Sync
                 | Self::Key { .. }
@@ -485,7 +493,7 @@ impl Command {
             Self::Db { command } => command.path(),
             Self::Backup { .. } => "backup",
             Self::Backups { command } => command.path(),
-            Self::Restore => "restore",
+            Self::Restore { .. } => "restore",
             Self::Mirror => "mirror",
             Self::Sync => "sync",
             Self::Key { command } => command.path(),
@@ -573,6 +581,29 @@ fn after_long_help() -> String {
         guarantee = style::heading("Check the guarantee in ten seconds"),
     )
 }
+
+/// What `restore --help` says under the flags, because the order things happen in is the
+/// thing somebody about to run this needs to know.
+const RESTORE_NOTES: &str = "\
+What happens, in order:
+  1. The backup is read and its dump hashed against what the manifest recorded.
+  2. The destination is contacted, and what it holds now is printed — so you see what is
+     about to be replaced before you agree to replace it.
+  3. The key is fetched, if the backup is encrypted. Before anything is cleared, so a
+     restore never empties a database and then finds it cannot read the dump.
+  4. The database's name has to be typed. --confirm <DATABASE> is that, up front.
+  5. The destination's contents are cleared — every schema that is not PostgreSQL's own,
+     or every table, view, routine and event on MySQL. The database itself is never
+     dropped: its owner, its grants and its connection string are left alone.
+  6. The dump is loaded, and the result is counted against the manifest table by table.
+
+  sloop restore app                           the newest whole backup
+  sloop restore app --from 20260916T031500Z   that one
+  sloop restore app --from latest             the copy --replace keeps
+
+Exit 6 means it finished and then a table did not add up — read the table above it. A
+backup that fails its own checksum is refused; --force restores it anyway, which is the
+right call when it is the only backup there is.";
 
 #[cfg(test)]
 mod tests {

@@ -7,8 +7,8 @@
 //!
 //! **The probe is whichever command is still a stub.** Resolution is checked by running a
 //! command that reads a registry and says which one it read, which only a command with no
-//! body left to run will do. It was `backup` until R9 gave that one a body, so it is
-//! `restore` now and will be something further down the list later. What is being tested
+//! body left to run will do. It was `backup` until R9 and `restore` until R13, so it is
+//! `mirror` now and will be something further down the list later. What is being tested
 //! is the resolution order, and that is the same whichever command asks for it.
 
 mod support;
@@ -190,7 +190,7 @@ fn a_command_run_from_a_subdirectory_finds_the_project() {
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
     let deep = sandbox.make_dir("demo/src/inner/deeper");
-    let run = sandbox.sloop_in(&deep, &["restore"]);
+    let run = sandbox.sloop_in(&deep, &["mirror"]);
 
     run.expect_said(&project.join(".sloop").display().to_string());
     run.expect_said("nearest .sloop");
@@ -206,14 +206,14 @@ fn the_nearest_project_wins_when_one_is_inside_another() {
 
     let below = sandbox.make_dir("outer/inner/src");
     sandbox
-        .sloop_in(&below, &["restore"])
+        .sloop_in(&below, &["mirror"])
         .expect_said(&inner.join(".sloop").display().to_string());
 }
 
 #[test]
 fn with_no_project_anywhere_it_reads_the_global_store() {
     let sandbox = Sandbox::new("no-project");
-    let run = sandbox.sloop(&["restore"]);
+    let run = sandbox.sloop(&["mirror"]);
 
     run.expect_said(&sandbox.global_dir().display().to_string());
     run.expect_said("no .sloop");
@@ -225,7 +225,7 @@ fn global_ignores_a_project_that_is_right_here() {
     let project = sandbox.make_dir("demo");
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
-    let run = sandbox.sloop_in(&project, &["--global", "restore"]);
+    let run = sandbox.sloop_in(&project, &["--global", "mirror"]);
 
     run.expect_said(&sandbox.global_dir().display().to_string());
     run.expect_said("--global");
@@ -239,11 +239,11 @@ fn a_name_is_looked_for_in_the_project_before_the_global_store() {
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
     sandbox
-        .sloop_in(&project, &["restore"])
+        .sloop_in(&project, &["mirror"])
         .expect_said("this project, then the global store");
 
     sandbox
-        .sloop_in(&project, &["--global", "restore"])
+        .sloop_in(&project, &["--global", "mirror"])
         .expect_said("looked for in the global store")
         .expect_silent_about("this project, then");
 }
@@ -256,7 +256,7 @@ fn the_flag_reaches_a_project_by_name_from_anywhere() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .sloop_in(&elsewhere, &["-C", "demo", "restore"])
+        .sloop_in(&elsewhere, &["-C", "demo", "mirror"])
         .expect_said(&project.join(".sloop").display().to_string())
         .expect_said("named by -C");
 }
@@ -271,7 +271,7 @@ fn the_flag_reaches_a_project_by_path_from_anywhere() {
     sandbox
         .sloop_in(
             &elsewhere,
-            &["-C", &project.display().to_string(), "restore"],
+            &["-C", &project.display().to_string(), "mirror"],
         )
         .expect_said(&project.join(".sloop").display().to_string());
 }
@@ -280,7 +280,7 @@ fn the_flag_reaches_a_project_by_path_from_anywhere() {
 fn a_flag_that_names_nothing_is_a_usage_error() {
     let sandbox = Sandbox::new("bad-flag");
     sandbox
-        .sloop(&["-C", "no-such-project", "restore"])
+        .sloop(&["-C", "no-such-project", "mirror"])
         .expect_code(2)
         .expect_said("no-such-project");
 }
@@ -293,7 +293,7 @@ fn the_environment_variable_does_what_the_flag_does() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .command(&elsewhere, &["restore"])
+        .command(&elsewhere, &["mirror"])
         .env("SLOOP_PROJECT", "demo")
         .run()
         .expect_said(&project.join(".sloop").display().to_string())
@@ -304,7 +304,7 @@ fn the_environment_variable_does_what_the_flag_does() {
 fn an_environment_variable_that_names_nothing_is_a_usage_error() {
     let sandbox = Sandbox::new("env-bad");
     sandbox
-        .command(sandbox.work(), &["restore"])
+        .command(sandbox.work(), &["mirror"])
         .env("SLOOP_PROJECT", "no-such-project")
         .run()
         .expect_code(2)
@@ -318,7 +318,7 @@ fn an_empty_environment_variable_means_unset() {
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
     sandbox
-        .command(&project, &["restore"])
+        .command(&project, &["mirror"])
         .env("SLOOP_PROJECT", "")
         .run()
         .expect_code(1)
@@ -335,7 +335,7 @@ fn the_flag_outranks_the_environment_variable() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .command(&elsewhere, &["-C", "wanted", "restore"])
+        .command(&elsewhere, &["-C", "wanted", "mirror"])
         .env("SLOOP_PROJECT", "other")
         .run()
         .expect_said(&wanted.join(".sloop").display().to_string())
@@ -349,7 +349,7 @@ fn asking_for_both_registries_at_once_is_a_usage_error() {
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
     sandbox
-        .sloop_in(&project, &["--global", "-C", "demo", "restore"])
+        .sloop_in(&project, &["--global", "-C", "demo", "mirror"])
         .expect_code(2);
 }
 
@@ -384,7 +384,7 @@ fn a_pointer_written_with_windows_line_endings_still_resolves() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .sloop_in(&elsewhere, &["-C", "demo", "restore"])
+        .sloop_in(&elsewhere, &["-C", "demo", "mirror"])
         .expect_said(&project.join(".sloop").display().to_string());
 }
 
@@ -401,7 +401,7 @@ fn a_project_path_with_spaces_in_it_survives_the_round_trip() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .sloop_in(&elsewhere, &["-C", "the demo", "restore"])
+        .sloop_in(&elsewhere, &["-C", "the demo", "mirror"])
         .expect_said(&project.join(".sloop").display().to_string());
 }
 
