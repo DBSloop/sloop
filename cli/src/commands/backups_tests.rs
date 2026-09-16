@@ -17,7 +17,6 @@ fn nothing() -> Pruning<'static> {
         older_than: None,
         dry_run: false,
         include_broken: false,
-        yes: false,
     }
 }
 

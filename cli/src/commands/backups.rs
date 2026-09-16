@@ -21,13 +21,13 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::backup::store::{self, Check, Found, Held, Plan, Policy, State, Stored};
+use crate::consent::Consent;
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::{Registries, Scope};
 use crate::style;
 
 use super::backup::{describe_bytes, plural};
-use super::confirmed;
 
 /// Everything these two commands need from the outside.
 pub struct Context<'a> {
@@ -35,6 +35,8 @@ pub struct Context<'a> {
     pub registries: Registries,
     /// The global store, for saying where a listing came from.
     pub global: &'a Path,
+    /// What this run was given permission to do — see [`crate::consent`].
+    pub consent: Consent<'a>,
 }
 
 /// Everything `prune` was asked for, named rather than positional.
@@ -52,8 +54,6 @@ pub struct Pruning<'a> {
     pub dry_run: bool,
     /// Remove unfinished and damaged directories too.
     pub include_broken: bool,
-    /// The answer, given in advance.
-    pub yes: bool,
 }
 
 /// One store's worth of backups, and which store it was.
@@ -171,7 +171,7 @@ pub fn prune(context: &Context<'_>, asked: &Pruning<'_>) -> Outcome<Exit> {
         return Ok(Exit::Success);
     }
 
-    if !confirmed(asked.yes, "Remove them?", "--yes")? {
+    if !context.consent.asked("Remove them?", "--yes")? {
         anstream::println!("{}", style::dim("left alone."));
         return Ok(Exit::Success);
     }

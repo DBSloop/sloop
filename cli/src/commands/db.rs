@@ -25,6 +25,7 @@ use std::io::{IsTerminal as _, Read as _};
 use std::path::Path;
 
 use crate::cli::{Fields, PasswordSource};
+use crate::consent::{Consent, Destroying};
 use crate::engine::{Engine, Target};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
@@ -41,6 +42,8 @@ pub struct Context<'a> {
     pub password_command: Option<&'a str>,
     /// The global store, for the sentence that says which registry was read.
     pub global: &'a Path,
+    /// What this run was given permission to do — see [`crate::consent`].
+    pub consent: Consent<'a>,
 }
 
 // ---------------------------------------------------------------------------------------
@@ -55,7 +58,6 @@ pub fn add(
     fields: &Fields,
     password: &PasswordSource,
     test: bool,
-    force: bool,
 ) -> Outcome<Exit> {
     check_name(name)?;
 
@@ -66,7 +68,7 @@ pub fn add(
         .and_then(|registry| registry.get(name))
         .cloned();
 
-    if replacing.is_some() && !force {
+    if replacing.is_some() && !context.consent.forced() {
         return Err(Failure::usage(format!(
             "{name} is already registered in the {} registry",
             scope.label()
@@ -833,7 +835,7 @@ fn forget(route: &Route, key: &str, context: &Context<'_>, scope: Scope) -> Outc
 /// The stored password goes with the record. A credential nothing references is the clutter
 /// `db edit` was leaking until R7, and keeping it would be keeping a password for a
 /// database sloop no longer knows about.
-pub fn remove(context: &mut Context<'_>, name: &str, yes: bool) -> Outcome<Exit> {
+pub fn remove(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
     let (scope, record) = context.registries.find(name)?;
     let record = record.clone();
 
@@ -856,7 +858,7 @@ pub fn remove(context: &mut Context<'_>, name: &str, yes: bool) -> Outcome<Exit>
         style::dim("the database itself is not touched — that is `sloop db drop`")
     );
 
-    if !super::confirmed(yes, "Forget it?", "--yes")? {
+    if !context.consent.asked("Forget it?", "--yes")? {
         anstream::println!("{}", style::dim("left alone."));
         return Ok(Exit::Success);
     }
@@ -890,50 +892,20 @@ pub fn remove(context: &mut Context<'_>, name: &str, yes: bool) -> Outcome<Exit>
 // ---------------------------------------------------------------------------------------
 
 /// Destroy a database on the server, after backing it up.
-pub fn drop(
-    context: &mut Context<'_>,
-    name: &str,
-    confirm: Option<&str>,
-    no_backup: bool,
-) -> Outcome<Exit> {
+pub fn drop(context: &mut Context<'_>, name: &str, no_backup: bool) -> Outcome<Exit> {
     let (scope, record) = context.registries.find(name)?;
     let record = record.clone();
 
-    // **A typo is caught before a socket is opened.** `--confirm` is a string comparison
-    // and cannot be made more certain by connecting first, so a script that names the
-    // wrong database gets told so without sloop touching a server at all. The interactive
-    // prompt is the other way round — it comes after the probe, because somebody typing a
-    // name by hand should be looking at how many rows are about to go when they do.
-    //
-    // **Rule 4 is checked here too, and for the same reason.** With no terminal and no
-    // `--confirm`, this run cannot finish however well everything else goes — so it says
-    // so before fetching a password and opening a connection it was only ever going to
-    // refuse to use. It also makes the error the same one every time, rather than
-    // whichever step happened to fail first.
-    match confirm {
-        None if !std::io::stdin().is_terminal() => {
-            return Err(Failure::new(
-                Exit::Usage,
-                "dropping a database needs its name typed, and there is no terminal to type at",
-            )
-            .hint(format!(
-                "pass --confirm {} to say it up front",
-                record.database
-            )));
-        }
-        Some(given) if given != record.database => {
-            return Err(Failure::new(
-                Exit::Usage,
-                format!(
-                    "--confirm says {given}, and the database is {}",
-                    record.database
-                ),
-            )
-            .hint("nothing was contacted and nothing was changed. The two have to match exactly"));
-        }
-        // `--confirm` matched, or there is a terminal to ask at.
-        _ => {}
-    }
+    // Everything that can be answered before a socket is opened, is — a scheduled run that
+    // named the wrong database, or has no terminal and no `--confirm`, is told so here
+    // rather than after a password has been fetched for a connection it was never going to
+    // be allowed to use. See `consent::Consent::checked_early`.
+    let destroying = Destroying {
+        named: &record.database,
+        noun: "database",
+        action: "dropping a database",
+    };
+    context.consent.checked_early(&destroying)?;
 
     // A name that resolves in the registry is not evidence that the database is there, and
     // "about to destroy X" had better be true before it is printed.
@@ -982,7 +954,7 @@ pub fn drop(
     // **Typed, never clicked.** Rule 5, and what is typed is the database's own name on the
     // server rather than the label: the label is what sloop calls it, and the name is what
     // is about to stop existing.
-    if !typed_the_name(&record.database, confirm)? {
+    if !context.consent.typed(&destroying)?.granted() {
         anstream::println!("{}", style::dim("left alone."));
         return Ok(Exit::Success);
     }
@@ -1087,46 +1059,6 @@ fn safety_backup(
 // ---------------------------------------------------------------------------------------
 // Asking
 // ---------------------------------------------------------------------------------------
-
-/// The confirmation for something that destroys data: the name, typed out.
-///
-/// **Rule 5, and it holds in a script too.** `--confirm <DATABASE>` is the same typing done
-/// in advance, so automation still has to name what it is destroying — there is no spelling
-/// of "yes, whichever database that was". Compared exactly, because a database name is
-/// case-sensitive on most of the platforms this runs against, and "close enough" is not a
-/// standard to destroy data by.
-fn typed_the_name(expected: &str, given: Option<&str>) -> Outcome<bool> {
-    // Already checked, before anything was contacted — see the top of `drop`. Reaching
-    // here with a value at all means it matched.
-    if given.is_some() {
-        return Ok(true);
-    }
-
-    if !std::io::stdin().is_terminal() {
-        return Err(Failure::new(
-            Exit::Usage,
-            "dropping a database needs its name typed, and there is no terminal to type at",
-        )
-        .hint(format!("pass --confirm {expected} to say it up front")));
-    }
-
-    anstream::print!(
-        "{} type {} to destroy it, or anything else to stop: ",
-        style::paint("?"),
-        style::paint(expected)
-    );
-    let _ = std::io::Write::flush(&mut std::io::stdout());
-
-    let mut typed = String::new();
-    std::io::stdin()
-        .read_line(&mut typed)
-        .map_err(|error| Failure::usage(format!("could not read the answer: {error}")))?;
-
-    // Only the line ending comes off. A name with a trailing space is a name somebody would
-    // have to type a trailing space for, and trimming would quietly accept a different name
-    // than the one on the server.
-    Ok(typed.trim_end_matches(['\n', '\r']) == expected)
-}
 
 #[cfg(test)]
 #[path = "db_tests.rs"]

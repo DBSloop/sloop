@@ -47,6 +47,27 @@ pub struct Cli {
     #[arg(long, value_name = "COMMAND", global = true)]
     pub password_command: Option<String>,
 
+    /// Answer yes to a question this would otherwise stop and ask.
+    ///
+    /// Never enough to destroy a named thing — that is `--confirm` — and never a way past a
+    /// refusal, which is `--force`. `--help` has the three side by side.
+    #[arg(long, short = 'y', global = true)]
+    pub yes: bool,
+
+    /// Override a refusal that is there to protect something.
+    ///
+    /// Answers no questions. The refusal that can be overridden says so when it fires.
+    #[arg(long, global = true)]
+    pub force: bool,
+
+    /// The name of the thing being destroyed, typed out.
+    ///
+    /// The only way to run a destructive command without a terminal, and it has to match
+    /// exactly: a cron line then names what it destroys, so it cannot be repointed at
+    /// something else by editing one flag.
+    #[arg(long, value_name = "NAME", global = true)]
+    pub confirm: Option<String>,
+
     /// Left empty on purpose: no command opens the interactive menu.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -147,10 +168,6 @@ pub enum DbCommand {
         /// Connect before saving, and refuse to save if it does not work.
         #[arg(long)]
         test: bool,
-
-        /// Replace an entry already registered under this name.
-        #[arg(long)]
-        force: bool,
     },
 
     /// Show every registered database. Never shows a secret.
@@ -194,14 +211,6 @@ pub enum DbCommand {
     Remove {
         /// Which one.
         name: String,
-
-        /// Do not ask. The only way to run this without a terminal.
-        ///
-        /// `R16` makes this a global flag; it is here now because rule 4 says a command
-        /// that cannot ask has to name the flag that answers for it, and naming one that
-        /// does not exist yet would be worse than a local copy.
-        #[arg(long, short = 'y')]
-        yes: bool,
     },
 
     /// Drop a database on the server. Backs it up first and asks for its name.
@@ -209,14 +218,6 @@ pub enum DbCommand {
     Drop {
         /// Which registered database to destroy.
         name: String,
-
-        /// The database's name on the server, typed out, instead of being asked for it.
-        ///
-        /// Not a `y`. Rule 5: a destructive operation is typed, and that holds in a
-        /// script as much as at a prompt — a blind `--yes` in a scheduled job is exactly
-        /// the mistake this shape exists to prevent.
-        #[arg(long, value_name = "DATABASE")]
-        confirm: Option<String>,
 
         /// Skip the safety backup. The only way to skip it.
         #[arg(long)]
@@ -391,10 +392,6 @@ pub enum BackupsCommand {
         /// filled up mid-backup, and deciding that for them is not this command's to do.
         #[arg(long)]
         include_broken: bool,
-
-        /// Do not ask. The only way to prune without a terminal.
-        #[arg(long, short = 'y')]
-        yes: bool,
     },
 }
 
@@ -549,6 +546,18 @@ fn after_long_help() -> String {
   sync     A merge. Rows are added, rows already there are replaced, and rows
            that exist only in the destination are kept.
 
+{consent}
+  -y, --yes         Answers a question this would have stopped to ask.
+      --force       Overrides a refusal that is there to protect something.
+      --confirm X   The name, typed out, for something being destroyed.
+
+  They are three different things and none stands in for another. A bare --yes can
+  never destroy a named thing, so a scheduled line names what it destroys and cannot
+  be repointed at something else by editing one flag. --force answers no questions.
+
+  With no terminal to ask at, a command that needs an answer exits 2 and names the
+  flag that would have given it, rather than hanging on a question nobody will read.
+
 {codes}
   0 success   2 usage      3 connect   4 dump   5 restore
               6 mismatch   7 locked    8 doctor found a problem
@@ -559,6 +568,7 @@ fn after_long_help() -> String {
   Nothing comes back, and CI fails the build on the day something does.",
         menu = after_help(),
         copying = style::heading("mirror and sync are not the same command"),
+        consent = style::heading("Saying yes, and what each way of saying it cannot do"),
         codes = style::heading("Exit codes, frozen at 1.0"),
         guarantee = style::heading("Check the guarantee in ten seconds"),
     )

@@ -8,6 +8,7 @@
 mod backup;
 mod cli;
 mod commands;
+mod consent;
 mod crypt;
 mod engine;
 mod exit;
@@ -26,6 +27,7 @@ use std::process::ExitCode;
 use clap::Parser as _;
 
 use crate::cli::{BackupsCommand, Cli, Command, DbCommand, KeyCommand};
+use crate::consent::Consent;
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::locations::Locations;
@@ -90,6 +92,12 @@ fn run(cli: &Cli) -> Outcome<Exit> {
             // bare name searches the project and then the global store.
             let registries = Registries::open(resolution.clone(), &global)?;
 
+            // One place, once: what this run was given permission to do. Every
+            // command that asks a question or destroys something reads it from here,
+            // so there is one implementation of rule 4 and one of rule 5 rather than
+            // a copy per command drifting apart. See `consent`.
+            let consent = Consent::given(cli.yes, cli.force, cli.confirm.as_deref());
+
             if let Some(Command::Doctor { offline }) = &cli.command {
                 // Only offer to install when there is somebody there to answer. Without a
                 // terminal `doctor` is a report and nothing else, which is what a health
@@ -132,6 +140,7 @@ fn run(cli: &Cli) -> Outcome<Exit> {
 
             if let Some(Command::Backups { command }) = &cli.command {
                 let context = commands::backups::Context {
+                    consent,
                     registries,
                     global: &global,
                 };
@@ -151,6 +160,7 @@ fn run(cli: &Cli) -> Outcome<Exit> {
 
             if let Some(Command::Db { command }) = &cli.command {
                 let mut context = commands::db::Context {
+                    consent,
                     registries,
                     password_command: cli.password_command.as_deref(),
                     global: &global,
@@ -191,7 +201,6 @@ fn backups(context: &commands::backups::Context<'_>, command: &BackupsCommand) -
             older_than,
             dry_run,
             include_broken,
-            yes,
         } => commands::backups::prune(
             context,
             &commands::backups::Pruning {
@@ -200,7 +209,6 @@ fn backups(context: &commands::backups::Context<'_>, command: &BackupsCommand) -
                 older_than: older_than.as_deref(),
                 dry_run: *dry_run,
                 include_broken: *include_broken,
-                yes: *yes,
             },
         ),
     }
@@ -218,16 +226,7 @@ fn db(context: &mut commands::db::Context<'_>, command: &DbCommand) -> Outcome<E
             fields,
             password,
             test,
-            force,
-        } => commands::db::add(
-            context,
-            name,
-            url.as_deref(),
-            fields,
-            password,
-            *test,
-            *force,
-        ),
+        } => commands::db::add(context, name, url.as_deref(), fields, password, *test),
         DbCommand::List => Ok(commands::db::list(context)),
         DbCommand::Test { name } => commands::db::test(context, name.as_deref()),
         DbCommand::Edit {
@@ -238,12 +237,8 @@ fn db(context: &mut commands::db::Context<'_>, command: &DbCommand) -> Outcome<E
             test,
         } => commands::db::edit(context, name, url.as_deref(), fields, password, *test),
         DbCommand::Rename { from, to } => commands::db::rename(context, from, to),
-        DbCommand::Remove { name, yes } => commands::db::remove(context, name, *yes),
-        DbCommand::Drop {
-            name,
-            confirm,
-            no_backup,
-        } => commands::db::drop(context, name, confirm.as_deref(), *no_backup),
+        DbCommand::Remove { name } => commands::db::remove(context, name),
+        DbCommand::Drop { name, no_backup } => commands::db::drop(context, name, *no_backup),
     }
 }
 
