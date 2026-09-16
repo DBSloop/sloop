@@ -112,7 +112,17 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
     // a copy per command drifting apart. See `consent`.
     let consent = Consent::given(cli.yes, cli.force, cli.confirm.as_deref());
 
-    dispatch(cli, &global, &resolution, registries, consent, command)
+    dispatch(
+        cli,
+        World {
+            registries,
+            global: &global,
+            password_command: cli.password_command.as_deref(),
+            consent,
+            resolution,
+        },
+        command,
+    )
 }
 
 /// Which command, now that everything every command needs has been worked out.
@@ -121,16 +131,9 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
 /// that can fail before a command is even chosen — an unreadable registry, a project that is
 /// not there. This is the switchboard, and it stays a flat list so that adding a command is
 /// adding one entry rather than finding somewhere to put it.
-fn dispatch(
-    cli: &Cli,
-    global: &Path,
-    resolution: &registry::Resolution,
-    registries: Registries,
-    consent: Consent<'_>,
-    command: &Command,
-) -> Outcome<Exit> {
+fn dispatch(cli: &Cli, world: World<'_>, command: &Command) -> Outcome<Exit> {
     if let Some(Command::Doctor { offline }) = &cli.command {
-        return Ok(doctor(cli, global, resolution, &registries, *offline));
+        return Ok(doctor(cli, &world, *offline));
     }
 
     if let Some(Command::Backup {
@@ -140,34 +143,15 @@ fn dispatch(
         replace,
     }) = &cli.command
     {
-        let mut context = commands::backup::Context {
-            registries,
-            global,
-            password_command: cli.password_command.as_deref(),
-        };
-        return backup(&mut context, name.as_deref(), *all, *replace);
+        return backup(&mut world.backing_up(), name.as_deref(), *all, *replace);
     }
 
     if let Some(Command::Backups { command }) = &cli.command {
-        let context = commands::backups::Context {
-            registries,
-            global,
-            consent,
-        };
-        return backups(&context, command);
+        return backups(&world.listing_backups(), command);
     }
 
     if let Some(Command::Restore { name, from }) = &cli.command {
-        return commands::restore::run(
-            &commands::restore::Context {
-                registries,
-                global,
-                password_command: cli.password_command.as_deref(),
-                consent,
-            },
-            name,
-            from.as_deref(),
-        );
+        return commands::restore::run(&world.restoring(), name, from.as_deref());
     }
 
     if let Some(Command::Mirror {
@@ -178,61 +162,135 @@ fn dispatch(
         safe,
     }) = &cli.command
     {
-        let mut context = commands::mirror::Context {
-            registries,
-            global,
-            password_command: cli.password_command.as_deref(),
-            consent,
-        };
-        return mirror(
-            &mut context,
-            source,
-            to.as_deref(),
-            create.as_deref(),
-            new,
-            *safe,
+        return commands::mirror::run(
+            &mut world.mirroring(),
+            &commands::mirror::Mirroring {
+                source,
+                to: to.as_deref(),
+                create: create.as_deref(),
+                safe: *safe,
+                new: new.into(),
+            },
         );
     }
 
-    if let Some(Command::Sync { source, to, safe }) = &cli.command {
+    if let Some(Command::Sync {
+        source,
+        to,
+        create,
+        new,
+        safe,
+    }) = &cli.command
+    {
         return commands::sync::run(
-            &commands::sync::Context {
-                registries,
-                global,
-                password_command: cli.password_command.as_deref(),
-                consent,
+            &mut world.syncing(),
+            &commands::sync::Syncing {
+                source,
+                to: to.as_deref(),
+                create: create.as_deref(),
+                safe: *safe,
+                new: new.into(),
             },
-            source,
-            to,
-            *safe,
         );
     }
 
     if let Some(Command::Key { command }) = &cli.command {
-        return key(&mut commands::key::Context { registries, global }, command);
+        return key(&mut world.keeping_a_key(), command);
     }
 
     if let Some(Command::Db { command }) = &cli.command {
-        let mut context = commands::db::Context {
-            consent,
-            registries,
-            password_command: cli.password_command.as_deref(),
-            global,
-        };
-        return db(&mut context, command);
+        return db(&mut world.registering(), command);
     }
 
     Ok(unimplemented(
         &format!("'{}'", command.path()),
         Some(&[
-            format!("It would have read {}.", resolution.describe(global)),
+            format!(
+                "It would have read {}.",
+                world.resolution.describe(world.global)
+            ),
             format!(
                 "A name would be looked for in {}.",
-                resolution.describe_lookup(global)
+                world.resolution.describe_lookup(world.global)
             ),
-            describe_registry(&registries, cli.password_command.as_deref()),
+            describe_registry(&world.registries, world.password_command),
         ]),
     ))
+}
+
+/// Everything a registry-reading command is handed, before it is handed to one.
+///
+/// **One struct because every command wanted the same four things** and each was writing them
+/// out again: the registries, where the global store is, what `--password-command` said, and
+/// what this run has permission to do. Each command's own `Context` is a subset of these, so
+/// the conversions below are the only place that shape is written down twice.
+struct World<'a> {
+    registries: Registries,
+    global: &'a Path,
+    password_command: Option<&'a str>,
+    consent: Consent<'a>,
+    resolution: registry::Resolution,
+}
+
+impl<'a> World<'a> {
+    fn backing_up(self) -> commands::backup::Context<'a> {
+        commands::backup::Context {
+            registries: self.registries,
+            global: self.global,
+            password_command: self.password_command,
+        }
+    }
+
+    fn listing_backups(self) -> commands::backups::Context<'a> {
+        commands::backups::Context {
+            registries: self.registries,
+            global: self.global,
+            consent: self.consent,
+        }
+    }
+
+    fn restoring(self) -> commands::restore::Context<'a> {
+        commands::restore::Context {
+            registries: self.registries,
+            global: self.global,
+            password_command: self.password_command,
+            consent: self.consent,
+        }
+    }
+
+    fn mirroring(self) -> commands::mirror::Context<'a> {
+        commands::mirror::Context {
+            registries: self.registries,
+            global: self.global,
+            password_command: self.password_command,
+            consent: self.consent,
+        }
+    }
+
+    fn syncing(self) -> commands::sync::Context<'a> {
+        commands::sync::Context {
+            registries: self.registries,
+            global: self.global,
+            password_command: self.password_command,
+            consent: self.consent,
+        }
+    }
+
+    fn keeping_a_key(self) -> commands::key::Context<'a> {
+        commands::key::Context {
+            registries: self.registries,
+            global: self.global,
+        }
+    }
+
+    fn registering(self) -> commands::db::Context<'a> {
+        commands::db::Context {
+            registries: self.registries,
+            password_command: self.password_command,
+            global: self.global,
+            consent: self.consent,
+        }
+    }
 }
 
 /// Hand a `backups` subcommand its arguments.
@@ -285,50 +343,19 @@ fn backup(
 ///
 /// It cannot fail, and says so: a health check that refused to report because something was
 /// wrong would be a health check nobody could use. What it found is in the exit code.
-fn doctor(
-    cli: &Cli,
-    global: &Path,
-    resolution: &registry::Resolution,
-    registries: &Registries,
-    offline: bool,
-) -> Exit {
+fn doctor(cli: &Cli, world: &World<'_>, offline: bool) -> Exit {
     // Only offer to install when there is somebody there to answer. Without a terminal
     // `doctor` is a report and nothing else, which is what a health check in a pipeline
     // wants it to be.
     let interactive = std::io::stdin().is_terminal();
     commands::doctor::run(
-        global,
+        world.global,
         interactive,
         &commands::doctor::Registered {
-            registries,
-            from: resolution.describe(global),
+            registries: &world.registries,
+            from: world.resolution.describe(world.global),
             password_command: cli.password_command.as_deref(),
             offline,
-        },
-    )
-}
-
-/// Hand `mirror` its arguments.
-///
-/// The same reason `backups` and `db` have one: clap's shape is taken apart here, and the
-/// eight flags that only mean something under `--create` become one borrowed struct rather
-/// than eight more lines in `with_registry`.
-fn mirror(
-    context: &mut commands::mirror::Context<'_>,
-    source: &str,
-    to: Option<&str>,
-    create: Option<&str>,
-    new: &cli::NewDestination,
-    safe: bool,
-) -> Outcome<Exit> {
-    commands::mirror::run(
-        context,
-        &commands::mirror::Mirroring {
-            source,
-            to,
-            create,
-            safe,
-            new: new.into(),
         },
     )
 }
@@ -365,6 +392,7 @@ fn db(context: &mut commands::db::Context<'_>, command: &DbCommand) -> Outcome<E
             database,
             role,
             role_password_stdin,
+            role_password_command,
         } => commands::db::create(
             context,
             &commands::db::Creating {
@@ -378,6 +406,7 @@ fn db(context: &mut commands::db::Context<'_>, command: &DbCommand) -> Outcome<E
                 database: database.as_deref(),
                 role: role.as_deref(),
                 role_password_stdin: *role_password_stdin,
+                role_password_command: role_password_command.as_deref(),
             },
         ),
         DbCommand::List => Ok(commands::db::list(context)),

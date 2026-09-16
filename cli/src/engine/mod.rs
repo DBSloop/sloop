@@ -600,6 +600,28 @@ pub trait Adapter {
     /// is the destination, and only its contents.
     fn copy_into(&self, source: &Target<'_>, destination: &Target<'_>) -> Outcome<()>;
 
+    /// Copy `source`'s **schema** into `destination`, and none of its rows.
+    ///
+    /// **A merge needs somewhere to merge into.** `sync` moves rows between tables that
+    /// already exist on both sides; a database that was created a moment ago has none, so
+    /// `sync --create` brings the shape across first and then merges into it. Without this
+    /// the first table fails with *"relation does not exist"*, having created a database and
+    /// registered it — which is the worst of both outcomes.
+    ///
+    /// Owners and grants are deliberately not carried: the destination has its own role, and
+    /// the source's would not exist there. That is the same choice [`Adapter::dump_into`]
+    /// makes, for the same reason.
+    /// `only` names the tables to bring; empty brings the whole shape. A destination that
+    /// holds some of the source's tables and not the others gets exactly the ones it is
+    /// missing — copying the whole schema over it would fail on the first one that is
+    /// already there.
+    fn copy_schema_into(
+        &self,
+        source: &Target<'_>,
+        destination: &Target<'_>,
+        only: &[Table],
+    ) -> Outcome<()>;
+
     /// The shape of every table: its columns, its primary key, and what it points at.
     ///
     /// **Everything `sync` needs to plan a merge, in one round trip per question rather than

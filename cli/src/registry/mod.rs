@@ -114,7 +114,22 @@ impl Resolution {
     /// which one it read.
     #[must_use]
     pub fn describe(&self, global_dir: &Path) -> String {
-        let how = match self.reason {
+        let where_ = self
+            .registry_dir()
+            .unwrap_or_else(|| global_dir.to_path_buf());
+
+        format!("{} — {}", where_.display(), self.why())
+    }
+
+    /// Why this registry and not the other one, in a phrase.
+    ///
+    /// **Its own method because a command that writes a record has to say it too.** Being
+    /// told *"registered in the global registry"* when you never asked for the global
+    /// registry reads like a bug — the answer is that there was no project to put it in, and
+    /// that is a sentence rather than something to work out.
+    #[must_use]
+    pub fn why(&self) -> String {
+        match self.reason {
             Reason::GlobalFlag => "--global".to_owned(),
             Reason::Flag => "named by -C".to_owned(),
             Reason::EnvVar => "named by SLOOP_PROJECT".to_owned(),
@@ -122,13 +137,7 @@ impl Resolution {
                 format!("the nearest {PROJECT_DIR} at or above the working directory")
             }
             Reason::NoProject => format!("no {PROJECT_DIR} at or above the working directory"),
-        };
-
-        let where_ = self
-            .registry_dir()
-            .unwrap_or_else(|| global_dir.to_path_buf());
-
-        format!("{} — {how}", where_.display())
+        }
     }
 
     /// Where a bare name would be looked for, in the order it would be looked for in.

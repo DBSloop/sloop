@@ -191,7 +191,7 @@ impl<'a> Consent<'a> {
             )
             .hint(format!(
                 "pass --confirm {} to say it up front",
-                destroying.named
+                style::as_argument(destroying.named)
             ))),
             None => Ok(()),
         }

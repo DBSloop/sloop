@@ -381,6 +381,7 @@ fn creating() -> super::Building<'static> {
         database: None,
         role: None,
         role_password_stdin: false,
+        role_password_command: None,
     }
 }
 
@@ -544,4 +545,58 @@ fn an_empty_answer_takes_the_default_and_a_typed_one_replaces_it() {
     // And a name that could not be read back is refused rather than quoted into existence.
     let failure = answered("or\u{7}ders\n").expect_err("a bell is not a database name");
     assert_eq!(failure.exit(), Exit::Usage);
+}
+
+/// **A password manager is as good as a pipe, and only one thing can use standard input.**
+/// An unattended run with `--superuser-password-stdin` has to take the new user's password
+/// from a command — and that shape is accepted rather than told it is missing a flag.
+#[test]
+fn a_role_password_command_answers_for_the_pipe() {
+    super::unattended_needs(&super::Building {
+        superuser_password_stdin: true,
+        role_password_command: Some("op read op://vault/app/pw"),
+        ..creating()
+    })
+    .expect("both secrets have a source");
+
+    super::unattended_needs(&super::Building {
+        superuser_password_command: Some("op read op://vault/pg/root"),
+        role_password_command: Some("op read op://vault/app/pw"),
+        ..creating()
+    })
+    .expect("neither needs standard input at all");
+
+    // And the hint says why only one of them can have the pipe.
+    let failure = super::unattended_needs(&creating()).expect_err("there is no terminal here");
+    assert!(
+        failure
+            .hint_text()
+            .is_some_and(|hint| hint.contains("password-command")),
+        "{:?}",
+        failure.hint_text()
+    );
+}
+
+/// The password prompt names the user it is for, by whichever name that user ends up with.
+#[test]
+fn the_password_is_asked_for_by_the_name_the_user_will_have() {
+    assert_eq!(super::role_for(&creating()), "orders");
+
+    assert_eq!(
+        super::role_for(&super::Building {
+            database: Some("orders_live"),
+            ..creating()
+        }),
+        "orders_live",
+        "with no --role the database's name is the user's"
+    );
+
+    assert_eq!(
+        super::role_for(&super::Building {
+            database: Some("orders_live"),
+            role: Some("orders_app"),
+            ..creating()
+        }),
+        "orders_app"
+    );
 }

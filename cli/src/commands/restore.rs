@@ -438,7 +438,7 @@ fn replace(adapter: &dyn Adapter, target: &Target<'_>, loading: &Loading<'_>) ->
             "  {}",
             style::dim(&format!(
                 "`sloop backups list {}` shows the other backups there are",
-                loading.label
+                style::as_argument(loading.label)
             ))
         );
         return Err(failure);

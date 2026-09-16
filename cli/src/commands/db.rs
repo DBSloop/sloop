@@ -103,11 +103,15 @@ pub fn add(
     )?;
 
     anstream::println!(
-        "{} {} in the {} registry, {}",
+        "{} {} in the {} registry {}",
         style::paint("registered"),
         style::paint(name),
         scope.label(),
-        style::dim(&format!("password from {}", route.describe()))
+        style::dim(&format!(
+            "({}), password from {}",
+            context.registries.resolution().why(),
+            route.describe()
+        ))
     );
     anstream::println!("  {}", style::dim(&database.credential_key()));
     Ok(Exit::Success)
@@ -142,6 +146,8 @@ pub struct Creating<'a> {
     pub role: Option<&'a str>,
     /// Take the new role's password from standard input rather than generating one.
     pub role_password_stdin: bool,
+    /// Run this for the new role's password rather than generating one.
+    pub role_password_command: Option<&'a str>,
 }
 
 /// The same thing, with the engine already settled rather than still a string.
@@ -171,6 +177,8 @@ pub struct Building<'a> {
     pub role: Option<&'a str>,
     /// Take the new role's password from standard input rather than generating one.
     pub role_password_stdin: bool,
+    /// Run this for the new role's password rather than generating one.
+    pub role_password_command: Option<&'a str>,
 }
 
 /// What [`build`] left on the server and in the registry.
@@ -214,6 +222,7 @@ pub fn create(context: &mut Context<'_>, asked: &Creating<'_>) -> Outcome<Exit> 
             database: asked.database,
             role: asked.role,
             role_password_stdin: asked.role_password_stdin,
+            role_password_command: asked.role_password_command,
         },
     )?;
     Ok(Exit::Success)
@@ -328,9 +337,10 @@ pub fn build(
     anstream::println!(
         "  {}",
         style::dim(&format!(
-            "registered as {} in the {} registry, password in {}",
+            "registered as {} in the {} registry ({}), password in {}",
             asked.name,
             scope.label(),
+            registries.resolution().why(),
             route.describe()
         ))
     );
@@ -518,7 +528,7 @@ pub fn unattended_needs(asked: &Building<'_>) -> Outcome<()> {
     }
 
     let mut missing: Vec<&str> = Vec::new();
-    if !asked.role_password_stdin {
+    if !asked.role_password_stdin && asked.role_password_command.is_none() {
         missing.push("--role-password-stdin");
     }
     if !asked.superuser_password_stdin && asked.superuser_password_command.is_none() {
@@ -538,7 +548,7 @@ pub fn unattended_needs(asked: &Building<'_>) -> Outcome<()> {
     )
     .hint(
         "unattended, it looks like this: --superuser-password-command \"op read \
-         op://vault/pg/root\" --role-password-stdin, with the new password piped in",
+         op://vault/pg/root\" --role-password-stdin, with the new password piped in. Only          one of the two can use standard input, so the other takes a --…-password-command",
     ))
 }
 
@@ -550,6 +560,17 @@ pub fn unattended_needs(asked: &Building<'_>) -> Outcome<()> {
 /// the honest answer: whatever creates a database unattended already has to know the
 /// password to configure anything with it.
 fn role_password(asked: &Building<'_>) -> Outcome<(Secret, bool)> {
+    if let Some(command) = asked.role_password_command {
+        let resolved = resolve(
+            &Route::Command(command.to_owned()),
+            &Lookup {
+                key: role_for(asked),
+                sealed_file: Path::new(""),
+            },
+        )?;
+        return Ok((resolved.secret, false));
+    }
+
     if asked.role_password_stdin {
         return Ok((from_stdin()?, false));
     }
@@ -560,10 +581,60 @@ fn role_password(asked: &Building<'_>) -> Outcome<(Secret, bool)> {
             "a generated password could only be printed into a log here, and there is no \
              terminal to print it to",
         )
-        .hint("pipe the password you want in with --role-password-stdin"));
+        .hint(
+            "pipe the one you want in with --role-password-stdin, or have a password manager \
+             print it with --role-password-command",
+        ));
     }
 
-    Ok((Secret::new(generated_password()?), true))
+    // **Typed, or generated — and the question is asked rather than assumed.** The owner
+    // asked to be able to supply one: *"it will be good if we could also provide the
+    // password in another flag so we can ignore generated password"*. At a terminal the
+    // honest place for that is a hidden prompt, because the alternative they were reaching
+    // for is a flag carrying the value, and every argument of every process on this machine
+    // is readable in `ps`. See "Choosing the new user's password" in
+    // `docs/OWNER-DECISIONS.md`.
+    match typed_twice(role_for(asked))? {
+        Some(typed) => Ok((typed, false)),
+        None => Ok((Secret::new(generated_password()?), true)),
+    }
+}
+
+/// Ask for a password, hidden, and again to be sure it is the one that was meant.
+///
+/// `None` when nothing was typed, which means "generate one" — the default, and what every
+/// run did before this question existed.
+///
+/// **Asked twice because it is typed blind and cannot be read back.** Whatever is typed is
+/// both set on the server and filed on this machine, so the two always agree with each
+/// other — what a typo breaks is the application config somebody was about to paste it into,
+/// and a second line catches that before a database exists rather than after.
+fn typed_twice(role: &str) -> Outcome<Option<Secret>> {
+    let typed = rpassword::prompt_password(format!(
+        "? Password for {role} [press Enter to have one generated]: "
+    ))
+    .map_err(|error| Failure::usage(format!("could not read the password: {error}")))?;
+
+    if typed.is_empty() {
+        return Ok(None);
+    }
+
+    let again = rpassword::prompt_password("? And again, to be sure: ")
+        .map_err(|error| Failure::usage(format!("could not read the password: {error}")))?;
+
+    if again != typed {
+        return Err(Failure::usage("those two passwords are not the same").hint(
+            "nothing was created. Run it again, or press Enter at the prompt to have one \
+             generated",
+        ));
+    }
+
+    Ok(Some(Secret::new(typed)))
+}
+
+/// The user this is all about, by whichever name it will end up with.
+fn role_for<'a>(asked: &'a Building<'a>) -> &'a str {
+    asked.role.or(asked.database).unwrap_or(asked.name)
 }
 
 /// A password for a role that is about to exist.
@@ -1525,8 +1596,9 @@ pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
     anstream::println!(
         "  {}",
         style::dim(&format!(
-            "nothing is kept and this cannot be undone — `sloop backup {name}` first if you \
-             want a copy"
+            "nothing is kept and this cannot be undone — `sloop backup {}` first if you \
+             want a copy",
+            style::as_argument(name)
         ))
     );
 
@@ -1551,8 +1623,9 @@ pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
     anstream::println!(
         "  {}",
         style::dim(&format!(
-            "{name} is still registered and now points at nothing — `sloop db remove {name}` \
-             forgets it"
+            "{name} is still registered and now points at nothing — `sloop db remove {}` \
+             forgets it",
+            style::as_argument(name)
         ))
     );
 

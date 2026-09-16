@@ -755,3 +755,99 @@ fn creating_a_database_says_it_asks_what_the_database_and_its_user_are_called() 
         .expect_said("--role-password-stdin")
         .expect_said("--superuser-password-command");
 }
+
+/// **Which registry a record went into, and why.** *"why it is getting registered globally
+/// where i didn't pass the --global flag explicitly?"* — because there was no project to put
+/// it in, which is the documented order and is now a sentence rather than something to work
+/// out from a listing.
+#[test]
+fn a_registration_says_why_it_went_where_it_went() {
+    let sandbox = Sandbox::new("registered-why");
+
+    // No `.sloop` anywhere above the working directory, so: the global store.
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "orders",
+            "--url",
+            "postgres://a@h/d",
+            "--env",
+            "PW",
+        ])
+        .expect_code(0)
+        .expect_said("in the global registry")
+        .expect_said("no .sloop at or above the working directory");
+
+    // With a project, the same command says the project and why that one.
+    let project = sandbox.make_dir("demo");
+    sandbox.sloop_in(&project, &["init"]).expect_code(0);
+    sandbox
+        .sloop_in(
+            &project,
+            &[
+                "db",
+                "add",
+                "here",
+                "--url",
+                "postgres://a@h/d",
+                "--env",
+                "PW",
+            ],
+        )
+        .expect_code(0)
+        .expect_said("in the project registry")
+        .expect_said("the nearest .sloop");
+
+    // And --global says so in as many words.
+    sandbox
+        .sloop_in(
+            &project,
+            &[
+                "--global",
+                "db",
+                "add",
+                "there",
+                "--url",
+                "postgres://a@h/d",
+                "--env",
+                "PW",
+            ],
+        )
+        .expect_code(0)
+        .expect_said("in the global registry")
+        .expect_said("--global");
+}
+
+/// There is no flag that carries the new user's password, and the help says why.
+#[test]
+fn the_new_users_password_is_chosen_without_ever_reaching_argv() {
+    let sandbox = Sandbox::new("create-password");
+
+    sandbox
+        .sloop(&["help", "db", "create"])
+        .expect_code(0)
+        .expect_said("yours to choose, and generated only when you do not")
+        .expect_said("There is no flag that takes the password itself")
+        .expect_said("readable in `ps`");
+
+    sandbox
+        .sloop(&["db", "create", "--help"])
+        .expect_code(0)
+        .expect_said("--role-password-command <COMMAND>");
+
+    // A password manager answers for the pipe, so the superuser's may use standard input.
+    sandbox
+        .sloop(&[
+            "db",
+            "create",
+            "orders",
+            "--engine",
+            "postgres",
+            "--superuser-password-stdin",
+            "--role-password-command",
+            "echo chosen-by-me",
+        ])
+        .expect_code(3)
+        .expect_silent_about("--role-password-stdin is missing");
+}

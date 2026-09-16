@@ -44,10 +44,12 @@ use crate::consent::{Consent, Destroying};
 use crate::engine::{Adapter, Merged, Table, TableShape, Target};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
-use crate::registry::Registries;
+use crate::registry::file::Database;
+use crate::registry::{Registries, Scope};
 use crate::style;
 
 use super::backup::{describe_bytes, plural};
+use super::mirror::{self, Destination, New};
 
 /// Everything `sync` needs from the outside.
 pub struct Context<'a> {
@@ -61,30 +63,66 @@ pub struct Context<'a> {
     pub consent: Consent<'a>,
 }
 
-/// Merge `source` into `destination`.
-pub fn run(context: &Context<'_>, source: &str, destination: &str, safe: bool) -> Outcome<Exit> {
-    let (from_scope, from) = context.registries.find(source)?;
-    let from = from.clone();
+/// Everything `sync` was asked for, named rather than positional.
+pub struct Syncing<'a> {
+    /// The registered database to merge from. Only ever read.
+    pub source: &'a str,
+    /// `--to`: a destination that is already registered.
+    pub to: Option<&'a str>,
+    /// `--create`: a destination that is not there yet, and what to call it here.
+    pub create: Option<&'a str>,
+    /// `--safe`: dump the source first, so a merge that fails can be replayed.
+    pub safe: bool,
+    /// The flags that only mean something when one is being made.
+    pub new: New<'a>,
+}
+
+/// Merge `source` into a destination — making the destination first, if asked to.
+pub fn run(context: &mut Context<'_>, asked: &Syncing<'_>) -> Outcome<Exit> {
+    let (from_scope, from) = context.registries.find(asked.source)?;
+    let (from_scope, from) = (from_scope, from.clone());
+
+    let Some(destination) = mirror::decide(
+        &context.registries,
+        context.consent,
+        asked.source,
+        asked.to,
+        asked.create,
+    )?
+    else {
+        anstream::println!("{}", style::dim("left alone."));
+        return Ok(Exit::Success);
+    };
+
+    match destination {
+        Destination::Registered(name) => {
+            into_a_registered_database(context, asked, from_scope, &from, &name)
+        }
+        Destination::Made(name) => into_a_new_database(context, asked, from_scope, &from, &name),
+    }
+}
+
+/// `--to`: the destination is already there, and its rows are merged with the source's.
+fn into_a_registered_database(
+    context: &Context<'_>,
+    asked: &Syncing<'_>,
+    from_scope: Scope,
+    from: &Database,
+    destination: &str,
+) -> Outcome<Exit> {
     let (into_scope, into) = context.registries.find(destination)?;
     let into = into.clone();
 
-    super::mirror::refuse_the_same_connection(
-        source,
-        &from,
+    mirror::refuse_the_same_connection(
+        asked.source,
+        from,
         destination,
         &into.host,
         into.port,
         &into.database,
-        "a sync would merge the source into itself, which can only waste the time it takes",
+        SYNCING_ITSELF,
     )?;
-
-    if from.engine != into.engine {
-        return Err(Failure::usage(format!(
-            "{source} is {} and {destination} is {}",
-            from.engine, into.engine
-        ))
-        .hint("R29 is where copying across engines gets decided; today it is refused"));
-    }
+    refuse_across_engines(asked.source, from, destination, &into)?;
 
     // **Permission first, before a password is fetched or a socket opened.** A sync changes
     // rows in a database somebody is using, so rule 5 applies exactly as it does to a
@@ -98,14 +136,98 @@ pub fn run(context: &Context<'_>, source: &str, destination: &str, safe: bool) -
     context.consent.checked_early(&destroying)?;
 
     let secret = |scope, record: &_| {
-        super::mirror::secret_for(&context.registries, context.password_command, scope, record)
+        mirror::secret_for(&context.registries, context.password_command, scope, record)
     };
-    let reading = secret(from_scope, &from)?;
+    let reading = secret(from_scope, from)?;
     let writing = secret(into_scope, &into)?;
-    let source_target = from.target(&reading);
-    let destination_target = into.target(&writing);
 
-    let adapter = super::adapter_for(from.engine, context.global);
+    merge(
+        context,
+        asked,
+        &from.target(&reading),
+        &into.target(&writing),
+        Some(&destroying),
+    )
+}
+
+/// `--create`: the destination is made first, and then merged into.
+///
+/// **A merge into a database that did not exist a moment ago is a copy**, and the numbers say
+/// so — every row is new and nothing is kept. That is not a special case in the code and does
+/// not need to be: what makes `sync` different from `mirror` is what it does to rows that were
+/// already there, and there are none.
+fn into_a_new_database(
+    context: &mut Context<'_>,
+    asked: &Syncing<'_>,
+    from_scope: Scope,
+    from: &Database,
+    label: &str,
+) -> Outcome<Exit> {
+    let mut reading = None;
+    let built = mirror::make_the_destination(
+        &mut context.registries,
+        context.global,
+        context.consent,
+        &mirror::Making {
+            source: asked.source,
+            from,
+            label,
+            new: &asked.new,
+            consequence: SYNCING_ITSELF,
+        },
+        |registries| {
+            let secret =
+                mirror::secret_for(registries, context.password_command, from_scope, from)?;
+            super::adapter_for(from.engine, context.global).probe(&from.target(&secret))?;
+            reading = Some(secret);
+            Ok(())
+        },
+    )?;
+    let reading = reading.expect("the source is proved before anything is created");
+
+    // **No `Destroying`.** There is nothing in there to replace: this run made it. The shape
+    // it does not have yet is `merge`'s business, and this is not the only way to arrive at
+    // a destination with nothing in it — see `Shaped`.
+    merge(
+        context,
+        asked,
+        &from.target(&reading),
+        &built.record.target(&built.secret),
+        None,
+    )
+}
+
+/// Two engines is `R29`'s question, and until then it is a refusal that says where.
+fn refuse_across_engines(
+    source: &str,
+    from: &Database,
+    destination: &str,
+    into: &Database,
+) -> Outcome<()> {
+    if from.engine == into.engine {
+        return Ok(());
+    }
+
+    Err(Failure::usage(format!(
+        "{source} is {} and {destination} is {}",
+        from.engine, into.engine
+    ))
+    .hint("R29 is where copying across engines gets decided; today it is refused"))
+}
+
+/// What syncing a database into itself would have done, which is the half worth reading.
+const SYNCING_ITSELF: &str =
+    "a sync would merge the source into itself, which can only waste the time it takes";
+
+/// The merge itself, once both ends are settled.
+fn merge(
+    context: &Context<'_>,
+    asked: &Syncing<'_>,
+    source_target: &Target<'_>,
+    destination_target: &Target<'_>,
+    destroying: Option<&Destroying<'_>>,
+) -> Outcome<Exit> {
+    let adapter = super::adapter_for(source_target.engine, context.global);
 
     anstream::println!(
         "{} {}",
@@ -116,9 +238,8 @@ pub fn run(context: &Context<'_>, source: &str, destination: &str, safe: bool) -
             destination_target.describe()
         ))
     );
-
-    let from_server = adapter.probe(&source_target)?;
-    let into_server = adapter.probe(&destination_target)?;
+    let from_server = adapter.probe(source_target)?;
+    let into_server = adapter.probe(destination_target)?;
     anstream::println!(
         "  {}",
         style::dim(&format!(
@@ -130,7 +251,7 @@ pub fn run(context: &Context<'_>, source: &str, destination: &str, safe: bool) -
     // **The plan is made and printed before anything is asked for.** What will be merged,
     // in what order, and what will not be — so the question somebody answers is a question
     // about work they have already seen described.
-    let plan = Plan::of(adapter.as_ref(), &source_target)?;
+    let plan = Plan::of(adapter.as_ref(), source_target)?;
     plan.announce();
 
     if plan.merging.is_empty() {
@@ -138,17 +259,40 @@ pub fn run(context: &Context<'_>, source: &str, destination: &str, safe: bool) -
         return Ok(Exit::Success);
     }
 
-    if !context.consent.typed(&destroying)?.granted() {
-        anstream::println!("{}", style::dim("left alone."));
-        return Ok(Exit::Success);
+    // **What the destination has now decides what this run is.** Three cases, and they are
+    // the ones the owner named: a database with nothing in it gets the source's shape and
+    // then every row, which is a copy; one with the same tables gets a merge; one with
+    // *some* of them is a database this cannot honestly merge into, and is refused.
+    let waiting = Shaped::of(adapter.as_ref(), destination_target, &plan)?;
+    waiting.announce();
+
+    if let Some(destroying) = destroying {
+        if !context.consent.typed(destroying)?.granted() {
+            anstream::println!("{}", style::dim("left alone."));
+            return Ok(Exit::Success);
+        }
+    }
+
+    // The shape goes across before the rows: all of it into a destination that holds
+    // nothing, and only the tables it is short of into one that holds some — see `Shaped`.
+    if !waiting.missing.is_empty() {
+        adapter.copy_schema_into(
+            source_target,
+            destination_target,
+            if waiting.is_bare() {
+                &[]
+            } else {
+                &waiting.missing
+            },
+        )?;
     }
 
     carry_out(
         adapter.as_ref(),
-        &source_target,
-        &destination_target,
+        source_target,
+        destination_target,
         &plan,
-        safe,
+        asked.safe,
     )
 }
 
@@ -263,6 +407,82 @@ impl Plan {
                     "skipping {table} — it has no primary key, so there is no way to tell \
                      which row is which"
                 ))
+            );
+        }
+    }
+}
+
+/// What the destination already has, which is what decides whether this run is a merge.
+///
+/// **The three cases the owner named, and they are not the same run.** *"if db is not present
+/// it will create first, and just like mirror it will do; if already present and no data,
+/// still same thing like mirror; if data is present then merge."*
+///
+/// - **Nothing at all** — no tables, whether because `--create` made the database a moment
+///   ago or because somebody registered an empty one. The source's shape goes across and then
+///   every row, which is a copy: the numbers will say every row is new and nothing was kept.
+/// - **The same tables** — a merge, which is what this command is for.
+/// - **Some of them** — the ones it is short of are created first, and then the whole set is
+///   merged. Only those tables' shapes are carried: copying the source's whole schema over a
+///   destination that already holds half of it would fail on the first table that is there.
+///   Each one is named before the question, because creating a table is a change to the
+///   destination's shape rather than to its rows.
+struct Shaped {
+    /// The tables the destination is missing that the plan means to merge.
+    missing: Vec<Table>,
+    /// How many tables the destination has, of any kind.
+    has: usize,
+}
+
+impl Shaped {
+    /// Ask the destination what it holds, and line it up against the plan.
+    fn of(adapter: &dyn Adapter, destination: &Target<'_>, plan: &Plan) -> Outcome<Self> {
+        let there = adapter.tables(destination)?;
+        Ok(Self {
+            missing: plan
+                .merging
+                .iter()
+                .map(|shape| &shape.table)
+                .filter(|table| !there.contains(table))
+                .cloned()
+                .collect(),
+            has: there.len(),
+        })
+    }
+
+    /// Is there nothing in there at all?
+    const fn is_bare(&self) -> bool {
+        self.has == 0
+    }
+
+    /// Say which of the three this run is, before anybody agrees to it.
+    fn announce(&self) {
+        if self.is_bare() {
+            anstream::println!(
+                "  {}",
+                style::dim(
+                    "the destination has no tables, so its shape is copied across first and \
+                     every row will be new"
+                )
+            );
+            return;
+        }
+
+        anstream::println!(
+            "  {}",
+            style::dim(&format!(
+                "the destination has {}",
+                plural(count(self.has), "table")
+            ))
+        );
+
+        // **Named, not counted.** A table the destination is short of is one that is about to
+        // be created there, and creating a table changes the destination's shape rather than
+        // its rows — so it is said before the question rather than reported after it.
+        for table in &self.missing {
+            anstream::println!(
+                "  {}",
+                style::dim(&format!("{table} is not there yet, so it is created first"))
             );
         }
     }

@@ -151,3 +151,74 @@ mod tests {
         assert!(style.get_bg_color().is_none());
     }
 }
+
+/// A name as it has to be typed back at a shell.
+///
+/// **Every message that suggests a command has to survive being pasted into one.** A label
+/// may hold spaces — `sloop db create 'Test Sloop DB 2'` is a perfectly good registration —
+/// and a message that then says *"`sloop db remove Test Sloop DB 2` forgets it"* is a message
+/// that produces four arguments and an error when somebody does exactly what it told them to.
+///
+/// **Single quotes, because all four shells this runs under read them the same way.**
+/// PowerShell, `cmd` through a shim, `bash` and `zsh` all take `'…'` as a literal run with no
+/// interpolation. A name holding an apostrophe goes in double quotes instead — none of the
+/// characters that are special inside `"…"` can be in a name that got past
+/// [`crate::registry::file::check_name`] except `$` and a backtick, so the rare name carrying
+/// one of those alongside an apostrophe is the one case this cannot render for every shell at
+/// once, and it takes PowerShell's spelling.
+///
+/// Anything made only of the characters a shell never touches is returned untouched, so the
+/// ordinary message reads exactly as it did.
+#[must_use]
+pub fn as_argument(name: &str) -> String {
+    let plain = |letter: char| letter.is_ascii_alphanumeric() || matches!(letter, '.' | '_' | '-');
+
+    if !name.is_empty() && name.chars().all(plain) {
+        return name.to_owned();
+    }
+    if !name.contains('\'') {
+        return format!("'{name}'");
+    }
+    if !name.contains('"') {
+        return format!("\"{name}\"");
+    }
+    format!("'{}'", name.replace('\'', "''"))
+}
+
+#[cfg(test)]
+mod argument_tests {
+    use super::as_argument;
+
+    /// An ordinary name is left exactly as it was — the common message must not change.
+    #[test]
+    fn a_name_a_shell_would_not_touch_is_untouched() {
+        for plain in ["orders", "orders_live", "app-1", "db.two", "A1"] {
+            assert_eq!(as_argument(plain), plain);
+        }
+    }
+
+    /// **The bug this exists for.** A label with spaces has to come back quotable.
+    #[test]
+    fn a_name_with_spaces_comes_back_ready_to_paste() {
+        assert_eq!(as_argument("Test Sloop DB 2"), "'Test Sloop DB 2'");
+        assert_eq!(as_argument(" leading"), "' leading'");
+        assert_eq!(as_argument(""), "''");
+    }
+
+    /// Anything a shell reads as syntax is quoted too, not just a space.
+    #[test]
+    fn anything_a_shell_would_read_is_quoted() {
+        for awkward in ["a;b", "a|b", "a&b", "a$b", "a>b", "a*b", "a(b)", "a#b"] {
+            assert_eq!(as_argument(awkward), format!("'{awkward}'"));
+        }
+    }
+
+    /// An apostrophe cannot sit inside single quotes, so that name takes double ones.
+    #[test]
+    fn an_apostrophe_moves_it_to_double_quotes() {
+        assert_eq!(as_argument("Ada's db"), "\"Ada's db\"");
+        // Both kinds at once is the one case no single spelling suits; it takes
+        // PowerShell's, which is doubling the apostrophe.
+        assert_eq!(as_argument("Ada's \"db\""), "'Ada''s \"db\"'");
+    }
+}

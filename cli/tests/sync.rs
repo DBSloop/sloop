@@ -172,3 +172,60 @@ fn the_help_says_what_a_merge_keeps() {
         .expect_said("no primary key is skipped")
         .expect_said("point at each other");
 }
+
+/// **The destination does not have to exist here either.** The owner asked for the same flow
+/// in both copying commands: *"the same create db flow will be executed during sync or mirror
+/// if db is not present with provided name"*.
+#[test]
+fn a_destination_that_is_not_there_yet_can_be_made() {
+    let sandbox = with_two("sync-create");
+
+    // The same two refusals mirror has, in sync's words.
+    sandbox
+        .sloop(&["sync", "live", "--create", "staging"])
+        .expect_code(2)
+        .expect_said("staging is already registered")
+        .expect_said("--to staging goes into it");
+
+    sandbox
+        .sloop(&["sync", "live", "--to", "stagin"])
+        .expect_code(2)
+        .expect_said("no database is registered as stagin")
+        .expect_said("--create stagin");
+
+    // Unattended, `--create` needs the two password flags named together.
+    sandbox
+        .sloop(&["sync", "live", "--create", "fresh"])
+        .expect_code(2)
+        .expect_said("--role-password-stdin")
+        .expect_said("--superuser-password-command");
+}
+
+/// With neither flag and no terminal it exits 2 naming both, rather than hanging.
+#[test]
+fn with_no_destination_and_no_terminal_it_names_both_flags_and_stops() {
+    let sandbox = with_two("sync-nowhere");
+
+    sandbox
+        .sloop(&["sync", "live"])
+        .expect_code(2)
+        .expect_said("no terminal")
+        .expect_said("--to <NAME>")
+        .expect_said("--create <NAME>");
+}
+
+/// The creating flags only mean something under `--create`, exactly as on `mirror`.
+#[test]
+fn the_creating_flags_only_mean_something_under_create() {
+    let sandbox = with_two("sync-orphan-flags");
+
+    sandbox
+        .sloop(&["sync", "live", "--role", "staging_app"])
+        .expect_code(2)
+        .expect_said("--create <NAME>");
+
+    sandbox
+        .sloop(&["sync", "live", "--to", "staging", "--role", "staging_app"])
+        .expect_code(2)
+        .expect_said("cannot be used with");
+}

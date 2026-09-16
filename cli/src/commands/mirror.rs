@@ -112,6 +112,8 @@ pub struct New<'a> {
     pub role: Option<&'a str>,
     /// Take the new role's password from standard input rather than generating one.
     pub role_password_stdin: bool,
+    /// Run this for the new role's password rather than generating one.
+    pub role_password_command: Option<&'a str>,
 }
 
 impl<'a> From<&'a crate::cli::NewDestination> for New<'a> {
@@ -125,12 +127,13 @@ impl<'a> From<&'a crate::cli::NewDestination> for New<'a> {
             database: flags.database.as_deref(),
             role: flags.role.as_deref(),
             role_password_stdin: flags.role_password_stdin,
+            role_password_command: flags.role_password_command.as_deref(),
         }
     }
 }
 
 /// Which database this copy is going into.
-enum Destination {
+pub(super) enum Destination {
     /// One that is already registered. `R14`, unchanged.
     Registered(String),
     /// One that has to be made first. `R14a`.
@@ -142,7 +145,14 @@ pub fn run(context: &mut Context<'_>, asked: &Mirroring<'_>) -> Outcome<Exit> {
     let (from_scope, from) = context.registries.find(asked.source)?;
     let (from_scope, from) = (from_scope, from.clone());
 
-    let Some(destination) = decide(context, asked)? else {
+    let Some(destination) = decide(
+        &context.registries,
+        context.consent,
+        asked.source,
+        asked.to,
+        asked.create,
+    )?
+    else {
         anstream::println!("{}", style::dim("left alone."));
         return Ok(Exit::Success);
     };
@@ -165,22 +175,32 @@ pub fn run(context: &mut Context<'_>, asked: &Mirroring<'_>) -> Outcome<Exit> {
 /// With neither flag and somebody there to ask, it asks. With neither flag and nobody there,
 /// it exits `2` naming both — rule 4, and the half of `R14a`'s *Done when* that is about not
 /// hanging.
-fn decide(context: &Context<'_>, asked: &Mirroring<'_>) -> Outcome<Option<Destination>> {
-    if let Some(name) = asked.create {
-        if context.registries.find(name).is_ok() {
-            return Err(Failure::usage(format!("{name} is already registered")).hint(format!(
-                "--to {name} copies into it; --create is for a destination that is not there yet"
-            )));
+pub(super) fn decide(
+    registries: &Registries,
+    consent: Consent<'_>,
+    source: &str,
+    to: Option<&str>,
+    create: Option<&str>,
+) -> Outcome<Option<Destination>> {
+    if let Some(name) = create {
+        if registries.find(name).is_ok() {
+            return Err(
+                Failure::usage(format!("{name} is already registered")).hint(format!(
+                    "--to {} goes into it; --create is for a destination that is not there yet",
+                    style::as_argument(name)
+                )),
+            );
         }
         return Ok(Some(Destination::Made(name.to_owned())));
     }
 
-    if let Some(name) = asked.to {
-        return match context.registries.find(name) {
+    if let Some(name) = to {
+        return match registries.find(name) {
             Ok(_) => Ok(Some(Destination::Registered(name.to_owned()))),
             Err(failure) => Err(failure.hint(format!(
-                "--create {name} would make it and copy into it, and `sloop db list` shows \
-                 what is registered"
+                "--create {} would make it and go into it, and `sloop db list` shows \
+                 what is registered",
+                style::as_argument(name)
             ))),
         };
     }
@@ -188,32 +208,29 @@ fn decide(context: &Context<'_>, asked: &Mirroring<'_>) -> Outcome<Option<Destin
     if !std::io::stdin().is_terminal() {
         return Err(Failure::new(
             Exit::Usage,
-            format!(
-                "{} has nowhere to be copied to, and there is no terminal to ask at",
-                asked.source
-            ),
+            format!("{source} has nowhere to go, and there is no terminal to ask at"),
         )
         .hint(
-            "--to <NAME> copies into a database that is already registered, and \
-             --create <NAME> makes one first",
+            "--to <NAME> uses a database that is already registered, and --create <NAME> \
+             makes one first",
         ));
     }
 
-    let Some(typed) = ask_where(asked.source)? else {
+    let Some(typed) = ask_where(source)? else {
         return Ok(None);
     };
 
-    if context.registries.find(&typed).is_ok() {
+    if registries.find(&typed).is_ok() {
         return Ok(Some(Destination::Registered(typed)));
     }
 
     // **Offered rather than refused.** The one moment somebody is standing there able to say
     // yes is a strange moment to tell them to run the command again with another flag.
-    let question = format!("{typed} is not registered. Make it, and copy into it?");
-    if !context
-        .consent
-        .asked(&question, &format!("--create {typed}"))?
-    {
+    let question = format!("{typed} is not registered. Make it, and use it?");
+    if !consent.asked(
+        &question,
+        &format!("--create {}", style::as_argument(&typed)),
+    )? {
         return Ok(None);
     }
     Ok(Some(Destination::Made(typed)))
@@ -222,7 +239,7 @@ fn decide(context: &Context<'_>, asked: &Mirroring<'_>) -> Outcome<Option<Destin
 /// Ask which database this is going into. `None` when nothing was named.
 fn ask_where(source: &str) -> Outcome<Option<String>> {
     anstream::print!(
-        "{} copy {} into which database? ",
+        "{} {} goes into which database? ",
         style::paint("?"),
         style::paint(source)
     );
@@ -302,59 +319,28 @@ fn into_a_new_database(
     from: &Database,
     label: &str,
 ) -> Outcome<Exit> {
-    check_name(label)?;
-
-    // **The names are settled before the guard, because the guard compares one of them.**
-    // At a terminal this is where somebody is asked what the database and its owner should
-    // be called; with no terminal the flags answer, or the defaults do. Either way the
-    // connection this *will* be is known before anything is asked to make it, which is what
-    // lets the guard fire on a database that does not exist yet.
-    let naming = db::name_it(label, asked.new.database, asked.new.role)?;
-    let proposed = proposed(from, &naming, &asked.new);
-    refuse_the_same_connection(
-        asked.source,
-        from,
-        label,
-        &proposed.host,
-        proposed.port,
-        &proposed.database,
-        MIRRORING_ITSELF,
-    )?;
-
-    let building = db::Building {
-        name: label,
-        engine: from.engine,
-        host: &proposed.host,
-        port: Some(proposed.port),
-        superuser: asked.new.superuser,
-        superuser_password_stdin: asked.new.superuser_password_stdin,
-        superuser_password_command: asked.new.superuser_password_command,
-        database: Some(&proposed.database),
-        role: Some(&proposed.role),
-        role_password_stdin: asked.new.role_password_stdin,
-    };
-
-    // **Every flag that is missing, named before a socket is opened.** [`db::build`] asks
-    // this too, and would ask it in time — but by then the source's password has been
-    // fetched and its server contacted, so an unattended run would hear about a failed
-    // connection first and about the two flags it was actually missing second. Reading the
-    // flags costs nothing, so it goes first.
-    db::unattended_needs(&building)?;
-
-    let reading = secret_for(
-        &context.registries,
-        context.password_command,
-        from_scope,
-        from,
-    )?;
-    super::adapter_for(from.engine, context.global).probe(&from.target(&reading))?;
-
-    let built = db::build(
+    // The source's password is fetched and its server contacted inside here, once the free
+    // questions have all been answered — see `make_the_destination`.
+    let mut reading = None;
+    let built = make_the_destination(
         &mut context.registries,
         context.global,
         context.consent,
-        &building,
+        &Making {
+            source: asked.source,
+            from,
+            label,
+            new: &asked.new,
+            consequence: MIRRORING_ITSELF,
+        },
+        |registries| {
+            let secret = secret_for(registries, context.password_command, from_scope, from)?;
+            super::adapter_for(from.engine, context.global).probe(&from.target(&secret))?;
+            reading = Some(secret);
+            Ok(())
+        },
     )?;
+    let reading = reading.expect("the source is proved before anything is created");
 
     // **No `Destroying`.** There is nothing in there to destroy — see the note at the top of
     // this module.
@@ -365,6 +351,89 @@ fn into_a_new_database(
         &built.record.target(&built.secret),
         None,
     )
+}
+
+/// Build the destination a `--create` names, and hand back the record and its password.
+///
+/// **Shared by `mirror` and `sync`**, because the owner asked for the same flow in both:
+/// *"the same create db flow will be executed during sync or mirror if db is not present
+/// with provided name"*. What differs between the two is the word in the refusal and what
+/// counts as proving the source, so those are arguments.
+///
+/// **The order is the one that leaves least behind when it goes wrong.** The label is
+/// checked, the names are settled — at a terminal that is where somebody is asked — the
+/// self-copy guard runs against the database that is *about* to exist, every missing flag is
+/// named, and only then is the source contacted. Nothing is created until there is something
+/// proven to put in it.
+pub(super) struct Making<'a> {
+    /// The registered database being copied, by its label, for the refusal's wording.
+    pub source: &'a str,
+    /// Its record — the engine, the server and the database the guard compares against.
+    pub from: &'a Database,
+    /// What to register the new one as.
+    pub label: &'a str,
+    /// The flags that say how to build it.
+    pub new: &'a New<'a>,
+    /// What copying a database onto itself would have done, for the guard's hint.
+    pub consequence: &'a str,
+}
+
+pub(super) fn make_the_destination(
+    registries: &mut Registries,
+    global: &Path,
+    consent: Consent<'_>,
+    asked: &Making<'_>,
+    prove_the_source: impl FnOnce(&mut Registries) -> Outcome<()>,
+) -> Outcome<db::Built> {
+    let Making {
+        source,
+        from,
+        label,
+        new,
+        consequence,
+    } = *asked;
+
+    check_name(label)?;
+
+    // The names come first because the guard compares one of them, and because the engine
+    // and the server are the source's — so the connection this *will* be is known before
+    // anything is asked to make it.
+    let naming = db::name_it(label, new.database, new.role)?;
+    let proposed = proposed(from, &naming, new);
+    refuse_the_same_connection(
+        source,
+        from,
+        label,
+        &proposed.host,
+        proposed.port,
+        &proposed.database,
+        consequence,
+    )?;
+
+    let building = db::Building {
+        name: label,
+        engine: from.engine,
+        host: &proposed.host,
+        port: Some(proposed.port),
+        superuser: new.superuser,
+        superuser_password_stdin: new.superuser_password_stdin,
+        superuser_password_command: new.superuser_password_command,
+        database: Some(&proposed.database),
+        role: Some(&proposed.role),
+        role_password_stdin: new.role_password_stdin,
+        role_password_command: new.role_password_command,
+    };
+
+    // **Every flag that is missing, named before a socket is opened.** [`db::build`] asks
+    // this too, and would ask it in time — but by then the source's password has been
+    // fetched and its server contacted, so an unattended run would hear about a failed
+    // connection first and about the two flags it was actually missing second. Reading the
+    // flags costs nothing, so it goes first.
+    db::unattended_needs(&building)?;
+
+    prove_the_source(registries)?;
+
+    db::build(registries, global, consent, &building)
 }
 
 /// The connection a `--create` is about to bring into existence.
