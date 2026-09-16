@@ -10,16 +10,18 @@
 //! prompt has no way to return anywhere but forward, which is why `CLAUDE.md` asked for a
 //! stack instead.
 //!
-//! **What is here is the shell, not the flows.** Every leaf below says what it will do, and
-//! says the flag form that does it today; `R19` replaces each of those with the prompt
-//! sequence for that command. The one flow that is this task's own is `init`, because
-//! *"first run offers `Init` and nothing else"* is only true if picking it works.
+//! **Every leaf opens a flow.** The tree is the same tree `R18` drew; what `R19` changed is
+//! what happens at the end of a branch. A leaf is now a [`Job`], the screen behind it holds
+//! that job's [`Answers`], and `← Back` inside one drops the last answer rather than leaving
+//! the whole flow — which is the same rule as everywhere else, one question deep instead of
+//! one screen deep. See `flow`.
 
 use std::path::{Path, PathBuf};
 
 use crate::commands::init::Initialised;
 use crate::failure::{Failure, Outcome};
 
+use super::flow::{Answers, Doing, How, Job, Next};
 use super::paint::{Banner, Header, Line};
 use crate::style::Hue;
 
@@ -34,6 +36,15 @@ pub enum Flow {
     Home,
     /// Draw this screen again — something typed into it did not work.
     Stay,
+    /// Replace this screen without pushing it.
+    ///
+    /// **For a flow, which keeps its own history.** Every answer makes a new screen, and
+    /// pushing each one would put the same move on the stack twice: `← Back` would drop an
+    /// answer, and the next one would walk into the copy of the screen that still had it.
+    /// One undo, in the flow's own terms. See [`Screen::stepped_back`].
+    Same(Screen),
+    /// Hand the terminal back, run this, and come back to the menu.
+    Run(Leaf, Box<Answers>),
     /// Put the terminal back.
     Quit,
 }
@@ -117,12 +128,20 @@ pub enum Screen {
         /// Where the highlight is.
         cursor: usize,
     },
-    /// A command whose own screens arrive with `R19`.
-    Soon {
+    /// A command, part-way through the questions it asks.
+    ///
+    /// **The answers live here rather than in the loop**, so the screen stack keeps them
+    /// exactly as it keeps a highlight: leave the flow and come back to it and every answer
+    /// is still given. `← Back` inside one drops the last answer instead of the whole flow.
+    Doing {
         /// Which command.
         leaf: Leaf,
-        /// Where the highlight is.
+        /// What has been answered so far.
+        answers: Box<Answers>,
+        /// Where the highlight is on the question being asked.
         cursor: usize,
+        /// What the last attempt to run it said.
+        trouble: Option<String>,
     },
 }
 
@@ -136,14 +155,16 @@ pub enum Face {
 
 /// A list of things to pick from. The way out is added by the loop, never by a screen —
 /// which is how *"`← Back` on every menu"* stays true of a menu nobody has looked at yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Menu {
     /// The line above the list.
-    pub question: &'static str,
+    pub question: String,
     /// The items, in order.
     pub items: Vec<Item>,
 }
 
 /// One line in a list.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
     /// What it is called.
     pub title: String,
@@ -152,7 +173,8 @@ pub struct Item {
 }
 
 impl Item {
-    fn new(title: &str, blurb: &str) -> Self {
+    #[must_use]
+    pub fn new(title: &str, blurb: &str) -> Self {
         Self {
             title: title.to_owned(),
             blurb: blurb.to_owned(),
@@ -161,9 +183,10 @@ impl Item {
 }
 
 /// One line to type.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ask {
     /// The line above the box.
-    pub question: &'static str,
+    pub question: String,
     /// What is in the box before anything is typed.
     pub initial: String,
     /// The quiet line under it.
@@ -198,6 +221,17 @@ pub struct Leaf {
     pub blurb: &'static str,
     /// The flag form, ready to paste.
     pub command: &'static str,
+    /// What choosing it runs.
+    pub job: Job,
+    /// Which group it sits under, for the breadcrumb.
+    pub under: &'static str,
+    /// The one item on the last screen of the flow: the sentence that does it.
+    ///
+    /// Written per leaf rather than built from the title, because *"Delete one from the
+    /// server"* has to become *"Delete it"* and not *"Delete one from the server it"* — and
+    /// the last thing somebody reads before a database stops existing is worth writing by
+    /// hand.
+    pub run_it: &'static str,
 }
 
 /// A door on the home screen: into a group, or straight at a command.
@@ -224,10 +258,10 @@ impl Door {
         }
     }
 
-    const fn opens(self) -> Screen {
+    fn opens(self) -> Screen {
         match self {
             Self::Into(group, _, _) => Screen::Group { group, cursor: 0 },
-            Self::At(leaf) => Screen::Soon { leaf, cursor: 0 },
+            Self::At(leaf) => Screen::opening(leaf),
         }
     }
 }
@@ -261,6 +295,9 @@ const HOME: &[Door] = &[
         title: "Check my setup",
         blurb: "what sloop can find on this machine, and what it cannot",
         command: "sloop doctor",
+        job: Job::Doctor,
+        under: "Check my setup",
+        run_it: "Check this machine",
     }),
 ];
 
@@ -269,41 +306,65 @@ const DATABASES: &[Leaf] = &[
         title: "Tell sloop about a database",
         blurb: "it already exists on a server; this gives sloop the way in",
         command: "sloop db add <name>",
+        job: Job::DbAdd,
+        under: "Databases",
+        run_it: "Register it",
     },
     Leaf {
         title: "Make a new database",
         blurb: "creates the database and its user on the server, then registers it",
         command: "sloop db create <name>",
+        job: Job::DbCreate,
+        under: "Databases",
+        run_it: "Make it",
     },
     Leaf {
         title: "See the ones sloop knows",
         blurb: "every database in this registry, and where its password comes from",
         command: "sloop db list",
+        job: Job::DbList,
+        under: "Databases",
+        run_it: "Show them",
     },
     Leaf {
         title: "Check one answers",
         blurb: "opens a connection and says what came back",
         command: "sloop db test <name>",
+        job: Job::DbTest,
+        under: "Databases",
+        run_it: "Try it",
     },
     Leaf {
         title: "Change one's details",
         blurb: "host, port, user, database, password",
         command: "sloop db edit <name>",
+        job: Job::DbEdit,
+        under: "Databases",
+        run_it: "Save the change",
     },
     Leaf {
         title: "Rename one",
         blurb: "the name sloop files it under — the server's own name does not change",
         command: "sloop db rename <from> <to>",
+        job: Job::DbRename,
+        under: "Databases",
+        run_it: "Rename it",
     },
     Leaf {
         title: "Make sloop forget one",
         blurb: "removes it from this registry. The database itself is untouched",
         command: "sloop db remove <name>",
+        job: Job::DbRemove,
+        under: "Databases",
+        run_it: "Forget it",
     },
     Leaf {
         title: "Delete one from the server",
         blurb: "the database itself, gone. A safety copy is taken first",
         command: "sloop db drop <name>",
+        job: Job::DbDrop,
+        under: "Databases",
+        run_it: "Delete it from the server",
     },
 ];
 
@@ -312,26 +373,41 @@ const BACKUPS: &[Leaf] = &[
         title: "Back one up now",
         blurb: "dumps it, checks every row arrived, and writes a manifest beside it",
         command: "sloop backup <name>",
+        job: Job::Backup,
+        under: "Backups",
+        run_it: "Back it up",
     },
     Leaf {
         title: "Back up every one of them",
         blurb: "carries on past a failure and says at the end which ones failed",
         command: "sloop backup --all",
+        job: Job::BackupAll,
+        under: "Backups",
+        run_it: "Back them all up",
     },
     Leaf {
         title: "See the backups I have",
         blurb: "what was taken, when, how big, and whether it still checks out",
         command: "sloop backups list",
+        job: Job::BackupsList,
+        under: "Backups",
+        run_it: "Show them",
     },
     Leaf {
         title: "Put a backup back",
         blurb: "restores a database from one of them",
         command: "sloop restore <name>",
+        job: Job::Restore,
+        under: "Backups",
+        run_it: "Put it back",
     },
     Leaf {
         title: "Clear out the old ones",
         blurb: "keeps the most recent, deletes the rest",
         command: "sloop backups prune --keep 7",
+        job: Job::BackupsPrune,
+        under: "Backups",
+        run_it: "Clear them out",
     },
 ];
 
@@ -340,11 +416,17 @@ const COPYING: &[Leaf] = &[
         title: "Mirror — make one an exact copy of another",
         blurb: "the destination ends up identical. Anything only it had is gone",
         command: "sloop mirror <source> --to <destination>",
+        job: Job::Mirror,
+        under: "Copy a database",
+        run_it: "Mirror it",
     },
     Leaf {
         title: "Sync — merge one into another",
         blurb: "rows are added and replaced. Rows only the destination has are kept",
         command: "sloop sync <source> --to <destination>",
+        job: Job::Sync,
+        under: "Copy a database",
+        run_it: "Merge it",
     },
 ];
 
@@ -353,11 +435,17 @@ const KEY: &[Leaf] = &[
         title: "Export the key",
         blurb: "copy it somewhere safe. Without it, no backup can ever be opened",
         command: "sloop key export",
+        job: Job::KeyExport,
+        under: "Backup key",
+        run_it: "Export the key",
     },
     Leaf {
         title: "Import a key",
         blurb: "bring one in from another machine",
         command: "sloop key import",
+        job: Job::KeyImport,
+        under: "Backup key",
+        run_it: "Import a key",
     },
 ];
 
@@ -406,7 +494,7 @@ impl Screen {
             | Self::Started { cursor, .. }
             | Self::Home { cursor }
             | Self::Group { cursor, .. }
-            | Self::Soon { cursor, .. } => *cursor,
+            | Self::Doing { cursor, .. } => *cursor,
             Self::NewProject { .. } => 0,
         }
     }
@@ -418,7 +506,7 @@ impl Screen {
             | Self::Started { cursor, .. }
             | Self::Home { cursor }
             | Self::Group { cursor, .. }
-            | Self::Soon { cursor, .. } => *cursor = index,
+            | Self::Doing { cursor, .. } => *cursor = index,
             Self::NewProject { .. } => {}
         }
     }
@@ -430,6 +518,57 @@ impl Screen {
         }
     }
 
+    /// `← Back` inside a flow, which is one *question* back rather than one screen.
+    ///
+    /// **The difference matters.** Every question is a screen of its own on the history, so
+    /// popping the stack would work — right up until somebody backs out of a flow entirely
+    /// and comes into it again, where they would find every answer still given and no
+    /// question left to ask. Dropping the last answer is the same move said in the flow's
+    /// own terms, and `false` means there was nothing left to drop, so the loop takes over
+    /// and leaves.
+    pub fn stepped_back(&mut self) -> bool {
+        match self {
+            Self::Doing {
+                answers, trouble, ..
+            } => {
+                *trouble = None;
+                answers.undo()
+            }
+            _ => false,
+        }
+    }
+
+    /// The first screen of a flow, with nothing answered yet.
+    #[must_use]
+    pub fn opening(leaf: Leaf) -> Self {
+        Self::Doing {
+            leaf,
+            answers: Box::default(),
+            cursor: 0,
+            trouble: None,
+        }
+    }
+
+    /// The same flow with its last run's complaint on it, so a failure is read on the
+    /// screen that caused it rather than scrolling past in the terminal underneath.
+    #[must_use]
+    pub fn troubled(self, said: String) -> Self {
+        match self {
+            Self::Doing {
+                leaf,
+                answers,
+                cursor,
+                ..
+            } => Self::Doing {
+                leaf,
+                answers,
+                cursor,
+                trouble: Some(said),
+            },
+            other => other,
+        }
+    }
+
     /// The breadcrumb, deepest part last.
     #[must_use]
     pub fn crumbs(&self) -> Vec<&'static str> {
@@ -438,13 +577,13 @@ impl Screen {
             Self::NewProject { .. } => vec!["New project"],
             Self::Started { .. } => vec!["New project", "Done"],
             Self::Group { group, .. } => vec![group.title()],
-            Self::Soon { leaf, .. } => vec![leaf.title],
+            Self::Doing { leaf, .. } => vec![leaf.under, leaf.title],
         }
     }
 
     /// Everything above the list or the box.
     #[must_use]
-    pub fn header(&self, shell: &Shell) -> Header {
+    pub fn header(&self, shell: &Shell, world: &dyn Doing) -> Header {
         match self {
             Self::FirstRun { .. } => Header {
                 banner: Banner::Wordmark,
@@ -508,31 +647,47 @@ impl Screen {
                 lines: vec![Line::Quiet(group.blurb().to_owned())],
             },
 
-            Self::Soon { leaf, .. } => Header {
-                banner: Banner::Word,
-                crumbs: self.crumbs(),
-                strap: String::new(),
-                lines: vec![
-                    Line::Lead(leaf.blurb.to_owned()),
-                    Line::Gap,
-                    Line::Quiet(
-                        "This screen is being built. When it lands the menu asks for what it                          needs and does the whole job — there will be nothing to type."
-                            .to_owned(),
-                    ),
-                    Line::Gap,
-                    Line::Quiet("The same run, as a line you could schedule:".to_owned()),
-                    Line::Command(leaf.command.to_owned()),
-                ],
-            },
+            Self::Doing {
+                leaf,
+                answers,
+                trouble,
+                ..
+            } => {
+                let mut lines = vec![Line::Lead(leaf.blurb.to_owned())];
+
+                if let Next::Blocked(why) = leaf.job.next(answers, world) {
+                    lines.push(Line::Gap);
+                    lines.push(Line::Quiet(why));
+                }
+
+                // **What has been answered, as it is answered.** A flow six questions long
+                // is otherwise six screens with no memory of each other, and somebody four
+                // questions in has no way to check what they said on the first.
+                for (label, value) in Job::so_far(answers) {
+                    lines.push(Line::fact(label, &value));
+                }
+
+                if let Some(trouble) = trouble {
+                    lines.push(Line::Gap);
+                    lines.push(Line::Wrong(trouble.clone()));
+                }
+
+                Header {
+                    banner: Banner::Word,
+                    crumbs: self.crumbs(),
+                    strap: String::new(),
+                    lines,
+                }
+            }
         }
     }
 
     /// The list, or the box.
     #[must_use]
-    pub fn face(&self) -> Face {
+    pub fn face(&self, world: &dyn Doing) -> Face {
         match self {
             Self::FirstRun { .. } => Face::Menu(Menu {
-                question: "Let's start a project.",
+                question: "Let's start a project.".to_owned(),
                 items: vec![Item::new(
                     "Start a project here",
                     "keeps this folder's databases beside the code that uses them",
@@ -540,13 +695,13 @@ impl Screen {
             }),
 
             Self::NewProject { at, .. } => Face::Ask(Ask {
-                question: "Where should the project go?",
+                question: "Where should the project go?".to_owned(),
                 initial: at.clone(),
                 help: "Enter accepts it. Esc goes back.".to_owned(),
             }),
 
             Self::Started { .. } => Face::Menu(Menu {
-                question: "That is the hard part done.",
+                question: "That is the hard part done.".to_owned(),
                 items: vec![Item::new(
                     "Go to the menu",
                     "add a database, and sloop can start backing it up",
@@ -554,7 +709,7 @@ impl Screen {
             }),
 
             Self::Home { .. } => Face::Menu(Menu {
-                question: "What would you like to do?",
+                question: "What would you like to do?".to_owned(),
                 items: HOME
                     .iter()
                     .map(|door| Item::new(door.title(), door.blurb()))
@@ -562,7 +717,7 @@ impl Screen {
             }),
 
             Self::Group { group, .. } => Face::Menu(Menu {
-                question: group.question(),
+                question: group.question().to_owned(),
                 items: group
                     .leaves()
                     .iter()
@@ -570,16 +725,36 @@ impl Screen {
                     .collect(),
             }),
 
-            Self::Soon { .. } => Face::Menu(Menu {
-                question: "What next?",
-                items: Vec::new(),
-            }),
+            Self::Doing { leaf, answers, .. } => match leaf.job.next(answers, world) {
+                Next::Ask(step) => match step.how {
+                    How::Pick { items, .. } => Face::Menu(Menu {
+                        question: step.question,
+                        items,
+                    }),
+                    How::Type { initial, help } => Face::Ask(Ask {
+                        question: step.question,
+                        initial,
+                        help,
+                    }),
+                },
+                // Nothing left to ask: one item, and choosing it runs the job. Never run
+                // straight off the last answer — a flow that fires the moment its last
+                // question is answered is a flow nobody can read back before it happens.
+                Next::Ready => Face::Menu(Menu {
+                    question: "Ready.".to_owned(),
+                    items: vec![Item::new(leaf.run_it, leaf.blurb)],
+                }),
+                Next::Blocked(_) => Face::Menu(Menu {
+                    question: "Not from here.".to_owned(),
+                    items: Vec::new(),
+                }),
+            },
         }
     }
 
     /// Somebody picked item `index`.
     #[must_use]
-    pub fn chose(&self, shell: &Shell, index: usize) -> Flow {
+    pub fn chose(&self, shell: &Shell, world: &dyn Doing, index: usize) -> Flow {
         match self {
             Self::FirstRun { .. } => Flow::To(Screen::NewProject {
                 at: shell.cwd.display().to_string(),
@@ -589,11 +764,34 @@ impl Screen {
             Self::Home { .. } => HOME
                 .get(index)
                 .map_or(Flow::Stay, |door| Flow::To(door.opens())),
-            Self::Group { group, .. } => group.leaves().get(index).map_or(Flow::Stay, |&leaf| {
-                Flow::To(Screen::Soon { leaf, cursor: 0 })
-            }),
-            // Neither has an item of its own; the loop has already handled the way out.
-            Self::NewProject { .. } | Self::Soon { .. } => Flow::Stay,
+            Self::Group { group, .. } => group
+                .leaves()
+                .get(index)
+                .map_or(Flow::Stay, |&leaf| Flow::To(Self::opening(leaf))),
+
+            Self::Doing { leaf, answers, .. } => match leaf.job.next(answers, world) {
+                Next::Ask(step) => match step.how {
+                    // The answer filed is the value behind the item, never the label: a
+                    // menu reads in English and a flag does not, and the two must not end
+                    // up being the same string by accident.
+                    How::Pick { values, .. } => values.get(index).map_or(Flow::Stay, |value| {
+                        let mut answers = answers.clone();
+                        answers.put(step.field, value.clone());
+                        Flow::Same(Self::Doing {
+                            leaf: *leaf,
+                            answers,
+                            cursor: 0,
+                            trouble: None,
+                        })
+                    }),
+                    How::Type { .. } => Flow::Stay,
+                },
+                Next::Ready => Flow::Run(*leaf, answers.clone()),
+                Next::Blocked(_) => Flow::Stay,
+            },
+
+            // It has no item of its own; the loop has already handled the way out.
+            Self::NewProject { .. } => Flow::Stay,
         }
     }
 
@@ -603,7 +801,27 @@ impl Screen {
     /// directory that is not there is a thing to say on the screen, not a thing to end the
     /// session over. Whatever it makes goes into `kept` to be printed after the terminal
     /// has been given back — a summary lost inside the alternate screen is a summary lost.
-    pub fn typed(&mut self, shell: &mut Shell, kept: &mut Vec<Kept>, given: &str) -> Flow {
+    pub fn typed(
+        &mut self,
+        shell: &mut Shell,
+        world: &dyn Doing,
+        kept: &mut Vec<Kept>,
+        given: &str,
+    ) -> Flow {
+        if let Self::Doing { leaf, answers, .. } = self {
+            let Next::Ask(step) = leaf.job.next(answers, world) else {
+                return Flow::Stay;
+            };
+            let mut answers = answers.clone();
+            answers.put(step.field, given.trim());
+            return Flow::Same(Self::Doing {
+                leaf: *leaf,
+                answers,
+                cursor: 0,
+                trouble: None,
+            });
+        }
+
         let Self::NewProject { trouble, .. } = self else {
             return Flow::Stay;
         };

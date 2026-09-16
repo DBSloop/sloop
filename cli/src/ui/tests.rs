@@ -8,18 +8,74 @@
 use std::path::PathBuf;
 
 use super::ask::{Answer, Asking};
+use super::flow::{Answers, Doing, Job, field};
 use super::paint::Header;
 use super::screen::{Ask, Group, Item, Kept, Screen, Shell};
-use super::{Alternate, BACK, QUIT, at_a_terminal, walk};
-use crate::failure::Outcome;
+use super::{Alternate, BACK, QUIT, Stage, at_a_terminal, walk};
+use crate::exit::Exit;
+use crate::failure::{Failure, Outcome};
+
+/// A world with two databases and a backup of each, which runs nothing and remembers what
+/// it was asked to run.
+#[derive(Default)]
+struct Bench {
+    /// Every job that was run, with the answers it was handed.
+    ran: Vec<(Job, Answers)>,
+    /// What the next job should come back as.
+    says: Option<Failure>,
+}
+
+impl Doing for Bench {
+    fn databases(&self) -> Vec<String> {
+        vec!["orders".to_owned(), "orders_staging".to_owned()]
+    }
+
+    fn backups_of(&self, _name: &str) -> Vec<String> {
+        vec!["20260916T031500Z".to_owned()]
+    }
+
+    fn run(&mut self, job: Job, answers: &Answers) -> Outcome<Exit> {
+        self.ran.push((job, answers.clone()));
+        self.says.take().map_or(Ok(Exit::Success), Err)
+    }
+}
+
+/// The alternate screen, counted rather than drawn.
+#[derive(Default)]
+struct Curtain {
+    /// How many times the menu handed the terminal back.
+    out: usize,
+    /// How many times it took it again.
+    back: usize,
+    /// And how many times it waited for somebody to finish reading.
+    paused: usize,
+}
+
+impl Stage for Curtain {
+    fn step_out(&mut self) {
+        self.out += 1;
+    }
+
+    fn pause(&mut self) {
+        self.paused += 1;
+    }
+
+    fn step_in(&mut self) {
+        self.back += 1;
+    }
+}
 
 /// One thing a scripted person does.
 #[derive(Debug, Clone)]
 enum Does {
     /// Pick the item at this index.
     Pick(usize),
-    /// Pick the last item, whatever it is — the way out.
+    /// The way out: the last item on a list, and Esc in a box — which are the same move
+    /// said twice, because a box has no items to have a last one.
     Leave,
+    /// Whatever is in front of them, accepted: the first item, or the box as it stands.
+    /// What somebody pressing Enter through a flow does.
+    Enter,
     /// Type this and press enter.
     Type(&'static str),
     /// Press Esc.
@@ -84,6 +140,7 @@ impl Asking for Scripted {
 
         Ok(match self.next() {
             Does::Pick(index) => Answer::Given(index),
+            Does::Enter => Answer::Given(0),
             Does::Leave => Answer::Given(last),
             Does::Back => Answer::Back,
             Does::Quit | Does::Type(_) => Answer::Quit,
@@ -95,8 +152,10 @@ impl Asking for Scripted {
 
         Ok(match self.next() {
             Does::Type(text) => Answer::Given(text.to_owned()),
-            Does::Back => Answer::Back,
-            _ => Answer::Quit,
+            Does::Enter => Answer::Given(ask.initial.clone()),
+            // A box has no items, so the way out of one is the key rather than the row.
+            Does::Back | Does::Leave => Answer::Back,
+            Does::Pick(_) | Does::Quit => Answer::Quit,
         })
     }
 }
@@ -114,10 +173,26 @@ fn shell(fresh: bool) -> Shell {
 
 /// Run a script against a settled session and hand back what the person saw.
 fn session(script: Vec<Does>) -> Scripted {
-    let mut shell = shell(false);
+    run_it(
+        script,
+        &mut shell(false),
+        &mut Bench::default(),
+        &mut Curtain::default(),
+    )
+    .0
+}
+
+/// The same, against a world and a stage the caller can read afterwards.
+fn run_it(
+    script: Vec<Does>,
+    shell: &mut Shell,
+    bench: &mut Bench,
+    curtain: &mut Curtain,
+) -> (Scripted, Exit) {
     let mut scripted = Scripted::doing(script);
-    walk(&mut shell, &mut scripted).expect("the menu should not fail on a scripted session");
-    scripted
+    let (exit, _) = walk(shell, &mut scripted, bench, curtain)
+        .expect("the menu should not fail on a scripted session");
+    (scripted, exit)
 }
 
 #[test]
@@ -132,7 +207,13 @@ fn a_settled_session_opens_on_the_menu_and_a_first_run_does_not() {
 fn the_first_screen_of_a_fresh_machine_offers_one_thing() {
     let mut shell = shell(true);
     let mut scripted = Scripted::doing(vec![Does::Quit]);
-    walk(&mut shell, &mut scripted).expect("a first run should draw");
+    walk(
+        &mut shell,
+        &mut scripted,
+        &mut Bench::default(),
+        &mut Curtain::default(),
+    )
+    .expect("a first run should draw");
 
     assert_eq!(
         scripted.listed,
@@ -147,7 +228,7 @@ fn the_first_screen_of_a_fresh_machine_offers_one_thing() {
 #[test]
 fn back_returns_from_every_screen_in_the_tree() {
     let home = Screen::Home { cursor: 0 };
-    let doors = match home.face() {
+    let doors = match home.face(&Bench::default()) {
         super::Face::Menu(menu) => menu.items.len(),
         super::Face::Ask(_) => unreachable!("the home screen is a menu"),
     };
@@ -182,9 +263,9 @@ fn back_returns_from_every_screen_in_the_tree() {
 /// How many leaves sit behind door `index` on the home screen.
 fn leaves_behind(index: usize) -> usize {
     let home = Screen::Home { cursor: 0 };
-    match home.chose(&shell(false), index) {
+    match home.chose(&shell(false), &Bench::default(), index) {
         super::Flow::To(Screen::Group { group, .. }) => {
-            match (Screen::Group { group, cursor: 0 }).face() {
+            match (Screen::Group { group, cursor: 0 }).face(&Bench::default()) {
                 super::Face::Menu(menu) => menu.items.len(),
                 super::Face::Ask(_) => 0,
             }
@@ -298,13 +379,14 @@ fn every_leaf_names_a_command_that_could_be_pasted() {
             group: *group,
             cursor: 0,
         };
-        let count = match screen.face() {
+        let count = match screen.face(&Bench::default()) {
             super::Face::Menu(menu) => menu.items.len(),
             super::Face::Ask(_) => 0,
         };
 
         for index in 0..count {
-            let super::Flow::To(Screen::Soon { leaf, .. }) = screen.chose(&shell(false), index)
+            let super::Flow::To(Screen::Doing { leaf, .. }) =
+                screen.chose(&shell(false), &Bench::default(), index)
             else {
                 panic!("{group:?} item {index} does not open a command");
             };
@@ -342,7 +424,13 @@ fn starting_a_project_creates_the_registry_and_keeps_the_summary() {
         Does::Leave,
         Does::Leave,
     ]);
-    let kept = walk(&mut shell, &mut scripted).expect("init should run from the menu");
+    let (_, kept) = walk(
+        &mut shell,
+        &mut scripted,
+        &mut Bench::default(),
+        &mut Curtain::default(),
+    )
+    .expect("init should run from the menu");
 
     assert!(here.join(".sloop").is_dir(), "no registry was made");
     assert!(
@@ -382,7 +470,13 @@ fn the_directory_box_keeps_what_was_typed() {
         Does::Pick(0),
         Does::Leave,
     ]);
-    walk(&mut shell, &mut scripted).expect("a bad directory is not a failed session");
+    walk(
+        &mut shell,
+        &mut scripted,
+        &mut Bench::default(),
+        &mut Curtain::default(),
+    )
+    .expect("a bad directory is not a failed session");
 
     assert_eq!(
         scripted.boxes.first().map(String::as_str),
@@ -409,13 +503,19 @@ fn a_directory_that_is_not_there_is_said_on_the_screen() {
         Does::Type("nowhere-at-all"),
         Does::Back,
     ]);
-    walk(&mut shell, &mut scripted).expect("a bad directory is not a failed session");
+    walk(
+        &mut shell,
+        &mut scripted,
+        &mut Bench::default(),
+        &mut Curtain::default(),
+    )
+    .expect("a bad directory is not a failed session");
 
     let screen = Screen::NewProject {
         at: "nowhere-at-all".to_owned(),
         trouble: Some("nowhere-at-all is not a directory that exists".to_owned()),
     };
-    let header = screen.header(&shell);
+    let header = screen.header(&shell, &Bench::default());
     assert!(
         header
             .lines
@@ -476,5 +576,311 @@ fn the_menu_refuses_when_there_is_nothing_to_draw_on() {
             .hint_text()
             .is_some_and(|hint| hint.contains("sloop --help")),
         "the refusal did not say what to do instead"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// The flows
+// ---------------------------------------------------------------------------------------
+
+/// Every leaf in the tree, as the door and the item that reaches it.
+fn every_leaf() -> Vec<(usize, usize, Job)> {
+    let bench = Bench::default();
+    let mut found = Vec::new();
+
+    let home = Screen::Home { cursor: 0 };
+    let doors = match home.face(&bench) {
+        super::Face::Menu(menu) => menu.items.len(),
+        super::Face::Ask(_) => unreachable!("the home screen is a menu"),
+    };
+
+    for door in 0..doors {
+        match home.chose(&shell(false), &bench, door) {
+            super::Flow::To(Screen::Group { group, .. }) => {
+                let inside = Screen::Group { group, cursor: 0 };
+                let leaves = match inside.face(&bench) {
+                    super::Face::Menu(menu) => menu.items.len(),
+                    super::Face::Ask(_) => 0,
+                };
+                for leaf in 0..leaves {
+                    if let super::Flow::To(Screen::Doing { leaf: what, .. }) =
+                        inside.chose(&shell(false), &bench, leaf)
+                    {
+                        found.push((door, leaf, what.job));
+                    }
+                }
+            }
+            super::Flow::To(Screen::Doing { leaf: what, .. }) => {
+                found.push((door, usize::MAX, what.job));
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// How many questions a job asks, answered the way somebody pressing Enter answers them.
+fn questions(job: Job, world: &dyn Doing) -> usize {
+    let mut answers = Answers::default();
+    for asked in 0..40 {
+        match job.next(&answers, world) {
+            super::flow::Next::Ask(step) => {
+                let value = match &step.how {
+                    super::flow::How::Pick { values, .. } => {
+                        values.first().cloned().unwrap_or_default()
+                    }
+                    super::flow::How::Type { initial, .. } => initial.clone(),
+                };
+                answers.put(step.field, value);
+            }
+            _ => return asked,
+        }
+    }
+    panic!("{job:?} never stopped asking");
+}
+
+/// The keys that reach a leaf from the menu.
+fn down_to(door: usize, leaf: usize) -> Vec<Does> {
+    if leaf == usize::MAX {
+        vec![Does::Pick(door)]
+    } else {
+        vec![Does::Pick(door), Does::Pick(leaf)]
+    }
+}
+
+/// **The `Done when`: every command is reachable and completable without touching a flag.**
+///
+/// Every leaf in the tree, reached from the menu and answered the way somebody pressing
+/// Enter answers it, ends with that command run — and run with the terminal handed back,
+/// because a command whose output the menu paints over is a command nobody can read.
+#[test]
+fn every_command_is_reachable_and_completable_from_the_menu() {
+    let leaves = every_leaf();
+    assert_eq!(leaves.len(), 18, "the tree lost a command: {leaves:?}");
+
+    for (door, leaf, job) in leaves {
+        let mut script = down_to(door, leaf);
+        // Enter through every question, and once more on the screen that runs it. Exactly
+        // that many, so a job that runs twice is a failure rather than a longer script.
+        script.extend(std::iter::repeat_n(
+            Does::Enter,
+            questions(job, &Bench::default()) + 1,
+        ));
+
+        let mut bench = Bench::default();
+        let mut curtain = Curtain::default();
+        run_it(script, &mut shell(false), &mut bench, &mut curtain);
+
+        assert_eq!(
+            bench.ran.iter().map(|(job, _)| *job).collect::<Vec<_>>(),
+            vec![job],
+            "{job:?} was not run once from the menu"
+        );
+        assert_eq!(
+            curtain.out, 1,
+            "{job:?} ran without the terminal handed back"
+        );
+        assert_eq!(curtain.back, 1, "{job:?} never took the screen again");
+        assert_eq!(curtain.paused, 1, "{job:?} painted over its own output");
+    }
+}
+
+/// **Nothing runs off the back of the last answer.** There is always one more screen, with
+/// one item on it, that says what is about to happen — a flow that fires the moment its
+/// last question is answered cannot be read back before it happens.
+#[test]
+fn a_flow_always_shows_what_it_is_about_to_do() {
+    let mut bench = Bench::default();
+    let mut curtain = Curtain::default();
+
+    // Databases, then Rename one: two questions, and the third screen runs it.
+    let (seen, _) = run_it(
+        vec![Does::Pick(0), Does::Pick(5), Does::Enter, Does::Enter],
+        &mut shell(false),
+        &mut bench,
+        &mut curtain,
+    );
+
+    assert!(bench.ran.is_empty(), "it ran before it was asked to");
+    assert_eq!(
+        seen.listed.last().map(Vec::as_slice),
+        Some(["Rename it".to_owned(), BACK.to_owned()].as_slice()),
+        "the last screen of a flow is the one that does it: {:?}",
+        seen.listed
+    );
+}
+
+/// **The answers reach the command.** A menu that collected six answers and then ran the
+/// command with none of them would pass every test above this one.
+#[test]
+fn what_was_answered_is_what_the_command_is_handed() {
+    let mut bench = Bench::default();
+    let mut curtain = Curtain::default();
+
+    // Databases → Rename one → the second database → a new name → run it.
+    run_it(
+        vec![
+            Does::Pick(0),
+            Does::Pick(5),
+            Does::Pick(1),
+            Does::Type("orders_old"),
+            Does::Enter,
+        ],
+        &mut shell(false),
+        &mut bench,
+        &mut curtain,
+    );
+
+    let (job, answers) = bench.ran.first().expect("the rename was not run");
+    assert_eq!(*job, Job::DbRename);
+    assert_eq!(answers.text(field::NAME), "orders_staging");
+    assert_eq!(answers.text(field::RENAMED), "orders_old");
+}
+
+/// **`← Back` inside a flow is one question back, not the whole flow.**
+///
+/// Two answers in, back once, and the question in front of you is the second one again —
+/// with the first still answered. Back again and it is the first. Back a third time and
+/// the flow is left, because there is nothing else left to undo.
+#[test]
+fn back_inside_a_flow_undoes_one_question_at_a_time() {
+    let mut bench = Bench::default();
+    let mut curtain = Curtain::default();
+
+    let (seen, _) = run_it(
+        vec![
+            Does::Pick(0),
+            Does::Pick(0),
+            Does::Type("orders"),
+            Does::Pick(1),
+            Does::Leave,
+            Does::Leave,
+            Does::Leave,
+            Does::Leave,
+        ],
+        &mut shell(false),
+        &mut bench,
+        &mut curtain,
+    );
+
+    assert!(bench.ran.is_empty(), "backing out ran something");
+    assert_eq!(
+        seen.seen.last().map(String::as_str),
+        Some("·"),
+        "backing out of a flow did not come home: {:?}",
+        seen.seen
+    );
+    // The box was shown twice: once when it was asked, and again once the answer in front
+    // of it had been dropped.
+    assert_eq!(seen.boxes.len(), 2, "{:?}", seen.boxes);
+}
+
+/// And the answers before the one that was dropped are still given.
+#[test]
+fn the_answers_before_the_dropped_one_survive() {
+    let mut bench = Bench::default();
+    let mut curtain = Curtain::default();
+
+    // A name, then "one line", then back, then "field by field" instead — and the name
+    // given before the change of mind stands.
+    let mut script = vec![
+        Does::Pick(0),
+        Does::Pick(0),
+        Does::Type("orders"),
+        Does::Pick(0),
+        Does::Leave,
+        Does::Pick(1),
+    ];
+    script.extend(std::iter::repeat_n(Does::Enter, 10));
+    run_it(script, &mut shell(false), &mut bench, &mut curtain);
+
+    let (job, answers) = bench.ran.first().expect("the registration was not run");
+    assert_eq!(*job, Job::DbAdd);
+    assert_eq!(answers.text(field::NAME), "orders");
+    assert_eq!(answers.text(field::HOW), "fields");
+    assert_eq!(
+        answers.get(field::URL),
+        None,
+        "the URL survived a change of mind"
+    );
+}
+
+/// A job that fails says so on the screen it was started from, with its answers still
+/// there — so it can be corrected and run again rather than started from the top.
+#[test]
+fn a_job_that_fails_leaves_the_flow_where_it_was() {
+    let mut bench = Bench {
+        says: Some(Failure::usage("orders_staging is already registered")),
+        ..Bench::default()
+    };
+    let mut curtain = Curtain::default();
+
+    let (seen, exit) = run_it(
+        vec![
+            Does::Pick(0),
+            Does::Pick(5),
+            Does::Enter,
+            Does::Type("orders_old"),
+            Does::Enter,
+            Does::Quit,
+        ],
+        &mut shell(false),
+        &mut bench,
+        &mut curtain,
+    );
+
+    assert_eq!(exit, Exit::Usage, "the menu swallowed the command's code");
+    assert_eq!(bench.ran.len(), 1);
+    assert_eq!(
+        seen.listed.last().map(Vec::as_slice),
+        Some(["Rename it".to_owned(), BACK.to_owned()].as_slice()),
+        "a failure threw the flow away: {:?}",
+        seen.listed
+    );
+}
+
+/// A job that works leaves the flow behind, so nothing is one keystroke away from being
+/// run a second time.
+#[test]
+fn a_job_that_works_goes_back_to_the_group_it_came_from() {
+    let mut bench = Bench::default();
+    let mut curtain = Curtain::default();
+
+    let (seen, exit) = run_it(
+        vec![Does::Pick(0), Does::Pick(2), Does::Enter, Does::Quit],
+        &mut shell(false),
+        &mut bench,
+        &mut curtain,
+    );
+
+    assert_eq!(exit, Exit::Success);
+    assert_eq!(bench.ran.len(), 1, "{:?}", bench.ran);
+    assert_eq!(
+        seen.seen.last().map(String::as_str),
+        Some("Databases"),
+        "a finished job did not come back to its group: {:?}",
+        seen.seen
+    );
+}
+
+/// The breadcrumb names every step that reached the screen, so somebody four questions
+/// deep can see where they are without leaving.
+#[test]
+fn a_flow_screen_names_every_step_that_reached_it() {
+    let mut bench = Bench::default();
+    let mut curtain = Curtain::default();
+
+    let (seen, _) = run_it(
+        vec![Does::Pick(0), Does::Pick(5), Does::Quit],
+        &mut shell(false),
+        &mut bench,
+        &mut curtain,
+    );
+
+    assert_eq!(
+        seen.seen.last().map(String::as_str),
+        Some("Databases › Rename one"),
+        "{:?}",
+        seen.seen
     );
 }

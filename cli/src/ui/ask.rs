@@ -159,7 +159,7 @@ impl Asking for Terminal {
     }
 
     fn text(&mut self, ask: &Ask) -> Outcome<Answer<String>> {
-        let answer = inquire::Text::new(ask.question)
+        let answer = inquire::Text::new(&ask.question)
             .with_initial_value(&ask.initial)
             .with_help_message(&ask.help)
             .prompt();

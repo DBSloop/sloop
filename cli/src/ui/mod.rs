@@ -22,6 +22,7 @@
 //! door and names what to do instead — rule 4, one screen earlier than usual.
 
 pub mod ask;
+pub mod flow;
 pub mod paint;
 pub mod screen;
 
@@ -35,7 +36,8 @@ use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 
 use ask::{Answer, Asking};
-use screen::{Face, Flow, Kept, Screen, Shell};
+use flow::{Answers, Doing};
+use screen::{Face, Flow, Kept, Leaf, Screen, Shell};
 
 /// The last item on every menu below the root.
 const BACK: &str = "← Back";
@@ -45,9 +47,11 @@ const QUIT: &str = "Quit";
 
 /// Open the menu.
 ///
-/// Returns what the session produced, for `main` to print once the terminal is its own
-/// again. The exit code is `0`: a menu somebody looked at and left has not failed.
-pub fn run(shell: &mut Shell) -> Outcome<(Exit, Vec<Kept>)> {
+/// Returns the code the session leaves with and whatever is worth printing once the
+/// terminal is its own again. A menu somebody looked at and left exits `0`; a menu they ran
+/// a command from exits with what that command exited with, because the last thing a run
+/// did is the useful thing to report.
+pub fn run(shell: &mut Shell, world: &mut dyn Doing) -> Outcome<(Exit, Vec<Kept>)> {
     at_a_terminal()?;
 
     // Windows before the VT-enabled console needs telling that escape sequences are
@@ -58,32 +62,47 @@ pub fn run(shell: &mut Shell) -> Outcome<(Exit, Vec<Kept>)> {
 
     ask::dress();
 
-    let screen = Alternate::entered(std::io::stderr())?;
+    let mut screen = Alternate::entered(std::io::stderr())?;
     let mut asking = ask::Terminal::default();
-    let outcome = walk(shell, &mut asking);
+    let outcome = walk(shell, &mut asking, world, &mut screen);
 
     // Explicit as well as on drop, so the terminal is back before anything is printed
     // about what happened in it — and still on drop, because a panic has to put it back
     // too. `panic = "abort"` is deliberately not set in `Cargo.toml` for this reason.
+    screen.leave();
     drop(screen);
 
-    outcome.map(|kept| (Exit::Success, kept))
+    outcome
 }
 
 /// The render loop.
 ///
 /// Split out so that the whole of the navigation can be driven by a written-down list of
 /// answers in a test, with no terminal anywhere near it.
-fn walk(shell: &mut Shell, asking: &mut dyn Asking) -> Outcome<Vec<Kept>> {
+fn walk(
+    shell: &mut Shell,
+    asking: &mut dyn Asking,
+    world: &mut dyn Doing,
+    stage: &mut dyn Stage,
+) -> Outcome<(Exit, Vec<Kept>)> {
     let mut history: Vec<Screen> = Vec::new();
     let mut here = shell.opening();
     let mut kept: Vec<Kept> = Vec::new();
+    let mut last = Exit::Success;
 
     loop {
-        let flow = show(&mut here, shell, asking, &mut kept, history.is_empty())?;
+        let flow = show(
+            &mut here,
+            shell,
+            asking,
+            world,
+            &mut kept,
+            history.is_empty(),
+        )?;
 
         match flow {
             Flow::Stay => {}
+            Flow::Same(next) => here = next,
             Flow::To(next) => {
                 history.push(here);
                 here = next;
@@ -97,11 +116,62 @@ fn walk(shell: &mut Shell, asking: &mut dyn Asking) -> Outcome<Vec<Kept>> {
                 history.clear();
                 here = Screen::Home { cursor: 0 };
             }
+            Flow::Run(leaf, answers) => {
+                here = did(leaf, &answers, world, stage, &mut last).map_or_else(
+                    |said| here.troubled(said),
+                    |()| {
+                        // A job that worked is done with: back to the group it came from,
+                        // with its questions forgotten. Coming back to a filled-in flow
+                        // would be an invitation to run it twice.
+                        history.pop().unwrap_or(Screen::Home { cursor: 0 })
+                    },
+                );
+                shell.holds = world.databases().len();
+            }
             Flow::Quit => break,
         }
     }
 
-    Ok(kept)
+    Ok((last, kept))
+}
+
+/// Hand the terminal back, run the job on it, and take the terminal again.
+///
+/// **This is why a command's output is worth anything.** Inside the alternate screen every
+/// line printed is gone the moment the menu redraws; out here it lands in the scrollback the
+/// user keeps, alongside the prompts the command asks for itself — a password, or the name
+/// of a database being destroyed. Those stay the command's own questions, asked the same way
+/// they are asked from a shell, which is the only way rules 3 and 5 have one implementation.
+///
+/// `Err` is the sentence to put on the flow's screen. The job has already said it in full on
+/// the way past; this is the reminder, once the menu is back.
+fn did(
+    leaf: Leaf,
+    answers: &Answers,
+    world: &mut dyn Doing,
+    stage: &mut dyn Stage,
+    last: &mut Exit,
+) -> Result<(), String> {
+    stage.step_out();
+    let outcome = world.run(leaf.job, answers);
+    let said = match &outcome {
+        Ok(exit) => {
+            *last = *exit;
+            None
+        }
+        Err(failure) => {
+            *last = failure.exit();
+            failure.mention();
+            Some(failure.message().to_owned())
+        }
+    };
+    stage.pause();
+    stage.step_in();
+
+    match said {
+        None => Ok(()),
+        Some(said) => Err(said),
+    }
 }
 
 /// Draw one screen and answer it.
@@ -109,29 +179,40 @@ fn show(
     here: &mut Screen,
     shell: &mut Shell,
     asking: &mut dyn Asking,
+    world: &mut dyn Doing,
     kept: &mut Vec<Kept>,
     at_root: bool,
 ) -> Outcome<Flow> {
-    asking.frame(&here.header(shell))?;
+    asking.frame(&here.header(shell, world))?;
 
     // **The way out is added here, not by the screen.** That is what makes "`← Back` on
     // every menu" a property of the loop rather than a thing each new screen has to
-    // remember — a screen added in `R19` cannot forget it, because it never had it.
+    // remember — a screen added later cannot forget it, because it never had it.
     let out_of_it = if at_root { QUIT } else { BACK };
     let leaving = if at_root { Flow::Quit } else { Flow::Back };
 
-    match here.face() {
+    // Inside a flow, back is one *question* back and the flow says so itself. Only when it
+    // has no answers left to drop does the loop take over and leave the screen.
+    let back = |here: &mut Screen| {
+        if here.stepped_back() {
+            Flow::Stay
+        } else {
+            leaving
+        }
+    };
+
+    match here.face(world) {
         Face::Menu(menu) => {
             let last = menu.items.len();
-            match asking.choose(menu.question, &menu.items, out_of_it, here.cursor())? {
-                Answer::Given(index) if index >= last => Ok(leaving),
+            match asking.choose(&menu.question, &menu.items, out_of_it, here.cursor())? {
+                Answer::Given(index) if index >= last => Ok(back(here)),
                 Answer::Given(index) => {
                     // Written back before the screen is pushed, so coming back finds the
                     // highlight where it was left rather than at the top.
                     here.point_at(index);
-                    Ok(here.chose(shell, index))
+                    Ok(here.chose(shell, world, index))
                 }
-                Answer::Back => Ok(leaving),
+                Answer::Back => Ok(back(here)),
                 Answer::Quit => Ok(Flow::Quit),
             }
         }
@@ -141,12 +222,25 @@ fn show(
                 // Same reason: what was typed is kept on the screen, so that going
                 // forward and coming back finds it still typed.
                 here.holding(&given);
-                Ok(here.typed(shell, kept, &given))
+                Ok(here.typed(shell, world, kept, &given))
             }
-            Answer::Back => Ok(leaving),
+            Answer::Back => Ok(back(here)),
             Answer::Quit => Ok(Flow::Quit),
         },
     }
+}
+
+/// The screen the menu is drawn on, and how to step off it and back.
+///
+/// A trait for the same reason [`Asking`] is one: a test drives the whole loop, jobs and
+/// all, and there is no terminal anywhere near it.
+pub trait Stage {
+    /// Hand the terminal back.
+    fn step_out(&mut self);
+    /// Wait for whoever is there to finish reading what the job printed.
+    fn pause(&mut self);
+    /// Take it again.
+    fn step_in(&mut self);
 }
 
 /// Rule 4, at the door.
@@ -192,6 +286,15 @@ impl<W: Write> Alternate<W> {
         Ok(Self { to, inside: true })
     }
 
+    /// Take it again, after a job has run on the terminal underneath.
+    fn enter(&mut self) {
+        if self.inside {
+            return;
+        }
+        self.inside = true;
+        let _ = crossterm::execute!(self.to, crossterm::terminal::EnterAlternateScreen);
+    }
+
     /// Give it back. Idempotent, because `drop` calls it after anything else has.
     fn leave(&mut self) {
         if !self.inside {
@@ -208,5 +311,29 @@ impl<W: Write> Alternate<W> {
 impl<W: Write> Drop for Alternate<W> {
     fn drop(&mut self) {
         self.leave();
+    }
+}
+
+impl<W: Write> Stage for Alternate<W> {
+    fn step_out(&mut self) {
+        self.leave();
+    }
+
+    /// **Wait, before the menu paints over what just happened.** A backup's report, a row
+    /// count, a generated password — every one of them is on the screen for as long as it
+    /// takes to redraw unless somebody says they have read it. It is still in the scrollback
+    /// afterwards; this is so it does not have to be hunted for.
+    fn pause(&mut self) {
+        if !std::io::stdin().is_terminal() {
+            return;
+        }
+        let _ = writeln!(self.to);
+        let _ = write!(self.to, "{}", paint::dim("  Enter to go back to the menu "));
+        let _ = self.to.flush();
+        let _ = std::io::stdin().read_line(&mut String::new());
+    }
+
+    fn step_in(&mut self) {
+        self.enter();
     }
 }

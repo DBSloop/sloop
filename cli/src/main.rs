@@ -108,21 +108,22 @@ fn run(cli: &Cli) -> Outcome<Exit> {
 
 /// `sloop` with nothing after it: the interactive menu.
 ///
-/// Everything the shell needs is worked out here and handed over as plain data, so that
-/// `ui` never holds a borrow of a registry — which is what lets `init` run from inside the
-/// menu and change the registry the session is sitting in.
+/// Everything the shell *shows* is worked out here and handed over as plain data;
+/// everything it *runs* goes through [`commands::menu::Machine`], which reopens the
+/// registry per job. Neither half lets `ui` hold a borrow of the registry, which is what
+/// lets a command that changes it be reached from inside the menu.
 fn menu(cli: &Cli, locations: &Locations) -> Outcome<Exit> {
-    let global = locations.global_dir()?;
-    let world = Disk::new(&global);
-    let cwd = working_directory()?;
-    let resolution = resolve(
-        &cwd,
-        &world,
+    let mut machine = commands::menu::Machine::new(
+        locations,
         cli.global,
         cli.project.as_deref(),
         environment_project().as_deref(),
+        cli.password_command.as_deref(),
     )?;
-    let registries = Registries::open(resolution.clone(), &global)?;
+
+    let global = machine.global().to_path_buf();
+    let resolution = machine.resolution().clone();
+    let holds = ui::flow::Doing::databases(&machine).len();
 
     let mut shell = ui::screen::Shell {
         working_in: resolution
@@ -135,14 +136,13 @@ fn menu(cli: &Cli, locations: &Locations) -> Outcome<Exit> {
         // at or above the working directory, and a global store that is still empty. Either
         // one on its own is an ordinary session — somebody with a global registry and no
         // project has already started, and so has somebody standing in a fresh project.
-        fresh: resolution.registry_dir().is_none() && registries.is_empty(),
-        holds: registries.len(),
+        fresh: resolution.registry_dir().is_none() && holds == 0,
+        holds,
+        cwd: machine.cwd().to_path_buf(),
         global: global.clone(),
-        cwd,
     };
-    drop(registries);
 
-    let (exit, kept) = ui::run(&mut shell)?;
+    let (exit, kept) = ui::run(&mut shell, &mut machine)?;
 
     // Out here, and only out here: the alternate screen has been handed back, so these
     // lines land in the scrollback the user keeps rather than in the one that vanishes.

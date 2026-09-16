@@ -104,28 +104,6 @@ fn nothing_overflows_a_narrow_terminal() {
     }
 }
 
-/// **A command has to survive being pasted**, which a wrapped one does not. The same rule
-/// the printed messages follow — see "A suggested command has to survive being pasted" in
-/// `docs/OWNER-DECISIONS.md`.
-#[test]
-fn a_command_is_never_wrapped() {
-    let long = "sloop mirror orders --to orders_staging --table 'public.*' --with-references";
-    let header = Header {
-        banner: Banner::Word,
-        crumbs: vec!["Copy a database"],
-        strap: String::new(),
-        lines: vec![Line::Command(long.to_owned())],
-    };
-
-    for columns in [40, 80, 200] {
-        let drawn = plain(&frame(&header, Some(columns)));
-        assert!(
-            drawn.lines().any(|line| line.trim() == long),
-            "a {columns}-column terminal broke the command up:\n{drawn}"
-        );
-    }
-}
-
 #[test]
 fn a_header_never_ends_in_blank_rows() {
     let mut header = home();

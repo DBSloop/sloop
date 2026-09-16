@@ -6,6 +6,7 @@ pub mod db;
 pub mod doctor;
 pub mod init;
 pub mod key;
+pub mod menu;
 pub mod mirror;
 pub mod restore;
 pub mod sync;

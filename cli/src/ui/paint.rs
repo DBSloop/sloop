@@ -65,9 +65,6 @@ pub enum Line {
     Lead(String),
     /// Support underneath it. Wrapped, and grey.
     Quiet(String),
-    /// Something to type at a shell. In the accent, and never wrapped — a wrapped command
-    /// cannot be pasted.
-    Command(String),
     /// A label and the value beside it.
     Fact {
         /// The grey half.
@@ -297,7 +294,6 @@ fn drawn(line: &Line, measure: usize) -> Vec<String> {
             .into_iter()
             .map(|row| format!("{}{}", pad(INSET), dim(&row)))
             .collect(),
-        Line::Command(text) => vec![String::new(), format!("{}{}", pad(INSET + 2), strong(text))],
         Line::Fact {
             label,
             value,
