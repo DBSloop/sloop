@@ -334,6 +334,26 @@ pub trait Adapter {
     /// Load a dump written by [`Adapter::dump`] into `target`.
     fn restore(&self, target: &Target<'_>, from: &Path) -> Outcome<()>;
 
+    /// Cut every other session on this database loose, so a drop is not blocked by one.
+    ///
+    /// **Its own method rather than part of [`Adapter::drop_database`]**, because it is the
+    /// half that is worth reporting: somebody dropping a database wants to be told that
+    /// four connections were closed to do it. Returns how many were ended — never
+    /// including this one, which is still being used to ask.
+    ///
+    /// The only method here that changes anything on a database sloop was not asked to
+    /// write to, and it exists for exactly one caller: `db drop`.
+    fn terminate_connections(&self, target: &Target<'_>) -> Outcome<u64>;
+
+    /// Drop the database named by `target`, from a connection that is not inside it.
+    ///
+    /// **`target` names the database to destroy, not the one to connect to.** PostgreSQL
+    /// refuses to drop a database anybody is connected to, this session included, so the
+    /// adapter connects to the engine's maintenance database and issues the drop from
+    /// there — which is a detail of the engine and so belongs behind this trait rather
+    /// than in the command.
+    fn drop_database(&self, target: &Target<'_>) -> Outcome<()>;
+
     /// What a role must be able to do on this engine, and what breaks without it.
     ///
     /// Static, and needs no connection: it is the documented minimum rather than an

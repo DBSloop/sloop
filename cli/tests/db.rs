@@ -22,6 +22,13 @@ fn written(sandbox: &Sandbox) -> String {
     })
 }
 
+/// Register one, the short way, for the tests that are about something else.
+fn registered(sandbox: &Sandbox, name: &str, url: &str) {
+    sandbox
+        .sloop(&["db", "add", name, "--url", url, "--env", "PW"])
+        .expect_code(0);
+}
+
 /// R7's "Done when", end to end: the same connection registered two ways has to come back
 /// out identical. Checked on the file, because that is the thing that outlives the run.
 #[test]
@@ -524,4 +531,144 @@ fn there_is_no_way_to_put_a_password_in_argv() {
         .sloop(&["db", "add", "--help"])
         .expect_code(0)
         .expect_said("password never goes in a flag");
+}
+
+// ---------------------------------------------------------------------------------------
+// remove and drop
+// ---------------------------------------------------------------------------------------
+
+/// Rule 4 on the two commands that ask a question: with no terminal they exit 2 and name
+/// the flag, rather than waiting for somebody who is not there.
+#[test]
+fn neither_remove_nor_drop_stops_to_ask_without_a_terminal() {
+    let sandbox = Sandbox::new("db-no-ask");
+    registered(&sandbox, "orders", "postgres://app@127.0.0.1:1/orders");
+
+    sandbox
+        .sloop(&["db", "remove", "orders"])
+        .expect_code(2)
+        .expect_said("no terminal")
+        .expect_said("--yes");
+
+    sandbox
+        .sloop(&["db", "drop", "orders"])
+        .expect_code(2)
+        .expect_said("no terminal")
+        .expect_said("--confirm orders");
+
+    // And neither of them changed anything on the way to refusing.
+    assert!(written(&sandbox).contains("[databases.orders]"));
+}
+
+/// `remove` provably never touches a server — the first half of R8's "Done when".
+///
+/// The proof is the port. `127.0.0.1:1` has nothing listening on it, so any command that
+/// opened a connection would have to fail or hang; `remove` finishes, which it can only do
+/// by never having tried.
+#[test]
+fn remove_forgets_the_record_and_never_contacts_the_server() {
+    let sandbox = Sandbox::new("db-remove");
+    registered(&sandbox, "orders", "postgres://app@127.0.0.1:1/orders");
+    registered(&sandbox, "other", "postgres://app@127.0.0.1:1/other");
+
+    let run = sandbox.sloop(&["db", "remove", "orders", "--yes"]);
+    run.expect_code(0)
+        .expect_said("forgot")
+        .expect_said("not touched");
+
+    let file = written(&sandbox);
+    assert!(!file.contains("[databases.orders]"), "{file}");
+    assert!(
+        file.contains("[databases.other]"),
+        "it removed the wrong one:\n{file}"
+    );
+
+    // A second removal of the same name is an honest "no such thing" rather than a
+    // success that did nothing.
+    sandbox
+        .sloop(&["db", "remove", "orders", "--yes"])
+        .expect_code(2)
+        .expect_said("no database is registered as orders");
+}
+
+/// `drop` refuses on a typo — the second half of R8's "Done when" — and does it without
+/// contacting anything, which the unreachable port proves.
+#[test]
+fn drop_refuses_a_typo_before_it_opens_a_connection() {
+    let sandbox = Sandbox::new("db-typo");
+    registered(&sandbox, "orders", "postgres://app@127.0.0.1:1/orders");
+
+    for typo in ["order", "Orders", "orders ", "orders2", ""] {
+        let run = sandbox.sloop(&["db", "drop", "orders", "--confirm", typo]);
+        run.expect_code(2)
+            .expect_said("the database is orders")
+            .expect_said("nothing was contacted");
+    }
+
+    // Still registered, and still pointing where it did.
+    assert!(written(&sandbox).contains("[databases.orders]"));
+}
+
+/// The safety backup is the default, and `--no-backup` is the only way past it.
+///
+/// Checked here on the shape of the refusal rather than on a real drop: with nothing
+/// listening, the run that would have backed up fails at the connection and the one that
+/// would not still fails at the connection — so what this pins is that neither of them
+/// found a way to skip the typing.
+#[test]
+fn drop_needs_the_name_whether_or_not_it_is_backing_up() {
+    let sandbox = Sandbox::new("db-drop-flags");
+    registered(&sandbox, "orders", "postgres://app@127.0.0.1:1/orders");
+
+    // There is deliberately no flag that means "yes, whichever database that was".
+    sandbox
+        .sloop(&["db", "drop", "orders", "--no-backup"])
+        .expect_code(2)
+        .expect_said("--confirm orders");
+    sandbox
+        .sloop(&["db", "drop", "orders", "--yes"])
+        .expect_code(2);
+    sandbox
+        .sloop(&["db", "drop", "orders", "-y"])
+        .expect_code(2);
+
+    // `--confirm` correct, and the password route satisfied: it gets as far as the
+    // connection and fails there, which is how we know the confirmation was accepted and
+    // nothing before it stopped the run.
+    sandbox
+        .command(
+            sandbox.work(),
+            &["db", "drop", "orders", "--confirm", "orders"],
+        )
+        .env("PW", "whatever")
+        .run()
+        .expect_code(3)
+        .expect_said("connection");
+
+    // Without the variable it stops earlier, on the route rather than on the name — which
+    // is R3's answer and not this command's, and worth pinning so the two stay distinct.
+    sandbox
+        .sloop(&["db", "drop", "orders", "--confirm", "orders"])
+        .expect_code(2)
+        .expect_said("PW is not set");
+
+    assert!(written(&sandbox).contains("[databases.orders]"));
+}
+
+/// `db drop --help` has to say plainly that it is not `db remove`.
+#[test]
+fn the_two_commands_say_which_is_which() {
+    let sandbox = Sandbox::new("db-which");
+
+    sandbox
+        .sloop(&["db", "drop", "--help"])
+        .expect_code(0)
+        .expect_said("destroys a database on the server")
+        .expect_said("not `db remove`")
+        .expect_said("--no-backup");
+
+    sandbox
+        .sloop(&["db", "remove", "--help"])
+        .expect_code(0)
+        .expect_said("server is not touched");
 }

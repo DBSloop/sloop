@@ -675,6 +675,59 @@ impl Adapter for MysqlFamily {
         Ok(())
     }
 
+    fn terminate_connections(&self, target: &Target<'_>) -> Outcome<u64> {
+        // **`information_schema.processlist` rather than `SHOW PROCESSLIST`**, because this
+        // needs a filter and a machine-readable answer, and both engines still have the
+        // table. Without the `PROCESS` privilege a role sees only its own threads — so the
+        // honest answer there is "none to end", and the drop then succeeds or fails on its
+        // own terms rather than on a guess made here.
+        let ids = self.query(
+            target,
+            &format!(
+                "SELECT id FROM information_schema.processlist \
+                  WHERE db = {} AND id <> CONNECTION_ID()",
+                sql_literal(target.database)
+            ),
+        )?;
+
+        let ids: Vec<&str> = ids
+            .iter()
+            .filter_map(|row| row.first())
+            .map(String::as_str)
+            .filter(|id| !id.is_empty())
+            .collect();
+
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        // One statement per thread, in one round trip. A thread that ended by itself
+        // between the two queries makes `KILL` fail, and that is not a reason to stop:
+        // the point was for it to be gone.
+        let mut ended = 0;
+        for id in ids {
+            if self.query(target, &format!("KILL {id}")).is_ok() {
+                ended += 1;
+            }
+        }
+
+        Ok(ended)
+    }
+
+    fn drop_database(&self, target: &Target<'_>) -> Outcome<()> {
+        // No maintenance database, and none is needed: MySQL and MariaDB both allow a
+        // session to drop the database it is connected to, leaving it with no default
+        // one. PostgreSQL is the engine that refuses, which is why the trait leaves the
+        // question to the adapter instead of settling it in the command.
+        //
+        // `IF EXISTS` is deliberately absent — see the PostgreSQL adapter for why.
+        self.query(
+            target,
+            &format!("DROP DATABASE {}", quote_identifier(target.database)),
+        )
+        .map(|_| ())
+    }
+
     fn check_privileges(&self, target: &Target<'_>) -> Outcome<Report> {
         let server = self.probe(target)?;
         let held = self.grants(target)?;

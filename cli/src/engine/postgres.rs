@@ -415,6 +415,42 @@ impl Adapter for Postgres {
         Ok(())
     }
 
+    fn terminate_connections(&self, target: &Target<'_>) -> Outcome<u64> {
+        // From the maintenance database, so this session is not one of the ones being
+        // counted — and `pid <> pg_backend_pid()` as well, in case somebody points the
+        // maintenance connection at the same place.
+        let maintenance = maintenance_target(target);
+        let rows = self.query(
+            &maintenance,
+            &format!(
+                "SELECT count(*) FROM (\
+                   SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+                    WHERE datname = {} AND pid <> pg_backend_pid()\
+                 ) ended",
+                sql_literal(target.database)
+            ),
+        )?;
+
+        Ok(rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0))
+    }
+
+    fn drop_database(&self, target: &Target<'_>) -> Outcome<()> {
+        // `IF EXISTS` is deliberately **not** used. `db drop` has already established that
+        // this database is there, so a drop that finds nothing means something else has
+        // changed underneath it — and silently succeeding at destroying nothing is how a
+        // person ends up believing the wrong database is gone.
+        let maintenance = maintenance_target(target);
+        self.query(
+            &maintenance,
+            &format!("DROP DATABASE {}", quote_identifier(target.database)),
+        )
+        .map(|_| ())
+    }
+
     fn check_privileges(&self, target: &Target<'_>) -> Outcome<Report> {
         let server = self.probe(target)?;
         let answers = self.query(target, PRIVILEGES_SQL)?;
@@ -560,6 +596,39 @@ fn restore_jobs() -> usize {
     std::thread::available_parallelism()
         .map_or(1, std::num::NonZero::get)
         .clamp(1, MAX_RESTORE_JOBS)
+}
+
+/// The database PostgreSQL always has, for the statements that cannot be run from inside
+/// the database they are about.
+///
+/// `postgres` rather than `template1`: dropping a database needs a connection somewhere
+/// else, and `template1` is the one PostgreSQL copies to make new databases — connecting
+/// to it blocks `CREATE DATABASE` for as long as the session lasts.
+const MAINTENANCE_DATABASE: &str = "postgres";
+
+/// The same connection, pointed at the maintenance database.
+///
+/// The role and its password are unchanged: dropping a database is something the account
+/// that owns it does, and asking for a second credential to do it would be a second
+/// credential to store.
+fn maintenance_target<'a>(target: &'a Target<'a>) -> Target<'a> {
+    Target {
+        database: MAINTENANCE_DATABASE,
+        ..*target
+    }
+}
+
+/// Quote an identifier for PostgreSQL. Doubling the quotes is the whole rule.
+///
+/// A database name is not a literal and cannot be parameterised, so this is the only thing
+/// standing between a name with a quote in it and a statement that means something else.
+fn quote_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Quote a string for PostgreSQL. Doubling the apostrophes is the whole rule.
+fn sql_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 /// The tool is not on this machine, or not where we were told it was.

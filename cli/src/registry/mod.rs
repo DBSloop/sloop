@@ -253,6 +253,13 @@ impl Registries {
         self.dir_of(scope).map(|dir| dir.join(file::SEALED_FILE))
     }
 
+    /// The directory a scope keeps everything in — its registry, its sealed passwords and
+    /// its backups. `backups/` hangs off this, so a project's copies stay with the project.
+    #[must_use]
+    pub fn root_in(&self, scope: Scope) -> Option<PathBuf> {
+        self.dir_of(scope)
+    }
+
     fn dir_of(&self, scope: Scope) -> Option<PathBuf> {
         match scope {
             Scope::Project => self.project.as_ref().map(|(dir, _)| dir.clone()),

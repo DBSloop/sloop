@@ -175,11 +175,52 @@ pub enum DbCommand {
     },
 
     /// Forget a registered database. The server is not touched.
-    Remove,
+    Remove {
+        /// Which one.
+        name: String,
+
+        /// Do not ask. The only way to run this without a terminal.
+        ///
+        /// `R16` makes this a global flag; it is here now because rule 4 says a command
+        /// that cannot ask has to name the flag that answers for it, and naming one that
+        /// does not exist yet would be worse than a local copy.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 
     /// Drop a database on the server. Backs it up first and asks for its name.
-    Drop,
+    #[command(after_long_help = DROP_WARNING)]
+    Drop {
+        /// Which registered database to destroy.
+        name: String,
+
+        /// The database's name on the server, typed out, instead of being asked for it.
+        ///
+        /// Not a `y`. Rule 5: a destructive operation is typed, and that holds in a
+        /// script as much as at a prompt — a blind `--yes` in a scheduled job is exactly
+        /// the mistake this shape exists to prevent.
+        #[arg(long, value_name = "DATABASE")]
+        confirm: Option<String>,
+
+        /// Skip the safety backup. The only way to skip it.
+        #[arg(long)]
+        no_backup: bool,
+    },
 }
+
+/// What `db drop --help` says under the flags, because a flag list does not convey this.
+const DROP_WARNING: &str = "\
+This destroys a database on the server. It is not `db remove`, which only forgets that
+sloop knew about it.
+
+What happens, in order:
+  1. sloop connects and confirms the database is really there.
+  2. Unless --no-backup, it dumps the whole thing first, and stops if that fails.
+  3. It ends every other connection to the database, and says how many.
+  4. It drops it.
+
+The name has to be typed. --confirm <DATABASE> is the same typing done up front, for a
+script — there is deliberately no flag meaning \"yes, whichever database that was\".";
 
 /// The connection, field by field.
 ///
@@ -329,8 +370,8 @@ impl DbCommand {
             Self::Test { .. } => "db test",
             Self::Edit { .. } => "db edit",
             Self::Rename { .. } => "db rename",
-            Self::Remove => "db remove",
-            Self::Drop => "db drop",
+            Self::Remove { .. } => "db remove",
+            Self::Drop { .. } => "db drop",
         }
     }
 }

@@ -5,6 +5,7 @@
 //! command that will one day read one already resolves which one it would read and says
 //! so, so the order in `registry` is not a thing that only tests can see.
 
+mod backup;
 mod cli;
 mod commands;
 mod engine;
@@ -163,9 +164,12 @@ fn db(context: &mut commands::db::Context<'_>, command: &DbCommand) -> Outcome<E
             test,
         } => commands::db::edit(context, name, url.as_deref(), fields, password, *test),
         DbCommand::Rename { from, to } => commands::db::rename(context, from, to),
-        // R8's, both of them: forgetting a record and dropping a database on the server
-        // are different weights of thing and get their own entry.
-        other => Ok(unimplemented(&format!("'{}'", other.path()), None)),
+        DbCommand::Remove { name, yes } => commands::db::remove(context, name, *yes),
+        DbCommand::Drop {
+            name,
+            confirm,
+            no_backup,
+        } => commands::db::drop(context, name, confirm.as_deref(), *no_backup),
     }
 }
 

@@ -818,6 +818,318 @@ fn forget(route: &Route, key: &str, context: &Context<'_>, scope: Scope) -> Outc
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// remove
+// ---------------------------------------------------------------------------------------
+
+/// Forget a registered database.
+///
+/// **It does not touch the server, and that is the entire difference from `db drop`.** Two
+/// commands rather than one with a flag, because the two are not degrees of the same thing:
+/// one edits a file on this machine and the other destroys somebody's data. A flag is too
+/// easy to type by accident for a distinction that large.
+///
+/// The stored password goes with the record. A credential nothing references is the clutter
+/// `db edit` was leaking until R7, and keeping it would be keeping a password for a
+/// database sloop no longer knows about.
+pub fn remove(context: &mut Context<'_>, name: &str, yes: bool) -> Outcome<Exit> {
+    let (scope, record) = context.registries.find(name)?;
+    let record = record.clone();
+
+    anstream::println!(
+        "{} {}  {}",
+        style::dim("forgetting"),
+        style::paint(name),
+        style::dim(&record.credential_key())
+    );
+    anstream::println!(
+        "  {}",
+        style::dim(&format!(
+            "the {} registry, and the password kept in {}",
+            scope.label(),
+            record.password.describe()
+        ))
+    );
+    anstream::println!(
+        "  {}",
+        style::dim("the database itself is not touched — that is `sloop db drop`")
+    );
+
+    if !confirmed(yes, "Forget it?", "--yes")? {
+        anstream::println!("{}", style::dim("left alone."));
+        return Ok(Exit::Success);
+    }
+
+    // The record first, which is the opposite order from `write`. A password with no record
+    // is clutter; a record whose password has been deleted is a database that looks
+    // registered and cannot connect — so the half that makes it unreachable goes last.
+    let stored = crate::registry::Qualified::parse(name)?.name().to_owned();
+    context
+        .registries
+        .update(scope, move |registry| Ok(registry.remove(&stored)))?;
+
+    if record.password.is_stored() {
+        if let Err(failure) = forget(&record.password, &record.credential_key(), context, scope) {
+            anstream::eprintln!(
+                "{}",
+                style::dim(&format!(
+                    "the record is gone; its password could not be removed: {}",
+                    failure.message()
+                ))
+            );
+        }
+    }
+
+    anstream::println!("{} {}", style::paint("forgot"), style::paint(name));
+    Ok(Exit::Success)
+}
+
+// ---------------------------------------------------------------------------------------
+// drop
+// ---------------------------------------------------------------------------------------
+
+/// Destroy a database on the server, after backing it up.
+pub fn drop(
+    context: &mut Context<'_>,
+    name: &str,
+    confirm: Option<&str>,
+    no_backup: bool,
+) -> Outcome<Exit> {
+    let (scope, record) = context.registries.find(name)?;
+    let record = record.clone();
+
+    // **A typo is caught before a socket is opened.** `--confirm` is a string comparison
+    // and cannot be made more certain by connecting first, so a script that names the
+    // wrong database gets told so without sloop touching a server at all. The interactive
+    // prompt is the other way round — it comes after the probe, because somebody typing a
+    // name by hand should be looking at how many rows are about to go when they do.
+    //
+    // **Rule 4 is checked here too, and for the same reason.** With no terminal and no
+    // `--confirm`, this run cannot finish however well everything else goes — so it says
+    // so before fetching a password and opening a connection it was only ever going to
+    // refuse to use. It also makes the error the same one every time, rather than
+    // whichever step happened to fail first.
+    match confirm {
+        None if !std::io::stdin().is_terminal() => {
+            return Err(Failure::new(
+                Exit::Usage,
+                "dropping a database needs its name typed, and there is no terminal to type at",
+            )
+            .hint(format!(
+                "pass --confirm {} to say it up front",
+                record.database
+            )));
+        }
+        Some(given) if given != record.database => {
+            return Err(Failure::new(
+                Exit::Usage,
+                format!(
+                    "--confirm says {given}, and the database is {}",
+                    record.database
+                ),
+            )
+            .hint("nothing was contacted and nothing was changed. The two have to match exactly"));
+        }
+        // `--confirm` matched, or there is a terminal to ask at.
+        _ => {}
+    }
+
+    // A name that resolves in the registry is not evidence that the database is there, and
+    // "about to destroy X" had better be true before it is printed.
+    let key = record.credential_key();
+    let route = record.password.overridden_by(context.password_command);
+    let sealed = context.registries.sealed_in(scope).unwrap_or_default();
+    let resolved = resolve(
+        &route,
+        &Lookup {
+            key: &key,
+            sealed_file: &sealed,
+        },
+    )?;
+    let target = record.target(&resolved.secret);
+    let adapter = adapter_for(record.engine);
+    let server = adapter.probe(&target)?;
+
+    anstream::println!(
+        "{} {}",
+        style::paint("about to drop"),
+        style::paint(&record.database)
+    );
+    anstream::println!("  {}", style::dim(&key));
+    anstream::println!(
+        "  {}",
+        style::dim(&format!(
+            "{} {}, registered here as {name}",
+            server.engine, server.version
+        ))
+    );
+
+    // How much is about to go, in the terms somebody weighs it in. Best effort: a role that
+    // cannot count is about to find that out anyway, and refusing to drop because the
+    // tables could not be listed would be the wrong way round.
+    if let Ok(counts) = adapter.row_counts(&target) {
+        let rows: u64 = counts.iter().map(|count| count.rows).sum();
+        anstream::println!(
+            "  {}",
+            style::dim(&format!(
+                "{} table(s), {rows} row(s) — all of it",
+                counts.len()
+            ))
+        );
+    }
+
+    // **Typed, never clicked.** Rule 5, and what is typed is the database's own name on the
+    // server rather than the label: the label is what sloop calls it, and the name is what
+    // is about to stop existing.
+    if !typed_the_name(&record.database, confirm)? {
+        anstream::println!("{}", style::dim("left alone."));
+        return Ok(Exit::Success);
+    }
+
+    // Before anything is destroyed, and a failure here stops the drop. That ordering is the
+    // whole point of the safety copy.
+    if no_backup {
+        anstream::eprintln!(
+            "{}",
+            style::dim("--no-backup: nothing is being kept, and this cannot be undone")
+        );
+    } else {
+        let root = context.registries.root_in(scope).ok_or_else(|| {
+            Failure::usage("there is nowhere to put the safety backup")
+                .hint("run this against a project registry, or the global store")
+        })?;
+        let kept = safety_backup(adapter.as_ref(), &target, &root, name)?;
+        anstream::println!("  {} {}", style::paint("backed up to"), kept.display());
+    }
+
+    let ended = adapter.terminate_connections(&target)?;
+    if ended > 0 {
+        anstream::println!(
+            "  {}",
+            style::dim(&format!("ended {ended} other connection(s)"))
+        );
+    }
+
+    adapter.drop_database(&target)?;
+    anstream::println!("{} {}", style::paint("dropped"), record.database);
+    anstream::println!(
+        "  {}",
+        style::dim(&format!(
+            "{name} is still registered and now points at nothing — `sloop db remove {name}` \
+             forgets it"
+        ))
+    );
+
+    Ok(Exit::Success)
+}
+
+/// Dump the whole database into the settled backup layout, before it is destroyed.
+///
+/// Returns where it went, which is the one thing somebody wants from this command five
+/// minutes after running it.
+fn safety_backup(
+    adapter: &dyn crate::engine::Adapter,
+    target: &Target<'_>,
+    root: &Path,
+    label: &str,
+) -> Outcome<std::path::PathBuf> {
+    let taken = crate::backup::stamp::Stamp::now();
+    let directory = crate::backup::directory_for(root, target.engine, label, taken);
+    let file = crate::backup::dump_file(&directory);
+
+    anstream::println!(
+        "  {}",
+        style::dim(&format!("dumping first, to {}", file.display()))
+    );
+
+    let summary = adapter.dump(target, &file)?;
+    anstream::println!(
+        "  {}",
+        style::dim(&format!(
+            "{} bytes in {:.1}s, taken {}",
+            summary.bytes,
+            summary.took.as_secs_f64(),
+            taken.readable_utc()
+        ))
+    );
+
+    Ok(file)
+}
+
+// ---------------------------------------------------------------------------------------
+// Asking
+// ---------------------------------------------------------------------------------------
+
+/// A yes-or-no question, for the things that do not destroy data.
+///
+/// Rule 4: with no terminal there is nobody to ask, so it exits `2` naming the flag that
+/// would have answered instead of waiting for somebody who is not there.
+fn confirmed(already: bool, question: &str, flag: &str) -> Outcome<bool> {
+    if already {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(Failure::new(
+            Exit::Usage,
+            format!("{question} — and there is no terminal to ask at"),
+        )
+        .hint(format!("pass {flag} to answer it up front")));
+    }
+
+    anstream::print!("{} {question} ", style::paint("?"));
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .map_err(|error| Failure::usage(format!("could not read the answer: {error}")))?;
+
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+/// The confirmation for something that destroys data: the name, typed out.
+///
+/// **Rule 5, and it holds in a script too.** `--confirm <DATABASE>` is the same typing done
+/// in advance, so automation still has to name what it is destroying — there is no spelling
+/// of "yes, whichever database that was". Compared exactly, because a database name is
+/// case-sensitive on most of the platforms this runs against, and "close enough" is not a
+/// standard to destroy data by.
+fn typed_the_name(expected: &str, given: Option<&str>) -> Outcome<bool> {
+    // Already checked, before anything was contacted — see the top of `drop`. Reaching
+    // here with a value at all means it matched.
+    if given.is_some() {
+        return Ok(true);
+    }
+
+    if !std::io::stdin().is_terminal() {
+        return Err(Failure::new(
+            Exit::Usage,
+            "dropping a database needs its name typed, and there is no terminal to type at",
+        )
+        .hint(format!("pass --confirm {expected} to say it up front")));
+    }
+
+    anstream::print!(
+        "{} type {} to destroy it, or anything else to stop: ",
+        style::paint("?"),
+        style::paint(expected)
+    );
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
+    let mut typed = String::new();
+    std::io::stdin()
+        .read_line(&mut typed)
+        .map_err(|error| Failure::usage(format!("could not read the answer: {error}")))?;
+
+    // Only the line ending comes off. A name with a trailing space is a name somebody would
+    // have to type a trailing space for, and trimming would quietly accept a different name
+    // than the one on the server.
+    Ok(typed.trim_end_matches(['\n', '\r']) == expected)
+}
+
 #[cfg(test)]
 #[path = "db_tests.rs"]
 mod tests;
