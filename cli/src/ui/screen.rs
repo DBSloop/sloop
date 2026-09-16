@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use crate::commands::init::Initialised;
 use crate::failure::{Failure, Outcome};
 
-use super::flow::{Answers, Doing, How, Job, Next};
+use super::flow::{Answers, Doing, How, Job, Next, Step};
 use super::paint::{Banner, Header, Line};
 use crate::style::Hue;
 
@@ -153,14 +153,85 @@ pub enum Face {
     Ask(Ask),
 }
 
-/// A list of things to pick from. The way out is added by the loop, never by a screen —
-/// which is how *"`← Back` on every menu"* stays true of a menu nobody has looked at yet.
+/// A list of things to pick from, under headings. The way out is added by the loop, never
+/// by a screen — which is how *"`← Back` on every menu"* stays true of a menu nobody has
+/// looked at yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Menu {
     /// The line above the list.
     pub question: String,
-    /// The items, in order.
+    /// The headings, and what is under each. At least one, and often more.
+    pub sections: Vec<Section>,
+}
+
+/// A heading and the things under it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Section {
+    /// All caps, in the accent. A row nobody can choose.
+    pub heading: String,
+    /// What is under it.
     pub items: Vec<Item>,
+}
+
+/// One drawn line of a menu: a heading, or something that can be chosen.
+///
+/// **Flattened here rather than by the renderer**, so there is one answer to "what is on
+/// row seven" and the loop, the painter and the tests all read it from the same place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Row {
+    /// A heading. Choosing it is not a thing that can happen — see [`Menu::rows`].
+    Heading(String),
+    /// An item, and which item it is counting only items.
+    Item(Item, usize),
+}
+
+impl Menu {
+    /// One section, for the screens that have nothing to group.
+    #[must_use]
+    pub fn under(heading: &str, question: &str, items: Vec<Item>) -> Self {
+        Self {
+            question: question.to_owned(),
+            sections: vec![Section {
+                heading: heading.to_owned(),
+                items,
+            }],
+        }
+    }
+
+    /// The rows as they are drawn, headings and all.
+    ///
+    /// Every item carries its own index among items, so nothing downstream has to count
+    /// headings to work out what was chosen — which is the one arithmetic mistake that
+    /// would silently run the wrong command.
+    #[must_use]
+    pub fn rows(&self) -> Vec<Row> {
+        let mut rows = Vec::new();
+        let mut chosen = 0;
+        for section in &self.sections {
+            if section.items.is_empty() {
+                continue;
+            }
+            rows.push(Row::Heading(section.heading.clone()));
+            for item in &section.items {
+                rows.push(Row::Item(item.clone(), chosen));
+                chosen += 1;
+            }
+        }
+        rows
+    }
+
+    /// How many things can actually be chosen, headings not counted.
+    ///
+    /// Only the tests ask: the loop works in rows, because a row is what the cursor sits
+    /// on. This is how a test says "this page offers nothing" without counting headings.
+    #[cfg(test)]
+    #[must_use]
+    pub fn choices(&self) -> usize {
+        self.sections
+            .iter()
+            .map(|section| section.items.len())
+            .sum()
+    }
 }
 
 /// One line in a list.
@@ -168,16 +239,44 @@ pub struct Menu {
 pub struct Item {
     /// What it is called.
     pub title: String,
-    /// What it does, in one phrase.
+    /// What it does, in one phrase. Shown when there is no command to show instead.
     pub blurb: String,
+    /// The flag form that does the same thing, for the items that are commands.
+    ///
+    /// **The owner asked for it beside every one of them** — *"each task show the command
+    /// that how it can be done by command"*. It is reference and never an instruction: the
+    /// menu does the whole job, and this is how the same job is written into a crontab.
+    pub command: String,
 }
 
 impl Item {
+    /// Something to pick, with a phrase saying what it means.
     #[must_use]
     pub fn new(title: &str, blurb: &str) -> Self {
         Self {
             title: title.to_owned(),
             blurb: blurb.to_owned(),
+            command: String::new(),
+        }
+    }
+
+    /// A command, with the flag form beside it.
+    #[must_use]
+    pub fn doing(leaf: Leaf) -> Self {
+        Self {
+            title: leaf.title.to_owned(),
+            blurb: leaf.blurb.to_owned(),
+            command: leaf.command.to_owned(),
+        }
+    }
+
+    /// What is drawn to the right of the title.
+    #[must_use]
+    pub fn beside(&self) -> &str {
+        if self.command.is_empty() {
+            &self.blurb
+        } else {
+            &self.command
         }
     }
 }
@@ -244,210 +343,278 @@ enum Door {
 }
 
 impl Door {
-    const fn title(self) -> &'static str {
-        match self {
-            Self::Into(_, title, _) => title,
-            Self::At(leaf) => leaf.title,
-        }
-    }
-
-    const fn blurb(self) -> &'static str {
-        match self {
-            Self::Into(_, _, blurb) => blurb,
-            Self::At(leaf) => leaf.blurb,
-        }
-    }
-
     fn opens(self) -> Screen {
         match self {
             Self::Into(group, _, _) => Screen::Group { group, cursor: 0 },
             Self::At(leaf) => Screen::opening(leaf),
         }
     }
+
+    /// How it is drawn. A group says what is behind it; a command says the flag form that
+    /// does the same thing, which is what the owner asked for beside every one of them.
+    fn item(self) -> Item {
+        match self {
+            Self::Into(_, title, blurb) => Item::new(title, blurb),
+            Self::At(leaf) => Item::doing(leaf),
+        }
+    }
 }
+
+/// A heading on the home screen, and the doors under it.
+struct Wing(&'static str, &'static [Door]);
+
+/// A heading on a group screen, and the commands under it.
+struct Shelf(&'static str, &'static [Leaf]);
 
 /// The home screen, in the order somebody meets the tool.
 ///
 /// Registering comes before backing up because you cannot back up a database sloop has
 /// never heard of; copying comes after both because it needs two.
-const HOME: &[Door] = &[
-    Door::Into(
-        Group::Databases,
-        "Databases",
-        "tell sloop about one, check it answers, rename it",
+const HOME: &[Wing] = &[
+    Wing(
+        "EVERY DAY",
+        &[
+            Door::Into(
+                Group::Databases,
+                "Databases",
+                "tell sloop about one, check it answers, rename it",
+            ),
+            Door::Into(
+                Group::Backups,
+                "Backups",
+                "take one now, put one back, clear the old ones out",
+            ),
+        ],
     ),
-    Door::Into(
-        Group::Backups,
-        "Backups",
-        "take one now, put one back, clear the old ones out",
+    Wing(
+        "WHEN YOU NEED IT",
+        &[
+            Door::Into(
+                Group::Copying,
+                "Copy a database",
+                "an exact mirror, or a merge that keeps what is there",
+            ),
+            Door::Into(
+                Group::Key,
+                "Backup key",
+                "the key your backups are locked with",
+            ),
+            Door::At(Leaf {
+                title: "Check my setup",
+                blurb: "what sloop can find on this machine, and what it cannot",
+                command: "sloop doctor",
+                job: Job::Doctor,
+                under: "Check my setup",
+                run_it: "Check this machine",
+            }),
+        ],
     ),
-    Door::Into(
-        Group::Copying,
-        "Copy a database",
-        "an exact mirror, or a merge that keeps what is already there",
-    ),
-    Door::Into(
-        Group::Key,
-        "Backup key",
-        "the key your backups are encrypted with",
-    ),
-    Door::At(Leaf {
-        title: "Check my setup",
-        blurb: "what sloop can find on this machine, and what it cannot",
-        command: "sloop doctor",
-        job: Job::Doctor,
-        under: "Check my setup",
-        run_it: "Check this machine",
-    }),
 ];
 
-const DATABASES: &[Leaf] = &[
-    Leaf {
-        title: "Tell sloop about a database",
-        blurb: "it already exists on a server; this gives sloop the way in",
-        command: "sloop db add <name>",
-        job: Job::DbAdd,
-        under: "Databases",
-        run_it: "Register it",
-    },
-    Leaf {
-        title: "Make a new database",
-        blurb: "creates the database and its user on the server, then registers it",
-        command: "sloop db create <name>",
-        job: Job::DbCreate,
-        under: "Databases",
-        run_it: "Make it",
-    },
-    Leaf {
-        title: "See the ones sloop knows",
-        blurb: "every database in this registry, and where its password comes from",
-        command: "sloop db list",
-        job: Job::DbList,
-        under: "Databases",
-        run_it: "Show them",
-    },
-    Leaf {
-        title: "Check one answers",
-        blurb: "opens a connection and says what came back",
-        command: "sloop db test <name>",
-        job: Job::DbTest,
-        under: "Databases",
-        run_it: "Try it",
-    },
-    Leaf {
-        title: "Change one's details",
-        blurb: "host, port, user, database, password",
-        command: "sloop db edit <name>",
-        job: Job::DbEdit,
-        under: "Databases",
-        run_it: "Save the change",
-    },
-    Leaf {
-        title: "Rename one",
-        blurb: "the name sloop files it under — the server's own name does not change",
-        command: "sloop db rename <from> <to>",
-        job: Job::DbRename,
-        under: "Databases",
-        run_it: "Rename it",
-    },
-    Leaf {
-        title: "Make sloop forget one",
-        blurb: "removes it from this registry. The database itself is untouched",
-        command: "sloop db remove <name>",
-        job: Job::DbRemove,
-        under: "Databases",
-        run_it: "Forget it",
-    },
-    Leaf {
-        title: "Delete one from the server",
-        blurb: "the database itself, gone. A safety copy is taken first",
-        command: "sloop db drop <name>",
-        job: Job::DbDrop,
-        under: "Databases",
-        run_it: "Delete it from the server",
-    },
+const DATABASES: &[Shelf] = &[
+    Shelf(
+        "ADD ONE",
+        &[
+            Leaf {
+                title: "Tell sloop about a database",
+                blurb: "it already exists on a server; this gives sloop the way in",
+                command: "sloop db add <name>",
+                job: Job::DbAdd,
+                under: "Databases",
+                run_it: "Register it",
+            },
+            Leaf {
+                title: "Make a new database",
+                blurb: "creates the database and its user on the server, then registers it",
+                command: "sloop db create <name>",
+                job: Job::DbCreate,
+                under: "Databases",
+                run_it: "Make it",
+            },
+        ],
+    ),
+    Shelf(
+        "LOOK",
+        &[
+            Leaf {
+                title: "See the ones sloop knows",
+                blurb: "every database in this registry, and where its password comes from",
+                command: "sloop db list",
+                job: Job::DbList,
+                under: "Databases",
+                run_it: "Show them",
+            },
+            Leaf {
+                title: "Check one answers",
+                blurb: "opens a connection and says what came back",
+                command: "sloop db test <name>",
+                job: Job::DbTest,
+                under: "Databases",
+                run_it: "Try it",
+            },
+        ],
+    ),
+    Shelf(
+        "CHANGE",
+        &[
+            Leaf {
+                title: "Change one's details",
+                blurb: "host, port, user, database, password",
+                command: "sloop db edit <name>",
+                job: Job::DbEdit,
+                under: "Databases",
+                run_it: "Save the change",
+            },
+            Leaf {
+                title: "Rename one",
+                blurb: "the name sloop files it under — the server's own name is unchanged",
+                command: "sloop db rename <from> <to>",
+                job: Job::DbRename,
+                under: "Databases",
+                run_it: "Rename it",
+            },
+        ],
+    ),
+    Shelf(
+        "REMOVE",
+        &[
+            Leaf {
+                title: "Make sloop forget one",
+                blurb: "removes it from this registry. The database itself is untouched",
+                command: "sloop db remove <name>",
+                job: Job::DbRemove,
+                under: "Databases",
+                run_it: "Forget it",
+            },
+            Leaf {
+                title: "Delete one from the server",
+                blurb: "the database itself, gone. A safety copy is taken first",
+                command: "sloop db drop <name>",
+                job: Job::DbDrop,
+                under: "Databases",
+                run_it: "Delete it from the server",
+            },
+        ],
+    ),
 ];
 
-const BACKUPS: &[Leaf] = &[
-    Leaf {
-        title: "Back one up now",
-        blurb: "dumps it, checks every row arrived, and writes a manifest beside it",
-        command: "sloop backup <name>",
-        job: Job::Backup,
-        under: "Backups",
-        run_it: "Back it up",
-    },
-    Leaf {
-        title: "Back up every one of them",
-        blurb: "carries on past a failure and says at the end which ones failed",
-        command: "sloop backup --all",
-        job: Job::BackupAll,
-        under: "Backups",
-        run_it: "Back them all up",
-    },
-    Leaf {
-        title: "See the backups I have",
-        blurb: "what was taken, when, how big, and whether it still checks out",
-        command: "sloop backups list",
-        job: Job::BackupsList,
-        under: "Backups",
-        run_it: "Show them",
-    },
-    Leaf {
-        title: "Put a backup back",
-        blurb: "restores a database from one of them",
-        command: "sloop restore <name>",
-        job: Job::Restore,
-        under: "Backups",
-        run_it: "Put it back",
-    },
-    Leaf {
-        title: "Clear out the old ones",
-        blurb: "keeps the most recent, deletes the rest",
-        command: "sloop backups prune --keep 7",
-        job: Job::BackupsPrune,
-        under: "Backups",
-        run_it: "Clear them out",
-    },
+const BACKUPS: &[Shelf] = &[
+    Shelf(
+        "TAKE ONE",
+        &[
+            Leaf {
+                title: "Back one up now",
+                blurb: "dumps it, checks every row arrived, and writes a manifest beside it",
+                command: "sloop backup <name>",
+                job: Job::Backup,
+                under: "Backups",
+                run_it: "Back it up",
+            },
+            Leaf {
+                title: "Back up every one of them",
+                blurb: "carries on past a failure and says at the end which ones failed",
+                command: "sloop backup --all",
+                job: Job::BackupAll,
+                under: "Backups",
+                run_it: "Back them all up",
+            },
+        ],
+    ),
+    Shelf(
+        "WHAT YOU HAVE",
+        &[
+            Leaf {
+                title: "See the backups I have",
+                blurb: "what was taken, when, how big, and whether it still checks out",
+                command: "sloop backups list",
+                job: Job::BackupsList,
+                under: "Backups",
+                run_it: "Show them",
+            },
+            Leaf {
+                title: "Clear out the old ones",
+                blurb: "keeps the most recent, deletes the rest",
+                command: "sloop backups prune --keep 7",
+                job: Job::BackupsPrune,
+                under: "Backups",
+                run_it: "Clear them out",
+            },
+        ],
+    ),
+    Shelf(
+        "PUT ONE BACK",
+        &[Leaf {
+            title: "Put a backup back",
+            blurb: "restores a database from one of them",
+            command: "sloop restore <name>",
+            job: Job::Restore,
+            under: "Backups",
+            run_it: "Put it back",
+        }],
+    ),
 ];
 
-const COPYING: &[Leaf] = &[
-    Leaf {
-        title: "Mirror — make one an exact copy of another",
-        blurb: "the destination ends up identical. Anything only it had is gone",
-        command: "sloop mirror <source> --to <destination>",
-        job: Job::Mirror,
-        under: "Copy a database",
-        run_it: "Mirror it",
-    },
-    Leaf {
-        title: "Sync — merge one into another",
-        blurb: "rows are added and replaced. Rows only the destination has are kept",
-        command: "sloop sync <source> --to <destination>",
-        job: Job::Sync,
-        under: "Copy a database",
-        run_it: "Merge it",
-    },
-];
+const COPYING: &[Shelf] = &[Shelf(
+    "COPYING",
+    &[
+        Leaf {
+            title: "Mirror, an exact copy",
+            blurb: "the destination ends up identical. Anything only it had is gone",
+            command: "sloop mirror <source> --to <destination>",
+            job: Job::Mirror,
+            under: "Copy a database",
+            run_it: "Mirror it",
+        },
+        Leaf {
+            title: "Sync, a merge",
+            blurb: "rows are added and replaced. Rows only the destination has are kept",
+            command: "sloop sync <source> --to <destination>",
+            job: Job::Sync,
+            under: "Copy a database",
+            run_it: "Merge it",
+        },
+    ],
+)];
 
-const KEY: &[Leaf] = &[
-    Leaf {
-        title: "Export the key",
-        blurb: "copy it somewhere safe. Without it, no backup can ever be opened",
-        command: "sloop key export",
-        job: Job::KeyExport,
-        under: "Backup key",
-        run_it: "Export the key",
-    },
-    Leaf {
-        title: "Import a key",
-        blurb: "bring one in from another machine",
-        command: "sloop key import",
-        job: Job::KeyImport,
-        under: "Backup key",
-        run_it: "Import a key",
-    },
-];
+const KEY: &[Shelf] = &[Shelf(
+    "BACKUP KEY",
+    &[
+        Leaf {
+            title: "Export the key",
+            blurb: "copy it somewhere safe. Without it, no backup can ever be opened",
+            command: "sloop key export",
+            job: Job::KeyExport,
+            under: "Backup key",
+            run_it: "Export the key",
+        },
+        Leaf {
+            title: "Import a key",
+            blurb: "bring one in from another machine",
+            command: "sloop key import",
+            job: Job::KeyImport,
+            under: "Backup key",
+            run_it: "Import a key",
+        },
+    ],
+)];
+
+/// The door at `index`, counting doors and not headings.
+fn door_at(index: usize) -> Option<Door> {
+    HOME.iter()
+        .flat_map(|Wing(_, doors)| doors.iter())
+        .nth(index)
+        .copied()
+}
+
+/// The home screen as sections.
+fn home_sections() -> Vec<Section> {
+    HOME.iter()
+        .map(|Wing(heading, doors)| Section {
+            heading: (*heading).to_owned(),
+            items: doors.iter().map(|door| door.item()).collect(),
+        })
+        .collect()
+}
 
 impl Group {
     /// What the breadcrumb calls it.
@@ -470,14 +637,34 @@ impl Group {
         }
     }
 
-    /// What is in it.
-    const fn leaves(self) -> &'static [Leaf] {
+    /// What is in it, under its headings.
+    const fn shelves(self) -> &'static [Shelf] {
         match self {
             Self::Databases => DATABASES,
             Self::Backups => BACKUPS,
             Self::Copying => COPYING,
             Self::Key => KEY,
         }
+    }
+
+    /// The command at `index`, counting commands and not headings.
+    fn leaf(self, index: usize) -> Option<Leaf> {
+        self.shelves()
+            .iter()
+            .flat_map(|Shelf(_, leaves)| leaves.iter())
+            .nth(index)
+            .copied()
+    }
+
+    /// The page, as the headings it is drawn under.
+    fn sections(self) -> Vec<Section> {
+        self.shelves()
+            .iter()
+            .map(|Shelf(heading, leaves)| Section {
+                heading: (*heading).to_owned(),
+                items: leaves.iter().copied().map(Item::doing).collect(),
+            })
+            .collect()
     }
 
     /// Every group, for the walk that proves `← Back` comes home from all of them.
@@ -686,13 +873,14 @@ impl Screen {
     #[must_use]
     pub fn face(&self, world: &dyn Doing) -> Face {
         match self {
-            Self::FirstRun { .. } => Face::Menu(Menu {
-                question: "Let's start a project.".to_owned(),
-                items: vec![Item::new(
+            Self::FirstRun { .. } => Face::Menu(Menu::under(
+                "GET STARTED",
+                "Let's start a project.",
+                vec![Item::new(
                     "Start a project here",
                     "keeps this folder's databases beside the code that uses them",
                 )],
-            }),
+            )),
 
             Self::NewProject { at, .. } => Face::Ask(Ask {
                 question: "Where should the project go?".to_owned(),
@@ -700,53 +888,55 @@ impl Screen {
                 help: "Enter accepts it. Esc goes back.".to_owned(),
             }),
 
-            Self::Started { .. } => Face::Menu(Menu {
-                question: "That is the hard part done.".to_owned(),
-                items: vec![Item::new(
+            Self::Started { .. } => Face::Menu(Menu::under(
+                "WHAT NEXT",
+                "That is the hard part done.",
+                vec![Item::new(
                     "Go to the menu",
                     "add a database, and sloop can start backing it up",
                 )],
-            }),
+            )),
 
             Self::Home { .. } => Face::Menu(Menu {
                 question: "What would you like to do?".to_owned(),
-                items: HOME
-                    .iter()
-                    .map(|door| Item::new(door.title(), door.blurb()))
-                    .collect(),
+                sections: home_sections(),
             }),
 
             Self::Group { group, .. } => Face::Menu(Menu {
                 question: group.question().to_owned(),
-                items: group
-                    .leaves()
-                    .iter()
-                    .map(|leaf| Item::new(leaf.title, leaf.blurb))
-                    .collect(),
+                sections: group.sections(),
             }),
 
             Self::Doing { leaf, answers, .. } => match leaf.job.next(answers, world) {
-                Next::Ask(step) => match step.how {
-                    How::Pick { items, .. } => Face::Menu(Menu {
-                        question: step.question,
-                        items,
-                    }),
-                    How::Type { initial, help } => Face::Ask(Ask {
-                        question: step.question,
-                        initial,
-                        help,
-                    }),
-                },
+                Next::Ask(step) => {
+                    let heading = step.heading();
+                    let Step { question, how, .. } = *step;
+                    match how {
+                        How::Pick { items, .. } => {
+                            Face::Menu(Menu::under(heading, &question, items))
+                        }
+                        How::Type { initial, help, .. } => Face::Ask(Ask {
+                            question,
+                            initial,
+                            help,
+                        }),
+                    }
+                }
                 // Nothing left to ask: one item, and choosing it runs the job. Never run
                 // straight off the last answer — a flow that fires the moment its last
                 // question is answered is a flow nobody can read back before it happens.
-                Next::Ready => Face::Menu(Menu {
-                    question: "Ready.".to_owned(),
-                    items: vec![Item::new(leaf.run_it, leaf.blurb)],
-                }),
+                Next::Ready => Face::Menu(Menu::under(
+                    "READY",
+                    "Everything it needs has been answered.",
+                    vec![Item {
+                        title: leaf.run_it.to_owned(),
+                        blurb: leaf.blurb.to_owned(),
+                        command: leaf.command.to_owned(),
+                    }],
+                )),
                 Next::Blocked(_) => Face::Menu(Menu {
                     question: "Not from here.".to_owned(),
-                    items: Vec::new(),
+                    sections: Vec::new(),
                 }),
             },
         }
@@ -761,13 +951,10 @@ impl Screen {
                 trouble: None,
             }),
             Self::Started { .. } => Flow::Home,
-            Self::Home { .. } => HOME
-                .get(index)
-                .map_or(Flow::Stay, |door| Flow::To(door.opens())),
+            Self::Home { .. } => door_at(index).map_or(Flow::Stay, |door| Flow::To(door.opens())),
             Self::Group { group, .. } => group
-                .leaves()
-                .get(index)
-                .map_or(Flow::Stay, |&leaf| Flow::To(Self::opening(leaf))),
+                .leaf(index)
+                .map_or(Flow::Stay, |leaf| Flow::To(Self::opening(leaf))),
 
             Self::Doing { leaf, answers, .. } => match leaf.job.next(answers, world) {
                 Next::Ask(step) => match step.how {
@@ -812,6 +999,19 @@ impl Screen {
             let Next::Ask(step) = leaf.job.next(answers, world) else {
                 return Flow::Stay;
             };
+
+            // **A blank is an answer for some boxes and not for others.** Left to reach the
+            // command, an empty name comes back as a usage error about a flag nobody
+            // passed, five screens away from the box it was not typed into.
+            if given.trim().is_empty() && matches!(step.how, How::Type { needed: true, .. }) {
+                return Flow::Same(Self::Doing {
+                    leaf: *leaf,
+                    answers: answers.clone(),
+                    cursor: 0,
+                    trouble: Some(format!("{} It cannot be left blank.", step.question)),
+                });
+            }
+
             let mut answers = answers.clone();
             answers.put(step.field, given.trim());
             return Flow::Same(Self::Doing {

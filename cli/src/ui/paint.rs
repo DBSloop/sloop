@@ -34,7 +34,7 @@ pub const MEASURE: usize = 66;
 /// Two, because `inquire` draws a two-column prefix in front of its own prompt and every
 /// option — so a header inset by two lands in the same column as the list under it, and the
 /// whole screen has one left edge instead of two.
-const INSET: usize = 2;
+pub const INSET: usize = 2;
 
 /// What a terminal that will not say gets.
 const ASSUMED_COLUMNS: usize = 80;
@@ -187,6 +187,20 @@ pub fn strong(text: &str) -> String {
     }
 }
 
+/// The line the highlight is on.
+///
+/// **Repainted rather than overlaid**, because the line already carries colours of its own
+/// — a grey command beside a plain title — and a highlight that only changed the first of
+/// them would leave half a row looking unselected. Every escape in it is stripped and the
+/// whole line is set in the accent.
+#[must_use]
+pub fn chosen(text: &str) -> String {
+    if !coloured() {
+        return text.to_owned();
+    }
+    strong(&anstream::adapter::strip_str(text).to_string())
+}
+
 /// Quieter than the text around it.
 #[must_use]
 pub fn dim(text: &str) -> String {
@@ -210,7 +224,11 @@ pub fn wrong(text: &str) -> String {
 #[must_use]
 pub fn frame(header: &Header, columns: Option<usize>) -> String {
     let columns = columns.unwrap_or(ASSUMED_COLUMNS);
-    let measure = MEASURE.min(columns.saturating_sub(INSET * 2));
+    let room = columns.saturating_sub(INSET * 2);
+    // **Prose is capped and a value is not.** Sixty-six columns is where a sentence stops
+    // being read and starts being scanned; a registry path is neither, and breaking one at
+    // the same place leaves a directory name cut in half with the terminal half empty.
+    let measure = MEASURE.min(room);
     let mut out: Vec<String> = Vec::new();
 
     out.push(String::new());
@@ -239,7 +257,7 @@ pub fn frame(header: &Header, columns: Option<usize>) -> String {
     out.push(String::new());
 
     for line in &header.lines {
-        out.extend(drawn(line, measure));
+        out.extend(drawn(line, measure, room));
     }
 
     // One screen, one shape: whatever a header ended with, the list below it starts after
@@ -284,7 +302,7 @@ fn strapline(strap: &str, measure: usize) -> Vec<String> {
 }
 
 /// One header line, as the rows it occupies.
-fn drawn(line: &Line, measure: usize) -> Vec<String> {
+fn drawn(line: &Line, measure: usize, room: usize) -> Vec<String> {
     match line {
         Line::Lead(text) => wrap(text, measure)
             .into_iter()
@@ -303,7 +321,7 @@ fn drawn(line: &Line, measure: usize) -> Vec<String> {
             // long as somebody's home directory, and a value that ran past the right edge
             // came back around the left one in the middle of a word.
             let column = INSET + LABEL + 2;
-            wrap_value(value, measure.saturating_sub(LABEL + 2))
+            wrap_value(value, room.saturating_sub(LABEL + 2))
                 .into_iter()
                 .enumerate()
                 .map(|(row, text)| {
@@ -408,10 +426,16 @@ fn wrap_value(text: &str, measure: usize) -> Vec<String> {
         .collect()
 }
 
+/// How far an item sits under the heading it belongs to.
+///
+/// **The structure the owner drew** — a heading, and the things under it stepped in from
+/// it. A heading sits where `inquire` puts it and everything beneath is inset by this.
+pub const UNDER: usize = 2;
+
 /// Everything a list row spends before the phrase starts: the two columns `inquire` draws
-/// its own prefix in, the two between the title and the phrase, and two more kept clear at
-/// the right edge so a full row never touches it.
-const ROW_OVERHEAD: usize = 6;
+/// its own prefix in, the step in under the heading, the two between the title and the
+/// phrase, and two more kept clear at the right edge so a full row never touches it.
+const ROW_OVERHEAD: usize = 6 + UNDER;
 
 /// A menu item, padded so the phrases line up in a column of their own.
 ///
@@ -419,8 +443,9 @@ const ROW_OVERHEAD: usize = 6;
 /// grey half cost nothing and the list still knows how wide it is.
 #[must_use]
 pub fn option(title: &str, blurb: &str, column: usize, columns: Option<usize>) -> String {
+    let step = pad(UNDER);
     if blurb.is_empty() {
-        return title.to_owned();
+        return format!("{step}{title}");
     }
 
     let room = columns
@@ -430,11 +455,21 @@ pub fn option(title: &str, blurb: &str, column: usize, columns: Option<usize>) -
     // Under about twenty-four columns of room the phrase stops being a phrase and starts
     // being a word per line, so the title carries the item on its own.
     if room < 24 {
-        return title.to_owned();
+        return format!("{step}{title}");
     }
 
     let blurb = wrap(blurb, room).into_iter().next().unwrap_or_default();
-    format!("{title:<column$}  {}", dim(&blurb))
+    format!("{step}{title:<column$}  {}", dim(&blurb))
+}
+
+/// A heading in a menu: the accent, with weight, and set apart from what is under it.
+///
+/// **All caps, at the owner's instruction** — *"heading will be in primary color text all
+/// caps"*. The text is upper-cased here rather than typed that way, so the source reads in
+/// sentences and the screen reads in headings.
+#[must_use]
+pub fn heading(text: &str) -> String {
+    strong(&text.to_uppercase())
 }
 
 /// The column the phrases start in: the longest title, so nothing is ragged.

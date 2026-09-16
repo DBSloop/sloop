@@ -37,7 +37,7 @@ use crate::failure::{Failure, Outcome};
 
 use ask::{Answer, Asking};
 use flow::{Answers, Doing};
-use screen::{Face, Flow, Kept, Leaf, Screen, Shell};
+use screen::{Face, Flow, Kept, Leaf, Row, Screen, Shell};
 
 /// The last item on every menu below the root.
 const BACK: &str = "← Back";
@@ -203,14 +203,30 @@ fn show(
 
     match here.face(world) {
         Face::Menu(menu) => {
-            let last = menu.items.len();
-            match asking.choose(&menu.question, &menu.items, out_of_it, here.cursor())? {
-                Answer::Given(index) if index >= last => Ok(back(here)),
-                Answer::Given(index) => {
+            let rows = menu.rows();
+            match asking.choose(
+                &menu.question,
+                &rows,
+                out_of_it,
+                settled(&rows, here.cursor()),
+            )? {
+                Answer::Given(row) if row >= rows.len() => Ok(back(here)),
+                Answer::Given(row) => {
                     // Written back before the screen is pushed, so coming back finds the
                     // highlight where it was left rather than at the top.
-                    here.point_at(index);
-                    Ok(here.chose(shell, world, index))
+                    here.point_at(row);
+                    match rows.get(row) {
+                        // **A heading is not a thing that can be chosen.** `inquire` owns
+                        // the key loop and has no notion of a row the cursor skips, so
+                        // landing on one moves to the first thing under it and draws again
+                        // — which is what Enter on a heading should do anyway.
+                        Some(Row::Heading(_)) => {
+                            here.point_at(row + 1);
+                            Ok(Flow::Stay)
+                        }
+                        Some(Row::Item(_, chosen)) => Ok(here.chose(shell, world, *chosen)),
+                        None => Ok(Flow::Stay),
+                    }
                 }
                 Answer::Back => Ok(back(here)),
                 Answer::Quit => Ok(Flow::Quit),
@@ -227,6 +243,31 @@ fn show(
             Answer::Back => Ok(back(here)),
             Answer::Quit => Ok(Flow::Quit),
         },
+    }
+}
+
+/// Where the highlight starts, given where it was left.
+///
+/// **Never on a heading.** A list that opens with the cursor on one is a list whose first
+/// Enter does nothing but move down, and that is a bad first keystroke for somebody who has
+/// just arrived. The same rule catches a highlight restored from a screen whose sections
+/// have since changed shape.
+fn settled(rows: &[Row], at: usize) -> usize {
+    let first_choice = rows
+        .iter()
+        .position(|row| matches!(row, Row::Item(..)))
+        .unwrap_or(0);
+
+    match rows.get(at) {
+        Some(Row::Item(..)) => at,
+        // Forward to the next thing that can be chosen, and failing that the first one:
+        // a cursor past the end belongs at the top rather than nowhere.
+        _ => rows
+            .iter()
+            .enumerate()
+            .skip(at)
+            .find(|(_, row)| matches!(row, Row::Item(..)))
+            .map_or(first_choice, |(row, _)| row),
     }
 }
 

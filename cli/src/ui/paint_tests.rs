@@ -129,10 +129,13 @@ fn a_menu_item_lines_its_phrase_up_in_a_column() {
             column,
             Some(100),
         ));
-        assert!(drawn.starts_with(title), "{drawn:?}");
+        assert!(
+            drawn.starts_with(&format!("{}{title}", " ".repeat(super::UNDER))),
+            "an item is not stepped in under its heading: {drawn:?}"
+        );
         assert_eq!(
             drawn.find("the name"),
-            Some(column + 2),
+            Some(super::UNDER + column + 2),
             "the phrase did not land in its column: {drawn:?}"
         );
     }
@@ -143,7 +146,8 @@ fn a_menu_item_lines_its_phrase_up_in_a_column() {
 #[test]
 fn a_narrow_menu_drops_the_phrase_rather_than_wrapping_it() {
     let drawn = option("Rename one", "the name sloop files it under", 10, Some(30));
-    assert_eq!(drawn, "Rename one");
+    assert_eq!(drawn.trim_start(), "Rename one");
+    assert!(drawn.starts_with(&" ".repeat(super::UNDER)), "{drawn:?}");
 }
 
 #[test]
@@ -366,7 +370,10 @@ fn a_long_value_wraps_into_its_own_column_rather_than_off_the_edge() {
             .lines()
             .find(|row| row.contains("working in"))
             .map(|row| row.find("C:").expect("the value is on the label's row"));
-        for row in drawn.lines().filter(|row| row.contains("services")) {
+        for row in drawn
+            .lines()
+            .filter(|row| !row.contains("working in") && row.contains(".sloop"))
+        {
             assert_eq!(
                 row.len() - row.trim_start().len(),
                 value_at.expect("the label row was drawn"),
@@ -391,4 +398,30 @@ fn a_value_breaks_where_prose_would_overhang() {
         "{broken:?}"
     );
     assert_eq!(broken.concat(), long, "a value lost characters: {broken:?}");
+}
+
+/// The highlighted line is repainted whole, not tinted.
+///
+/// A row carries colours of its own — a grey command beside a plain title — and a highlight
+/// that only changed the first of them would leave half a row looking unselected.
+#[test]
+fn the_highlighted_line_is_all_one_colour() {
+    let row = option("Rename one", "sloop db rename <from> <to>", 12, Some(100));
+    let lit = super::chosen(&row);
+
+    assert_eq!(
+        plain(&lit),
+        plain(&row),
+        "the highlight changed what the line says"
+    );
+    assert_ne!(lit, row, "the highlight changed nothing");
+    assert_eq!(
+        lit.matches("\x1b[0m").count(),
+        1,
+        "the highlighted line still carries the colours underneath it: {lit:?}"
+    );
+    assert!(
+        lit.contains(&crate::style::heading("Rename one")[..6]),
+        "the highlight is not the accent: {lit:?}"
+    );
 }

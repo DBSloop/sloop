@@ -410,3 +410,68 @@ fn the_screen_reads_back_what_it_was_told() {
         vec![("database", "every one of them".to_owned())]
     );
 }
+
+/// **A blank is an answer for some boxes and not for others**, and pressing Enter on an
+/// empty name must not reach the command as a run with no name.
+#[test]
+fn a_box_says_whether_leaving_it_blank_is_an_answer() {
+    let world = Known::with(&["orders", "orders_staging"]);
+
+    // Everything a command cannot do without.
+    for (job, field) in [
+        (Job::DbAdd, field::NAME),
+        (Job::DbCreate, field::NAME),
+        (Job::DbRename, field::RENAMED),
+    ] {
+        let needed = walk_it(job, &world)
+            .1
+            .into_iter()
+            .find(|step| step.field == field)
+            .unwrap_or_else(|| panic!("{job:?} never asked for {field}"));
+        assert!(
+            matches!(needed.how, How::Type { needed: true, .. }),
+            "{job:?} would take a blank {field}"
+        );
+    }
+
+    // And everything where a blank means "you decide", which is a real answer.
+    for (job, field) in [
+        (Job::DbCreate, field::PORT),
+        (Job::DbCreate, field::SUPERUSER),
+        (Job::BackupsPrune, field::KEEP),
+        (Job::BackupsPrune, field::OLDER),
+    ] {
+        let loose = walk_it(job, &world)
+            .1
+            .into_iter()
+            .find(|step| step.field == field)
+            .unwrap_or_else(|| panic!("{job:?} never asked for {field}"));
+        assert!(
+            matches!(loose.how, How::Type { needed: false, .. }),
+            "{job:?} insists on {field}"
+        );
+    }
+}
+
+/// A box with something already in it is one Enter is a right answer to, so it is never
+/// one of the required ones that could be left empty by accident.
+#[test]
+fn every_box_that_opens_full_is_one_enter_can_answer() {
+    let world = Known::with(&["orders", "orders_staging"]);
+
+    for job in EVERY {
+        for step in walk_it(*job, &world).1 {
+            let How::Type {
+                initial, needed, ..
+            } = &step.how
+            else {
+                continue;
+            };
+            assert!(
+                !initial.trim().is_empty() || !needed || step.field != field::PORT,
+                "{job:?}: {} opens empty and insists on an answer",
+                step.field
+            );
+        }
+    }
+}

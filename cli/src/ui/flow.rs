@@ -234,6 +234,42 @@ pub struct Step {
     pub how: How,
 }
 
+impl Step {
+    /// The heading the list is drawn under.
+    ///
+    /// **Taken from the field rather than written per question**, because a heading that is
+    /// invented at each of forty call sites is forty chances for two questions about the
+    /// same thing to sit under two different words. The field already says what the answer
+    /// is; this says it in the menu's voice.
+    #[must_use]
+    pub fn heading(&self) -> &'static str {
+        use field as f;
+        match self.field {
+            f::NAME | f::WHICH | f::SOURCE => "DATABASE",
+            f::RENAMED => "NEW NAME",
+            f::HOW => "CONNECTION",
+            f::URL => "URL",
+            f::ENGINE => "ENGINE",
+            f::HOST | f::PORT => "SERVER",
+            f::DATABASE => "ON THE SERVER",
+            f::USER => "USER",
+            f::SUPERUSER => "CREATE IT AS",
+            f::ROUTE | f::ENV | f::FROM_COMMAND => "PASSWORD",
+            f::TEST => "BEFORE SAVING",
+            f::DETAIL => "WHAT TO CHANGE",
+            f::MODE => "HOW TO KEEP IT",
+            f::CHECK => "HOW HARD TO LOOK",
+            f::WHEN => "WHICH BACKUP",
+            f::KEEP | f::OLDER | f::BROKEN | f::DRY => "WHAT TO CLEAR",
+            f::WHERE | f::TO | f::CREATE => "DESTINATION",
+            f::SCOPE | f::TABLES | f::REFERENCES => "HOW MUCH",
+            f::SAFE => "SAFETY",
+            f::OFFLINE => "HOW FAR TO LOOK",
+            _ => "CHOOSE",
+        }
+    }
+}
+
 /// The two ways of asking. Deliberately only two: they are exactly what the shell already
 /// draws, so a flow needs no new kind of screen and the scripted prompter in the tests
 /// drives a flow exactly as it drives a menu.
@@ -252,6 +288,14 @@ pub enum How {
         initial: String,
         /// The quiet line under it.
         help: String,
+        /// Whether a blank answer is an answer.
+        ///
+        /// **Blank means "you decide" for an optional field and nothing at all for a
+        /// required one**, and the two must not be the same keystroke. Pressing Enter on an
+        /// empty port is the engine's default; pressing it on an empty name is a
+        /// command run with no name, which fails at the far end of the flow with a usage
+        /// error about a flag nobody passed.
+        needed: bool,
     },
 }
 
@@ -409,16 +453,16 @@ impl Job {
 
             Self::BackupsPrune => vec![
                 one_or_all("Whose backups should be cleared out?", known),
-                typed(
+                box_for(
                     field::KEEP,
                     "How many of the newest should be kept?",
                     "7",
                     "blank to keep them all and go by age alone",
+                    false,
                 ),
-                typed(
+                optional(
                     field::OLDER,
                     "Delete anything older than?",
-                    "",
                     "12h, 30d, 6w. Blank to go by count alone",
                 ),
                 yes_or_no(
@@ -547,10 +591,9 @@ fn registering(answers: &Answers) -> Vec<Step> {
         plan.extend([
             engines(),
             typed(field::HOST, "Which server?", "127.0.0.1", ""),
-            typed(
+            optional(
                 field::PORT,
                 "Which port?",
-                "",
                 "blank for the engine's own default",
             ),
             typed(
@@ -590,16 +633,14 @@ fn making() -> Vec<Step> {
             "127.0.0.1",
             "",
         ),
-        typed(
+        optional(
             field::PORT,
             "Which port?",
-            "",
             "blank for the engine's own default",
         ),
-        typed(
+        optional(
             field::SUPERUSER,
             "Which account should sloop create it with?",
-            "",
             "blank for the engine's usual one — postgres, or root. Its password is asked for \
              next and never stored",
         ),
@@ -627,12 +668,7 @@ fn editing(answers: &Answers, known: &[String]) -> Vec<Step> {
     match answers.text(field::DETAIL) {
         "host" => plan.extend([
             typed(field::HOST, "Which server?", "", ""),
-            typed(
-                field::PORT,
-                "Which port?",
-                "",
-                "blank to leave the port alone",
-            ),
+            optional(field::PORT, "Which port?", "blank to leave the port alone"),
         ]),
         "database" => plan.push(typed(
             field::DATABASE,
@@ -739,23 +775,20 @@ fn destination(job: Job, answers: &Answers, destinations: &[String]) -> Vec<Step
             "",
             "the label you will type from now on",
         ),
-        typed(
+        optional(
             field::HOST,
             "Which server should it go on?",
-            "",
             "blank for the source's own server",
         ),
-        typed(
+        optional(
             field::PORT,
             "Which port?",
-            "",
             "blank for the source's port, or the engine's default",
         ),
-        typed(
+        optional(
             field::SUPERUSER,
             "Which account should sloop create it with?",
-            "",
-            "blank for the engine's usual one. Its password is asked for next and never              stored",
+            "blank for the engine's usual one. Its password is asked for next and never stored",
         ),
     ]);
     plan
@@ -951,8 +984,17 @@ fn yes_or_no(field: &'static str, question: &str, default_yes: bool, blurb: &str
     choose(field, question, &options)
 }
 
-/// Something to type.
+/// Something to type, which has to be typed.
 fn typed(field: &'static str, question: &str, initial: &str, help: &str) -> Step {
+    box_for(field, question, initial, help, true)
+}
+
+/// Something to type, where leaving it blank is an answer.
+fn optional(field: &'static str, question: &str, help: &str) -> Step {
+    box_for(field, question, "", help, false)
+}
+
+fn box_for(field: &'static str, question: &str, initial: &str, help: &str, needed: bool) -> Step {
     Step {
         field,
         question: question.to_owned(),
@@ -963,6 +1005,7 @@ fn typed(field: &'static str, question: &str, initial: &str, help: &str) -> Step
             } else {
                 format!("{help}. Esc goes back a question.")
             },
+            needed,
         },
     }
 }
