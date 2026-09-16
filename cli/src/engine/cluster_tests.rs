@@ -26,10 +26,13 @@ const ALPHA_PASSWORD: &str = r#"alpha\pw $HOME #2 'q' "d" |p"#;
 const BETA_PASSWORD: &str = r#"beta\pw >out #3 "q" &b"#;
 
 /// A throwaway cluster.
-struct Cluster {
-    root: PathBuf,
+///
+/// Reachable from anywhere in the crate's tests: `commands::backup` needs a real server
+/// too, and a second harness would be a second thing to keep working.
+pub(crate) struct Cluster {
+    pub(crate) root: PathBuf,
     data: PathBuf,
-    port: u16,
+    pub(crate) port: u16,
     binaries: PathBuf,
     running: bool,
 }
@@ -40,7 +43,7 @@ impl Cluster {
     /// Everything up to and including the fixture happens here, so a test is handed a
     /// cluster that is ready or handed nothing at all. There is no half-built state for an
     /// assertion to trip over and report as a bug.
-    fn start(label: &str) -> Option<Self> {
+    pub(crate) fn start(label: &str) -> Option<Self> {
         let (binaries, asked) = find_server_binaries()?;
 
         announce(&binaries);
@@ -207,7 +210,7 @@ impl Cluster {
     /// Fallible, because building the fixture is not what these tests are about. A server
     /// that will not take `CREATE ROLE` is a machine that cannot host the fixture, and that
     /// is a skip — the assertions further down are where a real bug shows up.
-    fn psql(&self, database: &str, sql: &str) -> Result<(), String> {
+    pub(crate) fn psql(&self, database: &str, sql: &str) -> Result<(), String> {
         let output = Command::new(self.tool("psql"))
             .arg("--host=127.0.0.1")
             .arg(format!("--port={}", self.port))
@@ -484,7 +487,7 @@ fn initdb_file_name() -> &'static str {
     }
 }
 
-fn skip(reason: &str) {
+pub(crate) fn skip(reason: &str) {
     eprintln!("skipping the PostgreSQL cluster test: {reason}");
 }
 

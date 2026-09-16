@@ -1,16 +1,22 @@
-//! The moment a backup was taken, as a directory name.
+//! The moment a backup was taken: UTC for the path, local for every human.
 //!
-//! **UTC, and no dependency.** `20260916T031500Z` sorts chronologically as plain text,
-//! means the same thing everywhere, and survives a clock going back an hour — none of
-//! which a local timestamp manages. Turning seconds-since-the-epoch into a calendar date
-//! is pure arithmetic, so it is done here rather than bought in.
+//! **UTC in the directory name, and no dependency for it.** `20260916T031500Z` sorts
+//! chronologically as plain text, means the same thing everywhere, and survives a clock
+//! going back an hour — none of which a local timestamp manages. Turning
+//! seconds-since-the-epoch into a calendar date is pure arithmetic, so it is done here
+//! rather than bought in.
 //!
-//! **Local time is not here yet, and that is a deliberate line.** `CLAUDE.md` says the
-//! manifest records the local time and the offset as well, and *that* cannot be computed
-//! without asking the operating system which timezone it is in — which means a dependency.
-//! Adding one to this project's graph is a decision that belongs to `R9`, the task that
-//! writes the manifest, rather than something `R8` slips in to stamp a directory. So this
-//! module does the half that needs nothing, and says what the other half will need.
+//! **The local half is R9's, and it is where the one dependency went.** R8 stopped at UTC
+//! and said why: the offset from UTC cannot be computed, only looked up, and looking it up
+//! means asking the operating system which timezone it is in. That is `chrono`, and it is
+//! used for exactly one thing — [`offset_seconds_at`] — while the calendar arithmetic
+//! below stays where it was and stays tested against a known calendar.
+//!
+//! **The offset is looked up *at the moment in question*, not now.** A backup taken in
+//! July still reads back as July's wall clock when it is listed in December, which a
+//! single cached "current offset" would get wrong by an hour for half the year. It is
+//! recorded in the manifest as well, so a backup copied to a machine in another timezone
+//! still says what the clock said where it was taken.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -41,17 +47,35 @@ impl Stamp {
     /// Read by the tests, which are the only thing that can check this arithmetic against
     /// a known calendar — and by `R12`, which has to turn a directory name back into the
     /// moment it stands for in order to prune by age.
-    #[allow(dead_code)]
     #[must_use]
     pub const fn from_unix_seconds(seconds: i64) -> Self {
         Self { seconds }
     }
 
     /// Seconds since the epoch. See [`Stamp::from_unix_seconds`] for who reads it.
-    #[allow(dead_code)]
     #[must_use]
     pub const fn unix_seconds(self) -> i64 {
         self.seconds
+    }
+
+    /// `2026-09-16T03:15:00Z` — the same moment, for a file rather than a directory name.
+    ///
+    /// Full ISO 8601 with its separators, because a manifest is read by people and by
+    /// other programs, and neither of them should have to know that the compact form in
+    /// the path is compact because Windows will not take a colon in a filename.
+    #[must_use]
+    pub fn utc_iso(self) -> String {
+        let (year, month, day, hour, minute, second) = self.parts();
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+    }
+
+    /// This moment where the person running sloop actually is.
+    #[must_use]
+    pub fn local(self) -> Local {
+        Local {
+            stamp: self,
+            offset: offset_seconds_at(self),
+        }
     }
 
     /// `20260916T031500Z` — the directory name.
@@ -67,8 +91,8 @@ impl Stamp {
 
     /// `2026-09-16 03:15:00 UTC` — the same moment, for a person to read.
     ///
-    /// Still UTC, and it says so. `R9` adds the local rendering that `CLAUDE.md` asks for;
-    /// until then this is labelled rather than quietly presented as somebody's wall clock.
+    /// Still UTC, and it says so, so that nothing is ever quietly presented as somebody's
+    /// wall clock. [`Local::readable`] is what a display uses.
     #[must_use]
     pub fn readable_utc(self) -> String {
         let (year, month, day, hour, minute, second) = self.parts();
@@ -89,6 +113,101 @@ impl Stamp {
 
         (year, month, day, hour, minute, second)
     }
+}
+
+/// A moment, and how far the clock where it happened was from UTC.
+///
+/// The offset travels with the moment rather than being looked up again at display time.
+/// That is what makes a manifest readable on another machine in another country: the
+/// backup still says what the clock said where it was taken, which is the thing somebody
+/// is trying to match against when they go looking for one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Local {
+    stamp: Stamp,
+    /// Seconds to add to UTC. `+05:30` is `19_800`; `-04:00` is `-14_400`.
+    offset: i32,
+}
+
+impl Local {
+    /// A moment at an offset that is already known — reading a manifest back, or a test
+    /// that has to check a timezone this machine is not in.
+    #[must_use]
+    pub const fn at(stamp: Stamp, offset_seconds: i32) -> Self {
+        Self {
+            stamp,
+            offset: offset_seconds,
+        }
+    }
+
+    /// Seconds to add to UTC to get this clock.
+    #[must_use]
+    pub const fn offset_seconds(self) -> i32 {
+        self.offset
+    }
+
+    /// `+05:30`, `-04:00`, `+00:00`.
+    ///
+    /// Always signed and always padded, because a column of times is read by eye and
+    /// `+5:30` beside `-04:00` is a column that has to be parsed rather than scanned.
+    #[must_use]
+    pub fn offset_label(self) -> String {
+        let sign = if self.offset < 0 { '-' } else { '+' };
+        let total = self.offset.unsigned_abs();
+        format!("{sign}{:02}:{:02}", total / 3_600, (total % 3_600) / 60)
+    }
+
+    /// `2026-09-16 08:45:00 +05:30` — the line a person reads.
+    #[must_use]
+    pub fn readable(self) -> String {
+        let (year, month, day, hour, minute, second) = self.shifted().parts();
+        format!(
+            "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} {}",
+            self.offset_label()
+        )
+    }
+
+    /// `2026-09-16T08:45:00+05:30` — the same, for the manifest.
+    #[must_use]
+    pub fn iso(self) -> String {
+        let (year, month, day, hour, minute, second) = self.shifted().parts();
+        format!(
+            "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}{}",
+            self.offset_label()
+        )
+    }
+
+    /// The wall clock, as a UTC stamp that happens to read as the local one.
+    ///
+    /// The whole of the local rendering: move the instant by the offset and then use the
+    /// calendar arithmetic that is already tested. There is no second date implementation
+    /// in this project, which is the point.
+    fn shifted(self) -> Stamp {
+        Stamp {
+            seconds: self.stamp.seconds + i64::from(self.offset),
+        }
+    }
+}
+
+/// How far this machine's clock was from UTC at that moment.
+///
+/// **The one thing in this module that is a lookup rather than a calculation**, and the
+/// only reason `chrono` is in the dependency graph. It is asked about the moment in
+/// question rather than about now, so a backup taken under summer time reads back under
+/// summer time for ever.
+///
+/// A machine whose timezone cannot be determined at all is treated as UTC. That is
+/// `chrono`'s own fallback and the right one here: a backup with an offset of `+00:00`
+/// is still a backup, where refusing to take one over a missing `/etc/localtime` would be
+/// the tool failing at its job to protect a label.
+fn offset_seconds_at(stamp: Stamp) -> i32 {
+    use chrono::{Offset as _, TimeZone as _};
+
+    chrono::DateTime::from_timestamp(stamp.seconds, 0).map_or(0, |moment| {
+        chrono::Local
+            .offset_from_utc_datetime(&moment.naive_utc())
+            .fix()
+            .local_minus_utc()
+    })
 }
 
 /// Turn days-since-1970 into a proleptic Gregorian date.

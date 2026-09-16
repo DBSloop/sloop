@@ -1,29 +1,28 @@
 //! Where a dump goes, and what is written beside it.
 //!
-//! **This module exists a task early, and only as far as it had to.** `R9` owns the
-//! `backup` command; `R8`'s `db drop` takes a safety copy before it destroys a database,
-//! and that copy has to land somewhere a person can find and `restore` can read. So the
-//! *layout* is settled here and `R9` writes into the same one.
-//!
-//! **What is deliberately not here is the manifest.** `CLAUDE.md` wants it to record the
-//! local time and the offset as well as UTC, and neither can be computed without asking
-//! the operating system which timezone it is in — which means a new dependency in a
-//! project whose headline claim is how short its dependency graph is. That is a decision
-//! for `R9`, in `R9`'s report, rather than something this task slips in on the way past.
-//! A `db drop` safety copy is therefore a dump at a UTC-stamped path and nothing else,
-//! which is enough to find it and enough to restore it.
-//!
-//! The layout is not invented either. It is the one in `CLAUDE.md`:
+//! The layout is the one in `CLAUDE.md`:
 //!
 //! ```text
 //! backups/<engine>/<label>/<utc-timestamp>/
 //!     dump
+//!     manifest.json
 //! ```
 //!
 //! **UTC in the path.** `20260916T031500Z` sorts correctly, means the same thing in every
 //! timezone, and survives a clock going back an hour — none of which is true of a local
-//! timestamp. What a person is shown is a separate question, and `R9`'s one.
+//! timestamp. What a person is *shown* is the other half of the same rule, and it is
+//! always local: see [`stamp::Local`].
+//!
+//! **This module was started a task early**, by `R8`'s `db drop`, which takes a safety copy
+//! before it destroys a database and needed somewhere to put it. It left the manifest to
+//! `R9` because the manifest needs the local offset and the local offset needs a dependency;
+//! [`manifest`] and the second half of [`stamp`] are that decision, made and paid for.
+//!
+//! A `db drop` safety copy is still a dump and no manifest — it is a fallback taken on the
+//! way past rather than a backup somebody asked for, and `sloop backup` is what writes a
+//! complete one.
 
+pub mod manifest;
 pub mod stamp;
 
 #[cfg(test)]

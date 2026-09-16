@@ -79,7 +79,15 @@ pub enum Command {
     },
 
     /// Back up a registered database.
-    Backup,
+    #[command(after_long_help = BACKUP_NOTES)]
+    Backup {
+        /// Which registered database. Left out when `--all` is given.
+        name: Option<String>,
+
+        /// Back up every registered database, and do not stop at the first failure.
+        #[arg(long, conflicts_with = "name")]
+        all: bool,
+    },
 
     /// Inspect and prune stored backups.
     Backups {
@@ -222,6 +230,27 @@ What happens, in order:
 The name has to be typed. --confirm <DATABASE> is the same typing done up front, for a
 script — there is deliberately no flag meaning \"yes, whichever database that was\".";
 
+/// What `backup --help` says under the flags, because the layout and the codes are the
+/// two things somebody scheduling this needs and neither fits in a flag description.
+const BACKUP_NOTES: &str = "\
+Where it goes, under the registry that holds the database:
+
+  backups/<engine>/<label>/<utc-timestamp>/
+      dump            what pg_dump or mysqldump wrote
+      manifest.json   the server's version, the size, the SHA-256, how long it took,
+                      every table's exact row count, and when — in UTC, in local
+                      time, and with the offset between them
+
+The directory is stamped in UTC so the names sort chronologically and survive a clock
+going back an hour. Everything printed is in local time.
+
+The manifest is written last, so a directory without one is a run that died halfway
+rather than a backup.
+
+--all runs to the end whatever happens. It exits with the failures' own code when they
+agree on one — 3 when servers were unreachable, 4 when dumps failed — and 1 when they
+do not, which means read the output.";
+
 /// The connection, field by field.
 ///
 /// Shared by `add` and `edit` so the two can never drift into accepting different things,
@@ -334,7 +363,7 @@ impl Command {
             self,
             Self::Doctor { .. }
                 | Self::Db { .. }
-                | Self::Backup
+                | Self::Backup { .. }
                 | Self::Backups { .. }
                 | Self::Restore
                 | Self::Mirror
@@ -350,7 +379,7 @@ impl Command {
             Self::Init => "init",
             Self::Doctor { .. } => "doctor",
             Self::Db { command } => command.path(),
-            Self::Backup => "backup",
+            Self::Backup { .. } => "backup",
             Self::Backups { command } => command.path(),
             Self::Restore => "restore",
             Self::Mirror => "mirror",

@@ -105,6 +105,18 @@ fn run(cli: &Cli) -> Outcome<Exit> {
                 ));
             }
 
+            if let Some(Command::Backup { name, all }) = &cli.command {
+                return commands::backup::run(
+                    &commands::backup::Context {
+                        registries: &registries,
+                        global: &global,
+                        password_command: cli.password_command.as_deref(),
+                    },
+                    name.as_deref(),
+                    *all,
+                );
+            }
+
             if let Some(Command::Db { command }) = &cli.command {
                 let mut context = commands::db::Context {
                     registries,

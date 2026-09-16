@@ -36,9 +36,12 @@ pub mod mysql;
 pub mod postgres;
 pub mod privileges;
 
+// `pub(crate)` so that a command's cluster test can borrow this harness rather than grow
+// a second one. Building and destroying a throwaway PostgreSQL is not adapter-specific,
+// and two copies of it would be two things to keep working.
 #[cfg(test)]
 #[path = "cluster_tests.rs"]
-mod cluster_tests;
+pub(crate) mod cluster_tests;
 #[cfg(test)]
 #[path = "mysql_cluster_tests.rs"]
 mod mysql_cluster_tests;

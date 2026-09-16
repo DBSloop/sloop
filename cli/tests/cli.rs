@@ -14,7 +14,6 @@ use support::Sandbox;
 
 /// Every command that will do something one day and does not yet.
 const STUBS: &[&[&str]] = &[
-    &["backup"],
     &["backups", "list"],
     &["backups", "prune"],
     &["restore"],
@@ -40,6 +39,7 @@ const IMPLEMENTED: &[&[&str]] = &[
     &["db", "rename"],
     &["db", "remove"],
     &["db", "drop"],
+    &["backup"],
 ];
 
 /// The commands that only hold other commands.

@@ -48,13 +48,18 @@ rpassword = "7.5.4"
 # the checksum in a backup manifest. RustCrypto, like `argon2` above, and no more than a
 # hash function: nothing in it can open a socket.
 sha2 = "0.10"
-
-[dev-dependencies]
-# Only ever used by the test that writes `web/privileges.json`, so the site publishes the
-# same privilege minimums the code checks rather than a second copy of them. A dev edge,
-# so none of it reaches the shipped binary — and it speaks no HTTP either way, which
-# `ci/no-http-client.sh` checks across normal, build *and* dev edges.
+# `manifest.json` is written and read back by `backups list`, `prune` and `restore`, so the
+# format needs a real parser rather than a printer. It was already a dev-dependency for the
+# test that publishes `web/privileges.json`, so this moves an edge rather than adding a
+# crate to the lockfile.
 serde_json = "1.0"
+# The one thing arithmetic cannot answer: which timezone this machine is in. `backup/stamp`
+# does its own calendar maths and uses this for nothing but the offset from UTC at a given
+# moment — historical offsets included, so a backup taken in July still reads back as July's
+# wall clock in December. Default features off: `clock` and `std` are all of it, and the
+# whole graph it brings is `num-traits` plus the platform's own timezone lookup. No socket
+# anywhere in it.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [workspace.lints.rust]
 # There is no reason for this tool to contain unsafe code, and "no reason yet" is how it
