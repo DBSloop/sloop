@@ -6,6 +6,7 @@ pub mod db;
 pub mod doctor;
 pub mod init;
 pub mod key;
+pub mod mirror;
 pub mod restore;
 
 use std::path::Path;

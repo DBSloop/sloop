@@ -136,7 +136,22 @@ pub enum Command {
     },
 
     /// Copy a database exactly, leaving the destination identical to the source.
-    Mirror,
+    #[command(after_long_help = MIRROR_NOTES)]
+    Mirror {
+        /// The registered database to copy. Only ever read.
+        source: String,
+
+        /// The registered database to copy it over. Its contents are replaced.
+        #[arg(long, value_name = "NAME")]
+        to: String,
+
+        /// Dump to a file first, so a copy that fails can be retried.
+        ///
+        /// Off by default: a copy is not a backup and leaves nothing behind. While the copy
+        /// runs, the file is an unencrypted dump of the source on this machine's disk.
+        #[arg(long)]
+        safe: bool,
+    },
 
     /// Merge a database into another, keeping rows the destination already had.
     Sync,
@@ -553,7 +568,7 @@ impl Command {
                 | Self::Backup { .. }
                 | Self::Backups { .. }
                 | Self::Restore { .. }
-                | Self::Mirror
+                | Self::Mirror { .. }
                 | Self::Sync
                 | Self::Key { .. }
         )
@@ -569,7 +584,7 @@ impl Command {
             Self::Backup { .. } => "backup",
             Self::Backups { command } => command.path(),
             Self::Restore { .. } => "restore",
-            Self::Mirror => "mirror",
+            Self::Mirror { .. } => "mirror",
             Self::Sync => "sync",
             Self::Key { command } => command.path(),
             Self::Uninstall => "uninstall",
@@ -657,6 +672,31 @@ fn after_long_help() -> String {
         guarantee = style::heading("Check the guarantee in ten seconds"),
     )
 }
+
+/// What `mirror --help` says under the flags: what it touches, and what it does not.
+const MIRROR_NOTES: &str = "\
+An exact copy. Afterwards the destination holds what the source holds and nothing else:
+a table that existed only in the destination is gone.
+
+What is replaced is the destination's *contents*. The database itself, its owner and its
+credentials are untouched, so an application configured against that connection string
+keeps working.
+
+The source is only ever read. Not one statement sloop sends to it changes anything,
+not even to collect statistics.
+
+Nothing is left behind. The dump goes from one client straight into the other through a
+pipe and never becomes a file — a copy is not a backup. The cost is that a copy which
+fails halfway has nothing to retry from, which is what --safe is for.
+
+  sloop mirror live --to staging
+  sloop mirror live --to staging --safe    # dump to a file first, deleted once verified
+
+Mirroring a database over itself is refused — on host, port and database together, and
+localhost counts as 127.0.0.1.
+
+Exit 6 means the copy finished and then a table did not add up. A live source that
+changes while the dump runs is reported as drift rather than as a failure.";
 
 /// What `restore --help` says under the flags, because the order things happen in is the
 /// thing somebody about to run this needs to know.

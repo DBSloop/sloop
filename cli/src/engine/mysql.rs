@@ -733,6 +733,98 @@ impl Adapter for MysqlFamily {
         })
     }
 
+    fn copy_into(&self, source: &Target<'_>, destination: &Target<'_>) -> Outcome<()> {
+        // Before anything is spawned: is this the engine it was registered as?
+        self.probe(source)?;
+
+        let mut command = self.spawn(&self.tools.dump, source);
+        command
+            .args(Self::connection_args(source))
+            .arg("--single-transaction")
+            .arg("--routines")
+            .arg("--triggers")
+            .arg("--events")
+            .arg("--hex-blob");
+        command.args(&self.flags().dump);
+        command.arg(source.database);
+
+        let mut dumping = command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| self.missing_tool(&self.tools.dump, &error))?;
+
+        // **The script goes down an OS pipe, not through this process** — the same thing
+        // `mysqldump | mysql` is at a shell prompt.
+        let script = dumping.stdout.take().expect("stdout was piped");
+        let restoring = self
+            .spawn(&self.tools.client, destination)
+            .args(Self::connection_args(destination))
+            .arg(format!("--connect-timeout={CONNECT_TIMEOUT_SECONDS}"))
+            .arg(format!("--database={}", destination.database))
+            // Batch mode is what makes an error fatal. `--force` is exactly what this must
+            // never pass: a copy that partly worked is a failure.
+            .arg("--batch")
+            .stdin(Stdio::from(script))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+
+        let restoring = match restoring {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = dumping.kill();
+                let _ = dumping.wait();
+                return Err(self.missing_tool(&self.tools.client, &error));
+            }
+        };
+
+        // Drained while both run: a full stderr pipe stops the process that owns it, and
+        // either one stopping deadlocks the other end of the script.
+        let mut complaining = dumping.stderr.take().expect("stderr was piped");
+        let dump_said = std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = Read::read_to_end(&mut complaining, &mut said);
+            said
+        });
+
+        let restored = restoring.wait_with_output().map_err(|error| {
+            Failure::new(
+                Exit::Restore,
+                format!("{} would not finish: {error}", self.tools.client.display()),
+            )
+        })?;
+        let dumped = dumping.wait().map_err(|error| {
+            Failure::new(
+                Exit::Dump,
+                format!("{} would not finish: {error}", self.tools.dump.display()),
+            )
+        })?;
+        let dump_complaint =
+            String::from_utf8_lossy(&dump_said.join().unwrap_or_default()).into_owned();
+
+        // The dump's complaint outranks the restore's: a client fed half a script fails at
+        // the script, which is the symptom rather than the cause.
+        if !dumped.success() {
+            return Err(from_stderr(
+                &self.tools.dump,
+                &dump_complaint,
+                Exit::Dump,
+                source,
+            ));
+        }
+        if !restored.status.success() {
+            return Err(from_tool(
+                &self.tools.client,
+                &restored,
+                Exit::Restore,
+                destination,
+            ));
+        }
+
+        Ok(())
+    }
+
     fn provision(&self, target: &Target<'_>, asked: &Provisioning<'_>) -> Outcome<Provisioned> {
         // The script is built in a `String`, which takes `fmt::Write` rather than the
         // `io::Write` this module imports for the pipes.

@@ -171,6 +171,16 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
         return commands::restore::run(&context, name, from.as_deref());
     }
 
+    if let Some(Command::Mirror { source, to, safe }) = &cli.command {
+        let context = commands::mirror::Context {
+            registries,
+            global: &global,
+            password_command: cli.password_command.as_deref(),
+            consent,
+        };
+        return commands::mirror::run(&context, source, to, *safe);
+    }
+
     if let Some(Command::Key { command }) = &cli.command {
         let mut context = commands::key::Context {
             registries,

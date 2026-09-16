@@ -460,6 +460,19 @@ pub trait Adapter {
     /// unencrypted dump, where there is nothing to protect and the file is already there.
     fn restore_into(&self, target: &Target<'_>, source: &mut dyn std::io::Read) -> Outcome<()>;
 
+    /// Dump `source` straight into `destination`, with no file in between.
+    ///
+    /// **One OS pipe between two client processes**, which is the same thing
+    /// `pg_dump … | pg_restore …` is at a shell prompt: the archive never becomes a file and
+    /// never passes through sloop's memory either. That is what lets `mirror` leave nothing
+    /// behind — a copy is not a backup — and it is why this is one method rather than a
+    /// caller joining [`Adapter::dump_into`] to [`Adapter::restore_into`] with a pipe of its
+    /// own.
+    ///
+    /// **The source is only ever read**, exactly as in [`Adapter::dump_into`]. What changes
+    /// is the destination, and only its contents.
+    fn copy_into(&self, source: &Target<'_>, destination: &Target<'_>) -> Outcome<()>;
+
     /// Create a role, a database it owns, and the grants that make the two usable.
     ///
     /// `target` is a **superuser's** connection to this engine's maintenance database — see

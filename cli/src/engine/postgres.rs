@@ -579,6 +579,96 @@ impl Adapter for Postgres {
         })
     }
 
+    fn copy_into(&self, source: &Target<'_>, destination: &Target<'_>) -> Outcome<()> {
+        // Before anything is spawned: is this pg_dump even allowed to read that server?
+        let server = self.probe(source)?;
+        self.refuse_an_old_client(server.version)?;
+
+        let mut dumping = self
+            .spawn_dump(source)
+            .args(Self::connection_args(source))
+            .arg("--format=custom")
+            .arg("--no-owner")
+            .arg("--no-privileges")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| missing_tool(&self.tools.dump, &error))?;
+
+        // **The archive goes down an OS pipe, not through this process.** The dump's own
+        // standard output becomes the restore's standard input, which is what
+        // `pg_dump | pg_restore` is at a shell prompt.
+        let archive = dumping.stdout.take().expect("stdout was piped");
+        let restoring = self
+            .spawn_restore(destination)
+            .args(Self::connection_args(destination))
+            .arg("--no-owner")
+            .arg("--no-privileges")
+            // Without this pg_restore prints warnings, carries on, and exits 0 with a
+            // half-restored database. A copy that partly worked is a failure.
+            .arg("--exit-on-error")
+            .stdin(Stdio::from(archive))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+
+        let restoring = match restoring {
+            Ok(child) => child,
+            Err(error) => {
+                // The dump is already running and writing into a pipe nothing will read.
+                let _ = dumping.kill();
+                let _ = dumping.wait();
+                return Err(missing_tool(&self.tools.restore, &error));
+            }
+        };
+
+        // Drained while both run: a full stderr pipe stops the process that owns it, and
+        // either one stopping deadlocks the other end of the archive.
+        let mut complaining = dumping.stderr.take().expect("stderr was piped");
+        let dump_said = std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut complaining, &mut said);
+            said
+        });
+
+        let restored = restoring.wait_with_output().map_err(|error| {
+            Failure::new(
+                Exit::Restore,
+                format!("{} would not finish: {error}", self.tools.restore.display()),
+            )
+        })?;
+        let dumped = dumping.wait().map_err(|error| {
+            Failure::new(
+                Exit::Dump,
+                format!("{} would not finish: {error}", self.tools.dump.display()),
+            )
+        })?;
+        let dump_complaint =
+            String::from_utf8_lossy(&dump_said.join().unwrap_or_default()).into_owned();
+
+        // **The dump's complaint outranks the restore's.** A restore fed half an archive
+        // fails at the archive, and reporting that would send somebody to the wrong end of
+        // the copy.
+        if !dumped.success() {
+            return Err(from_stderr(
+                &self.tools.dump,
+                &dump_complaint,
+                Exit::Dump,
+                source,
+            ));
+        }
+        if !restored.status.success() {
+            return Err(from_tool(
+                &self.tools.restore,
+                &restored,
+                Exit::Restore,
+                destination,
+            ));
+        }
+
+        Ok(())
+    }
+
     fn provision(&self, target: &Target<'_>, asked: &Provisioning<'_>) -> Outcome<Provisioned> {
         // The script is built in a `String`, which takes `fmt::Write`.
         use std::fmt::Write as _;
