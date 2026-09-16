@@ -213,15 +213,11 @@ pub enum DbCommand {
         name: String,
     },
 
-    /// Drop a database on the server. Backs it up first and asks for its name.
+    /// Drop a database on the server. Asks for its name, and keeps nothing.
     #[command(after_long_help = DROP_WARNING)]
     Drop {
         /// Which registered database to destroy.
         name: String,
-
-        /// Skip the safety backup. The only way to skip it.
-        #[arg(long)]
-        no_backup: bool,
     },
 }
 
@@ -230,14 +226,18 @@ const DROP_WARNING: &str = "\
 This destroys a database on the server. It is not `db remove`, which only forgets that
 sloop knew about it.
 
+It keeps nothing, and it cannot be undone. Run `sloop backup <name>` first if you want a
+copy — sloop will not quietly take one for you and leave you a dump no command can read.
+
 What happens, in order:
   1. sloop connects and confirms the database is really there.
-  2. Unless --no-backup, it dumps the whole thing first, and stops if that fails.
-  3. It ends every other connection to the database, and says how many.
-  4. It drops it.
+  2. It says how many tables and rows are about to go.
+  3. The name has to be typed.
+  4. It ends every other connection to the database, and says how many.
+  5. It drops it.
 
-The name has to be typed. --confirm <DATABASE> is the same typing done up front, for a
-script — there is deliberately no flag meaning \"yes, whichever database that was\".";
+--confirm <DATABASE> is that typing done up front, for a script — there is deliberately
+no flag meaning \"yes, whichever database that was\".";
 
 /// What `backup --help` says under the flags, because the layout and the codes are the
 /// two things somebody scheduling this needs and neither fits in a flag description.

@@ -891,8 +891,18 @@ pub fn remove(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
 // drop
 // ---------------------------------------------------------------------------------------
 
-/// Destroy a database on the server, after backing it up.
-pub fn drop(context: &mut Context<'_>, name: &str, no_backup: bool) -> Outcome<Exit> {
+/// Destroy a database on the server.
+///
+/// **It writes nothing.** `R8` took a safety copy first; the owner reopened that on
+/// 2026-09-16 — *"just drop nothing to write"* — and it is the same principle as a copy not
+/// being a backup: `db drop` destroys a database, and a command that is not a backup command
+/// should not leave a backup lying about. A dump it wrote had no manifest either, so it read
+/// as an unfinished backup for ever and `restore` could not have used it.
+///
+/// So this cannot be undone, and every line it prints says so. `sloop backup <name>` first
+/// is the way to keep a copy, and it is named in the warning, in the prompt and in `--help`.
+/// See "`db drop` writes nothing" in `docs/OWNER-DECISIONS.md`.
+pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
     let (scope, record) = context.registries.find(name)?;
     let record = record.clone();
 
@@ -951,36 +961,23 @@ pub fn drop(context: &mut Context<'_>, name: &str, no_backup: bool) -> Outcome<E
         );
     }
 
+    // **Said once, plainly, and before the question.** Nothing is kept, so the only honest
+    // thing to do is name the command that would have kept something while there is still
+    // time to run it.
+    anstream::println!(
+        "  {}",
+        style::dim(&format!(
+            "nothing is kept and this cannot be undone — `sloop backup {name}` first if you \
+             want a copy"
+        ))
+    );
+
     // **Typed, never clicked.** Rule 5, and what is typed is the database's own name on the
     // server rather than the label: the label is what sloop calls it, and the name is what
     // is about to stop existing.
     if !context.consent.typed(&destroying)?.granted() {
         anstream::println!("{}", style::dim("left alone."));
         return Ok(Exit::Success);
-    }
-
-    // Before anything is destroyed, and a failure here stops the drop. That ordering is the
-    // whole point of the safety copy.
-    if no_backup {
-        anstream::eprintln!(
-            "{}",
-            style::dim("--no-backup: nothing is being kept, and this cannot be undone")
-        );
-    } else {
-        let root = context.registries.root_in(scope).ok_or_else(|| {
-            Failure::usage("there is nowhere to put the safety backup")
-                .hint("run this against a project registry, or the global store")
-        })?;
-        // Encrypted when this registry has a key, plain when it does not. **No gate here:**
-        // the first-backup warning belongs to `backup`, and stopping a `db drop` halfway to
-        // lecture somebody about key custody would be the wrong moment for that conversation.
-        let sealed_to = context
-            .registries
-            .in_scope(scope)
-            .and_then(|registry| registry.encryption())
-            .map(|encryption| encryption.public_key.clone());
-        let kept = safety_backup(adapter.as_ref(), &target, &root, name, sealed_to.as_ref())?;
-        anstream::println!("  {} {}", style::paint("backed up to"), kept.display());
     }
 
     let ended = adapter.terminate_connections(&target)?;
@@ -1002,58 +999,6 @@ pub fn drop(context: &mut Context<'_>, name: &str, no_backup: bool) -> Outcome<E
     );
 
     Ok(Exit::Success)
-}
-
-/// Dump the whole database into the settled backup layout, before it is destroyed.
-///
-/// Returns where it went, which is the one thing somebody wants from this command five
-/// minutes after running it.
-fn safety_backup(
-    adapter: &dyn crate::engine::Adapter,
-    target: &Target<'_>,
-    root: &Path,
-    label: &str,
-    sealed_to: Option<&crate::crypt::PublicKey>,
-) -> Outcome<std::path::PathBuf> {
-    let taken = crate::backup::stamp::Stamp::now();
-    let directory = crate::backup::directory_for(root, target.engine, label, taken);
-    let plain = crate::backup::dump_file(&directory);
-    let file = match sealed_to {
-        Some(_) => crate::crypt::sealed_name(&plain),
-        None => plain,
-    };
-
-    anstream::println!(
-        "  {}",
-        style::dim(&format!("dumping first, to {}", file.display()))
-    );
-
-    let started = std::time::Instant::now();
-    match sealed_to {
-        Some(recipient) => {
-            crate::crypt::sealed_to(&file, recipient, |sink| adapter.dump_into(target, sink))?;
-        }
-        None => {
-            adapter.dump(target, &file)?;
-        }
-    }
-    let bytes = std::fs::metadata(&file).map_or(0, |meta| meta.len());
-
-    anstream::println!(
-        "  {}",
-        style::dim(&format!(
-            "{bytes} bytes in {:.1}s, taken {}{}",
-            started.elapsed().as_secs_f64(),
-            taken.readable_utc(),
-            if sealed_to.is_some() {
-                ", encrypted"
-            } else {
-                ""
-            }
-        ))
-    );
-
-    Ok(file)
 }
 
 // ---------------------------------------------------------------------------------------

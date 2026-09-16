@@ -138,6 +138,12 @@ impl Stamp {
     ///
     /// Still UTC, and it says so, so that nothing is ever quietly presented as somebody's
     /// wall clock. [`Local::readable`] is what a display uses.
+    ///
+    /// **Nothing in the binary calls this today.** `db drop` did, until the owner decided it
+    /// keeps nothing; the tests still do, and they are the reason it stays — one of them
+    /// checks the local rendering against this one, which is the only way to tell that the
+    /// two agree about the moment and disagree about the clock.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub fn readable_utc(self) -> String {
         let (year, month, day, hour, minute, second) = self.parts();

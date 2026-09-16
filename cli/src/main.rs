@@ -238,7 +238,7 @@ fn db(context: &mut commands::db::Context<'_>, command: &DbCommand) -> Outcome<E
         } => commands::db::edit(context, name, url.as_deref(), fields, password, *test),
         DbCommand::Rename { from, to } => commands::db::rename(context, from, to),
         DbCommand::Remove { name } => commands::db::remove(context, name),
-        DbCommand::Drop { name, no_backup } => commands::db::drop(context, name, *no_backup),
+        DbCommand::Drop { name } => commands::db::drop(context, name),
     }
 }
 

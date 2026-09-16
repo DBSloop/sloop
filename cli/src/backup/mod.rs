@@ -13,14 +13,15 @@
 //! timestamp. What a person is *shown* is the other half of the same rule, and it is
 //! always local: see [`stamp::Local`].
 //!
-//! **This module was started a task early**, by `R8`'s `db drop`, which takes a safety copy
-//! before it destroys a database and needed somewhere to put it. It left the manifest to
+//! **This module was started a task early**, by `R8`'s `db drop`, which took a safety copy
+//! before it destroyed a database and needed somewhere to put it. It left the manifest to
 //! `R9` because the manifest needs the local offset and the local offset needs a dependency;
 //! [`manifest`] and the second half of [`stamp`] are that decision, made and paid for.
 //!
-//! A `db drop` safety copy is still a dump and no manifest — it is a fallback taken on the
-//! way past rather than a backup somebody asked for, and `sloop backup` is what writes a
-//! complete one.
+//! **`db drop` writes nothing now**, by the owner's decision on 2026-09-16, so everything
+//! under `backups/` was written by `backup` and has a manifest beside it. A directory here
+//! without one is a run that was killed — see [`store`], which is the only thing that has to
+//! tell those apart.
 
 pub mod manifest;
 pub mod stamp;

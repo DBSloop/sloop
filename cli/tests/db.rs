@@ -609,28 +609,29 @@ fn drop_refuses_a_typo_before_it_opens_a_connection() {
     assert!(written(&sandbox).contains("[databases.orders]"));
 }
 
-/// The safety backup is the default, and `--no-backup` is the only way past it.
+/// **There is no flag that skips the typing.** Not `--yes`, not `--force`, and there is no
+/// longer a `--no-backup` to hide behind either: the owner settled on 2026-09-16 that a drop
+/// keeps nothing, so the only way through is the database's own name.
 ///
-/// Checked here on the shape of the refusal rather than on a real drop: with nothing
-/// listening, the run that would have backed up fails at the connection and the one that
-/// would not still fails at the connection — so what this pins is that neither of them
-/// found a way to skip the typing.
+/// Checked on the shape of the refusal rather than on a real drop: with nothing listening,
+/// every one of these fails before a socket would have opened, which is the point.
 #[test]
-fn drop_needs_the_name_whether_or_not_it_is_backing_up() {
+fn drop_needs_the_name_and_no_flag_stands_in_for_it() {
     let sandbox = Sandbox::new("db-drop-flags");
     registered(&sandbox, "orders", "postgres://app@127.0.0.1:1/orders");
 
-    // There is deliberately no flag that means "yes, whichever database that was".
-    sandbox
-        .sloop(&["db", "drop", "orders", "--no-backup"])
-        .expect_code(2)
-        .expect_said("--confirm orders");
-    sandbox
-        .sloop(&["db", "drop", "orders", "--yes"])
-        .expect_code(2);
-    sandbox
-        .sloop(&["db", "drop", "orders", "-y"])
-        .expect_code(2);
+    for flags in [
+        vec!["db", "drop", "orders"],
+        vec!["db", "drop", "orders", "--yes"],
+        vec!["db", "drop", "orders", "-y"],
+        vec!["db", "drop", "orders", "--force"],
+        vec!["db", "drop", "orders", "-y", "--force"],
+    ] {
+        sandbox
+            .sloop(&flags)
+            .expect_code(2)
+            .expect_said("--confirm orders");
+    }
 
     // `--confirm` correct, and the password route satisfied: it gets as far as the
     // connection and fails there, which is how we know the confirmation was accepted and
@@ -665,7 +666,7 @@ fn the_two_commands_say_which_is_which() {
         .expect_code(0)
         .expect_said("destroys a database on the server")
         .expect_said("not `db remove`")
-        .expect_said("--no-backup");
+        .expect_said("cannot be undone");
 
     sandbox
         .sloop(&["db", "remove", "--help"])
