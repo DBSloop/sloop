@@ -84,7 +84,7 @@ fn a_real_copy_is_verified_and_each_way_of_breaking_it_is_told_apart() {
 
     // --- take a real copy -------------------------------------------------------------
     let dump = cluster.root.join("verify.dump");
-    adapter.dump(&from, &dump).expect("dumping the source");
+    adapter.dump(&from, &dump, &[]).expect("dumping the source");
     adapter.restore(&into, &dump).expect("restoring the copy");
 
     // --- what a command calls, in whatever mode this shell asked for --------------------

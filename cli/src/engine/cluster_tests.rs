@@ -555,7 +555,7 @@ fn a_dump_by_one_role_restores_under_another_and_the_counts_match() {
     // --- dump, as alpha --------------------------------------------------------------
     let dump_path = cluster.root.join("source.dump");
     let summary = adapter
-        .dump(&source_target, &dump_path)
+        .dump(&source_target, &dump_path, &[])
         .expect("dumping as alpha");
     assert!(summary.bytes > 0, "the dump is empty");
     assert!(dump_path.is_file());
@@ -621,7 +621,7 @@ fn the_failures_are_told_apart_and_carry_the_right_codes() {
         Postgres::new(cluster.tools()).pretending_to_be(Version::new(server.version.major - 1, 0));
     let dump_path = cluster.root.join("never-written.dump");
     let failure = old
-        .dump(&source.target(&right), &dump_path)
+        .dump(&source.target(&right), &dump_path, &[])
         .expect_err("an old pg_dump must be refused");
 
     assert_eq!(failure.exit().code(), 2, "{failure:?}");
@@ -709,7 +709,7 @@ fn the_reported_minimum_is_exactly_what_a_dump_needs() {
     // --- before: the dump fails, and the report says why ----------------------------
     let dump = cluster.root.join("gamma-before.dump");
     assert!(
-        adapter.dump(&target, &dump).is_err(),
+        adapter.dump(&target, &dump, &[]).is_err(),
         "a role with only CONNECT dumped a database it cannot read"
     );
 
@@ -782,7 +782,7 @@ fn the_reported_minimum_is_exactly_what_a_dump_needs() {
     );
 
     let summary = adapter
-        .dump(&target, &dump)
+        .dump(&target, &dump, &[])
         .expect("the reported minimum did not actually let the role dump");
     assert!(summary.bytes > 0, "the dump is empty");
 

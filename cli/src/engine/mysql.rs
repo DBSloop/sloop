@@ -869,7 +869,7 @@ impl Adapter for MysqlFamily {
             .collect())
     }
 
-    fn dump_into(&self, target: &Target<'_>, sink: &mut dyn Write) -> Outcome<()> {
+    fn dump_into(&self, target: &Target<'_>, sink: &mut dyn Write, only: &[Table]) -> Outcome<()> {
         // Before anything is written: is this the engine it was registered as?
         self.probe(target)?;
 
@@ -879,20 +879,27 @@ impl Adapter for MysqlFamily {
             // The four the product asks for. `--single-transaction` is also what keeps this
             // a read: the alternative, `--lock-tables`, takes locks on the source.
             .arg("--single-transaction")
-            .arg("--routines")
             .arg("--triggers")
-            .arg("--events")
             // A BLOB written as hex cannot be mangled by whatever charset the text around
             // it is in.
             .arg("--hex-blob");
+
+        // **Routines and events belong to a database, not to a table.** Asking for them
+        // alongside a list of tables makes `mysqldump` refuse, and a scoped dump has no
+        // business carrying them anyway.
+        if only.is_empty() {
+            command.arg("--routines").arg("--events");
+        }
 
         // Whichever of `DUMP_OPTIONS` this build takes.
         command.args(&self.flags().dump);
 
         // One database, named positionally and without `--databases`, so the dump carries
         // no `CREATE DATABASE` and no `USE`. What it restores into is then the restore's
-        // decision — which is what lets a backup of `app` land in `app_staging`.
+        // decision — which is what lets a backup of `app` land in `app_staging`. Tables, when
+        // there are any, follow it — that is `mysqldump`'s own word order.
         command.arg(target.database);
+        command.args(only.iter().map(|table| table.name.clone()));
 
         self.run_the_dump(command, target, sink)
     }
@@ -1021,6 +1028,33 @@ impl Adapter for MysqlFamily {
 
     fn copy_into(&self, source: &Target<'_>, destination: &Target<'_>) -> Outcome<()> {
         self.stream_a_dump(source, destination, &[], &[])
+    }
+
+    fn copy_tables_into(
+        &self,
+        source: &Target<'_>,
+        destination: &Target<'_>,
+        only: &[Table],
+    ) -> Outcome<()> {
+        let named: Vec<String> = only.iter().map(|table| table.name.clone()).collect();
+        self.stream_a_dump(source, destination, &[], &named)
+    }
+
+    fn drop_tables(&self, target: &Target<'_>, tables: &[Table]) -> Outcome<u64> {
+        let mut gone = 0;
+        for table in tables {
+            self.query(
+                target,
+                &format!("DROP TABLE IF EXISTS {}", quote_identifier(&table.name)),
+            )
+            .map_err(|failure| {
+                failure.at(Exit::Restore).hint(
+                    "something outside this list may still point at it. Name that table too,                      or mirror the whole database",
+                )
+            })?;
+            gone += 1;
+        }
+        Ok(gone)
     }
 
     fn shapes(&self, target: &Target<'_>) -> Outcome<Vec<TableShape>> {

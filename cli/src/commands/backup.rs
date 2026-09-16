@@ -460,7 +460,9 @@ fn write_everything(
     let file = match writing.sealed_to {
         Some(recipient) => {
             let sealed = crypt::sealed_name(&plain);
-            crypt::sealed_to(&sealed, recipient, |sink| adapter.dump_into(target, sink))?;
+            crypt::sealed_to(&sealed, recipient, |sink| {
+                adapter.dump_into(target, sink, &[])
+            })?;
             sealed
         }
         None => plain,

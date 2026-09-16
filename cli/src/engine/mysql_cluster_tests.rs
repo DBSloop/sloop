@@ -934,7 +934,7 @@ fn a_round_trip_keeps_the_schema(family: Family) {
     // --- dump, as alpha --------------------------------------------------------------
     let dump_path = server.root.join("source.sql");
     let summary = adapter
-        .dump(&source_target, &dump_path)
+        .dump(&source_target, &dump_path, &[])
         .expect("dumping as alpha");
     assert!(summary.bytes > 0, "the dump is empty");
     assert!(dump_path.is_file());
@@ -1170,7 +1170,7 @@ fn the_failures_are_told_apart(family: Family) {
     let mistaken = MysqlFamily::new(other, server.tools());
     let dump_path = server.root.join("never-written.sql");
     let failure = mistaken
-        .dump(&wrong_engine.target(&right), &dump_path)
+        .dump(&wrong_engine.target(&right), &dump_path, &[])
         .expect_err("a MariaDB adapter must not dump a MySQL server, or the other way");
     assert_eq!(failure.exit().code(), 2, "{failure:?}");
     assert!(

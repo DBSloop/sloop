@@ -225,3 +225,29 @@ fn the_help_says_the_destination_can_be_made() {
         .expect_said("The destination does not have to exist")
         .expect_said("The engine is not asked for");
 }
+
+/// **R15a.** `--table` is repeatable, takes a glob, and refuses a pattern that names nothing.
+/// What it does once it has a selection needs two live databases; what it refuses does not.
+#[test]
+fn table_narrows_a_mirror_and_says_so() {
+    let sandbox = with_a_source("mirror-scoped");
+
+    sandbox
+        .sloop(&["help", "mirror"])
+        .expect_code(0)
+        .expect_said("--table narrows it to some of the tables")
+        .expect_said("drops and recreates only the tables you named")
+        .expect_said("--with-references");
+
+    sandbox
+        .sloop(&["mirror", "--help"])
+        .expect_code(0)
+        .expect_said("--table <PATTERN>")
+        .expect_said("--with-references");
+
+    // `--with-references` says nothing on its own: it modifies a selection.
+    sandbox
+        .sloop(&["mirror", "live", "--to", "live", "--with-references"])
+        .expect_code(2)
+        .expect_said("--table <PATTERN>");
+}

@@ -644,7 +644,12 @@ impl Adapter for Postgres {
             .collect())
     }
 
-    fn dump_into(&self, target: &Target<'_>, sink: &mut dyn std::io::Write) -> Outcome<()> {
+    fn dump_into(
+        &self,
+        target: &Target<'_>,
+        sink: &mut dyn std::io::Write,
+        only: &[Table],
+    ) -> Outcome<()> {
         // Before anything is written: is this pg_dump even allowed to read that server?
         let server = self.probe(target)?;
         self.refuse_an_old_client(server.version)?;
@@ -663,6 +668,7 @@ impl Adapter for Postgres {
             // across is how a restore fails on a machine that never had them.
             .arg("--no-owner")
             .arg("--no-privileges")
+            .args(only.iter().map(table_pattern))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -831,6 +837,40 @@ impl Adapter for Postgres {
 
     fn copy_into(&self, source: &Target<'_>, destination: &Target<'_>) -> Outcome<()> {
         self.stream_a_dump(source, destination, &[])
+    }
+
+    fn copy_tables_into(
+        &self,
+        source: &Target<'_>,
+        destination: &Target<'_>,
+        only: &[Table],
+    ) -> Outcome<()> {
+        let named: Vec<String> = only.iter().map(table_pattern).collect();
+        let borrowed: Vec<&str> = named.iter().map(String::as_str).collect();
+        self.stream_a_dump(source, destination, &borrowed)
+    }
+
+    fn drop_tables(&self, target: &Target<'_>, tables: &[Table]) -> Outcome<u64> {
+        let mut gone = 0;
+        for table in tables {
+            // `IF EXISTS` rather than a look-up first: a scoped mirror into a destination
+            // that never had one of the named tables is an ordinary run, not a failure.
+            self.query(
+                target,
+                &format!(
+                    "DROP TABLE IF EXISTS {}.{}",
+                    quote_identifier(&table.schema),
+                    quote_identifier(&table.name)
+                ),
+            )
+            .map_err(|failure| {
+                failure.at(Exit::Restore).hint(
+                    "something outside this list may still point at it. Name that table too,                      or mirror the whole database",
+                )
+            })?;
+            gone += 1;
+        }
+        Ok(gone)
     }
 
     fn shapes(&self, target: &Target<'_>) -> Outcome<Vec<TableShape>> {
@@ -1408,6 +1448,20 @@ SELECT x.seq, x.next, setval(x.seq::regclass, x.next, false) \
        AND tn.nspname NOT LIKE 'pg\\_%'\
   ) x \
  ORDER BY 1";
+
+/// A table as `pg_dump --table` wants it.
+///
+/// **Quoted, because the argument is a pattern.** Unquoted, `pg_dump` folds the name to lower
+/// case and reads `.`, `*` and `?` as syntax — so a table called `Orders` would match nothing
+/// and one called `a.b` would be read as a schema. Double quotes turn the whole thing into a
+/// literal, which is what a name that has already been resolved needs to be.
+fn table_pattern(table: &Table) -> String {
+    format!(
+        "--table={}.{}",
+        quote_identifier(&table.schema),
+        quote_identifier(&table.name)
+    )
+}
 
 /// Quote an identifier for PostgreSQL. Doubling the quotes is the whole rule.
 ///

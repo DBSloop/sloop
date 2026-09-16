@@ -131,6 +131,19 @@ impl Side {
         })
     }
 
+    /// The same side, with only the tables a scoped run is about.
+    ///
+    /// **`R15a`.** A `mirror --table audit_*` copies two tables into a destination that has
+    /// forty; comparing the source's forty against the destination's forty would be comparing
+    /// numbers that were never meant to agree, and comparing forty against two would report a
+    /// loss that did not happen. So both sides are narrowed to what the run touched, and the
+    /// verification means what it says again.
+    #[must_use]
+    pub fn narrowed_to(mut self, wanted: impl Fn(&crate::engine::Table) -> bool) -> Self {
+        self.counts.retain(|count| wanted(&count.table));
+        self
+    }
+
     /// Build one from what a backup's manifest recorded.
     ///
     /// **A restore has no live source to count.** What it has is the exact `count(*)` per

@@ -54,7 +54,7 @@ use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use crate::consent::{Consent, Destroying};
-use crate::engine::{Adapter, Target};
+use crate::engine::{Adapter, Table, Target};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::file::{Database, check_name};
@@ -65,6 +65,7 @@ use crate::verify::{self, Side};
 
 use super::backup::{describe_bytes, plural};
 use super::db;
+use super::tables::Selection;
 
 /// Everything `mirror` needs from the outside.
 pub struct Context<'a> {
@@ -90,6 +91,8 @@ pub struct Mirroring<'a> {
     pub safe: bool,
     /// The flags that only mean something when one is being made.
     pub new: New<'a>,
+    /// `--table` and `--with-references`: which tables this is about.
+    pub only: crate::commands::tables::Selection<'a>,
 }
 
 /// How to build a destination that does not exist yet — [`crate::cli::NewDestination`],
@@ -503,10 +506,23 @@ fn copy(
         ))
     );
 
+    // **A scoped mirror is a different promise, and it says so before it starts.** Whole, a
+    // mirror means the destination ends up identical to the source. Narrowed to some tables
+    // it cannot mean that any more: what it does is drop and recreate exactly the tables that
+    // were named and leave everything else in the destination alone.
+    let scope = Chosen::of(adapter.as_ref(), source_target, &asked.only)?;
+    scope.announce();
+
     // **Counted before the dump, on the source.** That is the moment the dump describes,
     // and it is the only number `verify` can call drift rather than loss afterwards.
     let mode = verify::Mode::from_environment();
-    let before = announce_both(adapter.as_ref(), source_target, destination_target, mode)?;
+    let before = announce_both(
+        adapter.as_ref(),
+        source_target,
+        destination_target,
+        mode,
+        &scope,
+    )?;
 
     if let Some(destroying) = destroying {
         if !context.consent.typed(destroying)?.granted() {
@@ -515,7 +531,7 @@ fn copy(
         }
     }
 
-    let cleared = adapter.clear_contents(destination_target)?;
+    let cleared = scope.clear(adapter.as_ref(), destination_target)?;
     if cleared > 0 {
         anstream::println!(
             "  {}",
@@ -529,11 +545,12 @@ fn copy(
             adapter.as_ref(),
             source_target,
             destination_target,
+            &scope,
         )?)
     } else {
         // Straight down an OS pipe between the two clients — no file, and nothing through
         // this process. See `Adapter::copy_into`.
-        adapter.copy_into(source_target, destination_target)?;
+        scope.copy(adapter.as_ref(), source_target, destination_target)?;
         None
     };
     anstream::println!(
@@ -547,7 +564,8 @@ fn copy(
     let comparison = verify::Comparison::of(
         mode,
         &before,
-        &Side::counted(adapter.as_ref(), destination_target, mode)?,
+        &Side::counted(adapter.as_ref(), destination_target, mode)?
+            .narrowed_to(|table| scope.covers(table)),
     );
     for line in comparison.describe() {
         anstream::println!("  {}", style::dim(&line));
@@ -573,6 +591,109 @@ fn copy(
     Ok(comparison.exit())
 }
 
+/// Which tables a mirror is about, and what that changes about what a mirror *means*.
+///
+/// **Whole, a mirror leaves the destination identical to the source.** Narrowed with
+/// `--table` it cannot mean that any more — everything the destination has that was not named
+/// stays exactly where it is — so the run says so in those words before anybody agrees to it.
+/// That sentence is the whole reason this is a type rather than an `Option<Vec<Table>>`
+/// threaded through four functions: the difference between the two runs is a promise, not a
+/// filter.
+enum Chosen {
+    /// Every table. `R14`, and the destination ends up identical.
+    Everything,
+    /// Only these, in the order they have to be dropped and loaded in.
+    Only(Vec<Table>),
+}
+
+impl Chosen {
+    /// Work out which tables were named, and refuse a selection that cannot be loaded.
+    fn of(adapter: &dyn Adapter, source: &Target<'_>, only: &Selection<'_>) -> Outcome<Self> {
+        if only.is_everything() {
+            return Ok(Self::Everything);
+        }
+
+        // **Parents first**, which matters twice over: they are loaded in this order and
+        // dropped in the reverse of it.
+        let chosen = only.choose(&adapter.shapes(source)?)?;
+        Ok(Self::Only(
+            super::sync::in_dependency_order(chosen)?
+                .into_iter()
+                .map(|shape| shape.table)
+                .collect(),
+        ))
+    }
+
+    /// The tables this is about, or nothing when it is about all of them.
+    fn named(&self) -> &[Table] {
+        match self {
+            Self::Everything => &[],
+            Self::Only(tables) => tables,
+        }
+    }
+
+    /// Say what this run is, in the words that make the promise it can keep.
+    fn announce(&self) {
+        let Self::Only(tables) = self else {
+            return;
+        };
+
+        anstream::println!(
+            "  {}",
+            style::dim(&format!(
+                "only {}: {}",
+                plural(count(tables.len()), "table"),
+                tables
+                    .iter()
+                    .map(Table::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        );
+        anstream::println!(
+            "  {}",
+            style::dim(
+                "those tables are dropped and recreated; everything else in the destination \
+                 is left exactly as it is, so it will not end up identical to the source"
+            )
+        );
+    }
+
+    /// Empty the destination, or drop just the tables that are about to come back.
+    fn clear(&self, adapter: &dyn Adapter, destination: &Target<'_>) -> Outcome<u64> {
+        match self {
+            Self::Everything => adapter.clear_contents(destination),
+            // **Reversed**, because a table cannot go while another still points at it, and
+            // `Chosen::of` put them in the order they load in.
+            Self::Only(tables) => {
+                let children_first: Vec<Table> = tables.iter().rev().cloned().collect();
+                adapter.drop_tables(destination, &children_first)
+            }
+        }
+    }
+
+    /// Copy the source across, whole or scoped.
+    fn copy(
+        &self,
+        adapter: &dyn Adapter,
+        source: &Target<'_>,
+        destination: &Target<'_>,
+    ) -> Outcome<()> {
+        match self {
+            Self::Everything => adapter.copy_into(source, destination),
+            Self::Only(tables) => adapter.copy_tables_into(source, destination, tables),
+        }
+    }
+
+    /// Does this table belong to what was named?
+    fn covers(&self, table: &Table) -> bool {
+        match self {
+            Self::Everything => true,
+            Self::Only(tables) => tables.contains(table),
+        }
+    }
+}
+
 /// Say what is being copied and what is in the way, and hand back the source's counts.
 ///
 /// **Both ends are probed before anything is asked for**, so a destination that cannot be
@@ -585,6 +706,7 @@ fn announce_both(
     source: &Target<'_>,
     destination: &Target<'_>,
     mode: verify::Mode,
+    scope: &Chosen,
 ) -> Outcome<Side> {
     let from = adapter.probe(source)?;
     let into = adapter.probe(destination)?;
@@ -596,7 +718,10 @@ fn announce_both(
         ))
     );
 
-    let before = Side::counted(adapter, source, mode)?;
+    // **Counted over what is being copied, not over the database.** A scoped run that
+    // reported the source's whole row count and then the destination's would be comparing two
+    // numbers that were never meant to match.
+    let before = Side::counted(adapter, source, mode)?.narrowed_to(|table| scope.covers(table));
     let rows: u64 = before.counts.iter().map(|count| count.rows).sum();
     anstream::println!(
         "  {}",
@@ -607,7 +732,7 @@ fn announce_both(
         ))
     );
 
-    announce_destination(adapter, destination);
+    announce_destination(adapter, destination, scope);
 
     Ok(before)
 }
@@ -622,6 +747,7 @@ fn through_a_file(
     adapter: &dyn Adapter,
     source: &Target<'_>,
     destination: &Target<'_>,
+    scope: &Chosen,
 ) -> Outcome<PathBuf> {
     let directory = std::env::temp_dir().join(format!(
         "sloop-mirror-{}-{}",
@@ -645,7 +771,7 @@ fn through_a_file(
         ))
     );
 
-    let written = adapter.dump(source, &dump);
+    let written = adapter.dump(source, &dump, scope.named());
     let summary = match written {
         Ok(summary) => summary,
         Err(failure) => {
@@ -789,11 +915,16 @@ pub(super) fn secret_for(
 }
 
 /// Say what is in the destination now, before the question rather than after it.
-fn announce_destination(adapter: &dyn Adapter, target: &Target<'_>) {
+fn announce_destination(adapter: &dyn Adapter, target: &Target<'_>, scope: &Chosen) {
     // Best effort: a role that cannot count is about to find that out from the clearing,
     // and refusing to mirror because the tables could not be listed would be the wrong way
     // round.
-    let existing = adapter.row_counts(target).unwrap_or_default();
+    let existing: Vec<crate::engine::TableCount> = adapter
+        .row_counts(target)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|count| scope.covers(&count.table))
+        .collect();
     if existing.is_empty() {
         anstream::println!("  {}", style::dim("the destination is empty"));
         return;

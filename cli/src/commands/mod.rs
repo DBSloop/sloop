@@ -9,6 +9,7 @@ pub mod key;
 pub mod mirror;
 pub mod restore;
 pub mod sync;
+pub mod tables;
 
 use std::path::Path;
 

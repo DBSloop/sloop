@@ -50,6 +50,7 @@ use crate::style;
 
 use super::backup::{describe_bytes, plural};
 use super::mirror::{self, Destination, New};
+use super::tables::Selection;
 
 /// Everything `sync` needs from the outside.
 pub struct Context<'a> {
@@ -75,6 +76,8 @@ pub struct Syncing<'a> {
     pub safe: bool,
     /// The flags that only mean something when one is being made.
     pub new: New<'a>,
+    /// `--table` and `--with-references`: which tables this is about.
+    pub only: crate::commands::tables::Selection<'a>,
 }
 
 /// Merge `source` into a destination — making the destination first, if asked to.
@@ -251,8 +254,8 @@ fn merge(
     // **The plan is made and printed before anything is asked for.** What will be merged,
     // in what order, and what will not be — so the question somebody answers is a question
     // about work they have already seen described.
-    let plan = Plan::of(adapter.as_ref(), source_target)?;
-    plan.announce();
+    let plan = Plan::of(adapter.as_ref(), source_target, &asked.only)?;
+    plan.announce(&asked.only);
 
     if plan.merging.is_empty() {
         anstream::println!("{}", style::dim("nothing to merge."));
@@ -311,7 +314,7 @@ fn carry_out(
     // `--safe`: a dump of the source taken before anything is written, so a merge that dies
     // halfway can be replayed into the destination by hand. Deleted once the counts agree.
     let kept = if safe {
-        Some(net(adapter, source)?)
+        Some(net(adapter, source, &plan.named())?)
     } else {
         None
     };
@@ -371,29 +374,60 @@ struct Plan {
     merging: Vec<TableShape>,
     /// The tables with no primary key, which cannot be merged.
     skipping: Vec<Table>,
+    /// Whether this plan covers the whole database, which is what an empty table list means
+    /// to an adapter.
+    whole: bool,
 }
 
 impl Plan {
-    /// Read the source's shape and put its tables in an order that can actually be loaded.
-    fn of(adapter: &dyn Adapter, source: &Target<'_>) -> Outcome<Self> {
-        let shapes = adapter.shapes(source)?;
+    /// Read the source's shape, cut it down to what was named, and put what is left in an
+    /// order that can actually be loaded.
+    ///
+    /// **`--table` is applied before the primary-key filter**, so a table that was named and
+    /// then skipped for having no key is *named* in the skipping list rather than silently
+    /// absent. Somebody who asked for a table by name is owed a sentence about why it is not
+    /// coming.
+    fn of(adapter: &dyn Adapter, source: &Target<'_>, only: &Selection<'_>) -> Outcome<Self> {
+        let shapes = only.choose(&adapter.shapes(source)?)?;
         let (mergeable, skipping): (Vec<TableShape>, Vec<TableShape>) = shapes
             .into_iter()
             .partition(|shape| !shape.primary_key.is_empty());
 
         Ok(Self {
+            whole: only.is_everything() && skipping.is_empty(),
             merging: in_dependency_order(mergeable)?,
             skipping: skipping.into_iter().map(|shape| shape.table).collect(),
         })
     }
 
+    /// The tables this plan will merge, for a `--safe` dump that should cover them and no
+    /// more.
+    ///
+    /// Empty when every table is in the plan, because that is what the adapters read as "the
+    /// whole database" — and a whole-database dump is cheaper than naming two hundred tables
+    /// on a command line.
+    fn named(&self) -> Vec<Table> {
+        if self.whole {
+            return Vec::new();
+        }
+        self.merging
+            .iter()
+            .map(|shape| shape.table.clone())
+            .collect()
+    }
+
     /// Say what is about to happen, and what is not.
-    fn announce(&self) {
+    fn announce(&self, only: &Selection<'_>) {
         anstream::println!(
             "  {}",
             style::dim(&format!(
-                "merging {}, parents first",
-                plural(count(self.merging.len()), "table")
+                "merging {}{}, parents first",
+                plural(count(self.merging.len()), "table"),
+                if only.is_everything() {
+                    ""
+                } else {
+                    " of the ones you named"
+                }
             ))
         );
 
@@ -497,7 +531,7 @@ impl Shaped {
 /// A reference to a table that is not in the set at all is ignored rather than refused: a
 /// foreign key pointing at a table sloop is not copying cannot constrain the order of the
 /// ones it is.
-fn in_dependency_order(mut shapes: Vec<TableShape>) -> Outcome<Vec<TableShape>> {
+pub(super) fn in_dependency_order(mut shapes: Vec<TableShape>) -> Outcome<Vec<TableShape>> {
     let present: BTreeSet<Table> = shapes.iter().map(|shape| shape.table.clone()).collect();
     let mut waiting_for: BTreeMap<Table, BTreeSet<Table>> = shapes
         .iter()
@@ -662,7 +696,7 @@ fn report(merged: &[Merged]) -> Exit {
 /// The cost is stated where somebody can act on it: for as long as the merge runs there is
 /// an **unencrypted** dump of the source on this machine's disk. That is the trade the flag
 /// is asking for, and it goes the moment the counts agree.
-fn net(adapter: &dyn Adapter, source: &Target<'_>) -> Outcome<PathBuf> {
+fn net(adapter: &dyn Adapter, source: &Target<'_>, only: &[Table]) -> Outcome<PathBuf> {
     let directory = std::env::temp_dir().join(format!(
         "sloop-sync-{}-{}",
         std::process::id(),
@@ -685,7 +719,7 @@ fn net(adapter: &dyn Adapter, source: &Target<'_>) -> Outcome<PathBuf> {
         ))
     );
 
-    match adapter.dump(source, &dump) {
+    match adapter.dump(source, &dump, only) {
         Ok(summary) => {
             anstream::println!(
                 "  {}",

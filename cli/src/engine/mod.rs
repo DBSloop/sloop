@@ -495,7 +495,14 @@ pub trait Adapter {
     ///
     /// Anything the caller wants buffered, the caller buffers: an adapter writes what the
     /// dump program gave it.
-    fn dump_into(&self, target: &Target<'_>, sink: &mut dyn std::io::Write) -> Outcome<()>;
+    /// `only` narrows it to those tables; empty is the whole database. A scoped `mirror
+    /// --safe` has no business writing a dump of two hundred tables to protect a copy of two.
+    fn dump_into(
+        &self,
+        target: &Target<'_>,
+        sink: &mut dyn std::io::Write,
+        only: &[Table],
+    ) -> Outcome<()>;
 
     /// Write a dump of `target` to the file `to`.
     ///
@@ -503,7 +510,7 @@ pub trait Adapter {
     /// the same job whichever engine produced it — and because the two properties that
     /// matter are easy to lose in a second copy: an empty dump is a failure, and a dump
     /// that failed leaves no file behind for somebody to find later and trust.
-    fn dump(&self, target: &Target<'_>, to: &Path) -> Outcome<DumpSummary> {
+    fn dump(&self, target: &Target<'_>, to: &Path, only: &[Table]) -> Outcome<DumpSummary> {
         use std::io::Write as _;
 
         if let Some(parent) = to.parent().filter(|parent| !parent.as_os_str().is_empty()) {
@@ -526,7 +533,7 @@ pub trait Adapter {
                 )
             })?;
             let mut sink = std::io::BufWriter::with_capacity(256 * 1024, file);
-            self.dump_into(target, &mut sink)?;
+            self.dump_into(target, &mut sink, only)?;
             sink.flush().map_err(|error| {
                 Failure::new(
                     Exit::Dump,
@@ -621,6 +628,29 @@ pub trait Adapter {
         destination: &Target<'_>,
         only: &[Table],
     ) -> Outcome<()>;
+
+    /// Copy these tables — shape and rows — from `source` into `destination`.
+    ///
+    /// **What a scoped `mirror` restores**, once the same tables have been dropped there. An
+    /// empty list would mean the whole database, which is [`Adapter::copy_into`]'s job, so
+    /// callers pass what they mean.
+    fn copy_tables_into(
+        &self,
+        source: &Target<'_>,
+        destination: &Target<'_>,
+        only: &[Table],
+    ) -> Outcome<()>;
+
+    /// Drop these tables on `target`, in the order given, and say how many went.
+    ///
+    /// **Children first, and that is the caller's ordering to get right** — a table cannot go
+    /// while something still points at it. Nothing is cascaded: a drop that fails because a
+    /// table *outside* this list references one inside it is a refusal worth hearing, and
+    /// `CASCADE` would answer it by silently dropping a constraint from a table nobody named.
+    ///
+    /// A table that is not there is not an error. A scoped mirror into a destination that
+    /// never had one of the named tables is an ordinary run.
+    fn drop_tables(&self, target: &Target<'_>, tables: &[Table]) -> Outcome<u64>;
 
     /// The shape of every table: its columns, its primary key, and what it points at.
     ///

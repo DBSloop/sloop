@@ -229,3 +229,26 @@ fn the_creating_flags_only_mean_something_under_create() {
         .expect_code(2)
         .expect_said("cannot be used with");
 }
+
+/// **R15a.** `sync` takes the same `--table` on the same terms.
+#[test]
+fn table_narrows_a_sync_on_the_same_terms() {
+    let sandbox = with_two("sync-scoped");
+
+    sandbox
+        .sloop(&["help", "sync"])
+        .expect_code(0)
+        .expect_said("--table narrows it to some of the tables")
+        .expect_said("--with-references")
+        .expect_said("keep their order among themselves");
+
+    sandbox
+        .sloop(&["sync", "--help"])
+        .expect_code(0)
+        .expect_said("--table <PATTERN>");
+
+    sandbox
+        .sloop(&["sync", "live", "--to", "staging", "--with-references"])
+        .expect_code(2)
+        .expect_said("--table <PATTERN>");
+}

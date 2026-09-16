@@ -156,6 +156,16 @@ pub enum Command {
         #[command(flatten)]
         new: NewDestination,
 
+        /// Only this table. Repeatable, schema-qualified, and it takes a glob.
+        ///
+        /// `--table orders --table audit_*` or `--table public.audit_*`. A glob, never a
+        /// regex: `*` is any run of characters and `?` is one. Left out, every table goes.
+        #[arg(long, value_name = "PATTERN")]
+        table: Vec<String>,
+
+        /// Bring in the tables the named ones point at, rather than refusing without them.
+        #[arg(long, requires = "table")]
+        with_references: bool,
         /// Dump to a file first, so a copy that fails can be retried.
         ///
         /// Off by default: a copy is not a backup and leaves nothing behind. While the copy
@@ -185,6 +195,16 @@ pub enum Command {
         #[command(flatten)]
         new: NewDestination,
 
+        /// Only this table. Repeatable, schema-qualified, and it takes a glob.
+        ///
+        /// `--table orders --table audit_*` or `--table public.audit_*`. A glob, never a
+        /// regex: `*` is any run of characters and `?` is one. Left out, every table goes.
+        #[arg(long, value_name = "PATTERN")]
+        table: Vec<String>,
+
+        /// Bring in the tables the named ones point at, rather than refusing without them.
+        #[arg(long, requires = "table")]
+        with_references: bool,
         /// Dump the source to a file first, so a merge that fails can be replayed.
         ///
         /// Off by default: a copy is not a backup and leaves nothing behind. While the merge
@@ -872,6 +892,14 @@ password is generated and filed where this machine keeps secrets, exactly as
 `sloop db create` does it — and the new database is registered, so the next command is
 `sloop backup staging`.
 
+--table narrows it to some of the tables, repeatable and schema-qualified, with a glob
+like `audit_*`. Scoped that way a mirror no longer means the destination ends up
+identical: it drops and recreates only the tables you named and leaves the rest alone,
+and it says so before it starts. A table named without the tables its foreign keys point
+at is refused with those named; --with-references brings them in instead.
+
+  sloop mirror live --to staging --table audit_* --table public.sessions
+
 Mirroring a database over itself is refused — on host, port and database together, and
 localhost counts as 127.0.0.1.
 
@@ -905,6 +933,11 @@ that owns it, and the grants that make that user able to use it — and then mer
 A merge into a database that was made a moment ago is a copy, and the numbers say so.
 
   sloop sync live --create staging
+
+--table narrows it to some of the tables, on the same terms `mirror` uses — repeatable,
+schema-qualified, a glob rather than a regex, and refused for a table whose parents are
+not in the list unless --with-references brings them in. The tables that are merged keep
+their order among themselves.
 
 The source is only ever read. Not one statement sloop sends to it changes anything.
 

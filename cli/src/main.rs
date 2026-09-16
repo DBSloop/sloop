@@ -159,6 +159,8 @@ fn dispatch(cli: &Cli, world: World<'_>, command: &Command) -> Outcome<Exit> {
         to,
         create,
         new,
+        table,
+        with_references,
         safe,
     }) = &cli.command
     {
@@ -170,6 +172,10 @@ fn dispatch(cli: &Cli, world: World<'_>, command: &Command) -> Outcome<Exit> {
                 create: create.as_deref(),
                 safe: *safe,
                 new: new.into(),
+                only: commands::tables::Selection {
+                    patterns: table,
+                    with_references: *with_references,
+                },
             },
         );
     }
@@ -179,6 +185,8 @@ fn dispatch(cli: &Cli, world: World<'_>, command: &Command) -> Outcome<Exit> {
         to,
         create,
         new,
+        table,
+        with_references,
         safe,
     }) = &cli.command
     {
@@ -190,6 +198,10 @@ fn dispatch(cli: &Cli, world: World<'_>, command: &Command) -> Outcome<Exit> {
                 create: create.as_deref(),
                 safe: *safe,
                 new: new.into(),
+                only: commands::tables::Selection {
+                    patterns: table,
+                    with_references: *with_references,
+                },
             },
         );
     }
