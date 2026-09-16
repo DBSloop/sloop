@@ -36,6 +36,85 @@ use crate::engine::Engine;
 /// The directory every backup lives under, inside a project or the global store.
 pub const DIR: &str = "backups";
 
+/// The one directory `--replace` keeps, at a path a script can name.
+///
+/// **A word, not a timestamp, and that is the whole feature.** `backups/postgres/app/latest`
+/// can be written into a cron line, a restore script or a monitoring check once and stay
+/// correct for ever, which is what somebody asking for `--replace` is asking for.
+pub const LATEST: &str = "latest";
+
+/// Where a replace is written before it is swapped in.
+pub const WRITING: &str = "latest.writing";
+
+/// Where the copy being displaced waits until the swap is finished.
+pub const DISPLACED: &str = "latest.previous";
+
+/// What a directory under a label is.
+///
+/// Four names, because a replace is a swap and a swap has a middle. Everything except
+/// [`Kind::Sequential`] is `--replace`'s, and the three of those are the live copy and the
+/// two halves of an interrupted swap — which exist on disk for microseconds normally, and
+/// until the next `--replace` run when a machine is turned off at the wrong moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// `<utc-timestamp>/` — a copy of its own, and what retention counts.
+    Sequential,
+    /// `latest/` — the one copy `--replace` keeps.
+    Replaced,
+    /// `latest.writing/` — a replace being written, or one that was killed.
+    Writing,
+    /// `latest.previous/` — the copy a swap displaced and did not finish removing.
+    Displaced,
+}
+
+impl Kind {
+    /// What a directory's name says it is, or `None` when sloop did not write it.
+    #[must_use]
+    pub fn of(name: &str) -> Option<Self> {
+        if stamp::Stamp::from_utc_path(name).is_some() {
+            return Some(Self::Sequential);
+        }
+        match name {
+            LATEST => Some(Self::Replaced),
+            WRITING => Some(Self::Writing),
+            DISPLACED => Some(Self::Displaced),
+            _ => None,
+        }
+    }
+
+    /// Is this one of `--replace`'s, rather than a copy of its own?
+    ///
+    /// Retention skips every one of them: a label that keeps exactly one copy at a fixed
+    /// path has nothing for "keep the newest seven" to mean, and the two transient names
+    /// are the next `--replace` run's to tidy, not a prune's to delete.
+    #[must_use]
+    pub const fn is_replace(self) -> bool {
+        !matches!(self, Self::Sequential)
+    }
+
+    /// What a listing says about it, when there is anything to say.
+    #[must_use]
+    pub const fn note(self) -> Option<&'static str> {
+        match self {
+            Self::Sequential => None,
+            Self::Replaced => Some("replace"),
+            Self::Writing => Some("a replace that did not finish — the next one tidies it"),
+            Self::Displaced => {
+                Some("displaced by an interrupted replace — the next one puts it back")
+            }
+        }
+    }
+}
+
+/// Every backup of one label, whatever shape they are in.
+///
+/// Both modes write under here: `--sequential` adds a timestamped directory each run, and
+/// `--replace` keeps [`LATEST`] in the same place.
+#[must_use]
+pub fn label_dir(root: &Path, engine: Engine, label: &str) -> PathBuf {
+    root.join(DIR).join(engine.scheme()).join(sanitise(label))
+}
+
 /// Where a backup taken now would go.
 ///
 /// `label` is the name the database is registered under rather than its name on the
@@ -43,10 +122,7 @@ pub const DIR: &str = "backups";
 /// they chose.
 #[must_use]
 pub fn directory_for(root: &Path, engine: Engine, label: &str, taken: stamp::Stamp) -> PathBuf {
-    root.join(DIR)
-        .join(engine.scheme())
-        .join(sanitise(label))
-        .join(taken.utc_path())
+    label_dir(root, engine, label).join(taken.utc_path())
 }
 
 /// The dump file inside a backup directory.

@@ -42,7 +42,7 @@ use std::time::Instant;
 
 use crate::backup::manifest::{self, Described, Manifest};
 use crate::backup::stamp::Stamp;
-use crate::backup::{directory_for, dump_file};
+use crate::backup::{self, directory_for, dump_file, store};
 use crate::crypt::{self, PublicKey};
 use crate::engine::{Adapter, ServerInfo, TableCount, Target};
 use crate::exit::Exit;
@@ -101,7 +101,7 @@ impl Taken {
 }
 
 /// Back up one database, or every one of them.
-pub fn run(context: &mut Context<'_>, name: Option<&str>, all: bool) -> Outcome<Exit> {
+pub fn run(context: &mut Context<'_>, name: Option<&str>, all: bool, mode: Mode) -> Outcome<Exit> {
     match (name, all) {
         (Some(name), false) => {
             let (scope, engine) = {
@@ -113,13 +113,21 @@ pub fn run(context: &mut Context<'_>, name: Option<&str>, all: bool) -> Outcome<
             let inventory = Inventory::for_engine(engine, &fetched(context));
 
             let (_, database) = context.registries.find(name)?;
-            let taken = one(context, &inventory, sealing.as_ref(), scope, name, database)?;
+            let taken = one(
+                context,
+                &inventory,
+                sealing.as_ref(),
+                scope,
+                name,
+                database,
+                mode,
+            )?;
             for line in taken.describe() {
                 anstream::println!("  {}", style::dim(&line));
             }
             Ok(Exit::Success)
         }
-        (None, true) => every(context),
+        (None, true) => every(context, mode),
         // clap refuses both together, so this is only reachable if that ever changes.
         (Some(_), true) => Err(
             Failure::usage("--all backs up everything, so it takes no name")
@@ -132,7 +140,7 @@ pub fn run(context: &mut Context<'_>, name: Option<&str>, all: bool) -> Outcome<
 }
 
 /// Every registered database, whatever happens to any one of them.
-fn every(context: &mut Context<'_>) -> Outcome<Exit> {
+fn every(context: &mut Context<'_>, mode: Mode) -> Outcome<Exit> {
     let registered = context.registries.len();
     if registered == 0 {
         return Err(Failure::usage(format!(
@@ -172,7 +180,7 @@ fn every(context: &mut Context<'_>) -> Outcome<Exit> {
             anstream::println!();
         }
         let sealed_to = sealing.get(scope).and_then(Option::as_ref);
-        match one(context, &inventory, sealed_to, *scope, name, database) {
+        match one(context, &inventory, sealed_to, *scope, name, database, mode) {
             Ok(taken) => {
                 done += 1;
                 for line in taken.describe() {
@@ -236,6 +244,7 @@ fn one(
     scope: Scope,
     name: &str,
     database: &Database,
+    mode: Mode,
 ) -> Outcome<Taken> {
     let key = database.credential_key();
     anstream::println!("{}  {}", style::paint(name), style::dim(&key));
@@ -280,8 +289,7 @@ fn one(
     );
 
     let taken = Stamp::now();
-    let directory = directory_for(&root, database.engine, name, taken);
-    refuse_to_overwrite(&directory, name)?;
+    let (directory, swap_into) = destination(&root, database.engine, name, taken, mode)?;
 
     let existed = directory.is_dir();
     std::fs::create_dir_all(&directory).map_err(|error| {
@@ -310,19 +318,87 @@ fn one(
     );
 
     match outcome {
-        Ok(manifest) => Ok(Taken {
-            directory,
-            manifest,
-        }),
+        Ok(manifest) => {
+            // **The swap is the last thing that happens, and only now.** Everything above
+            // wrote into `latest.writing`, so up to this line the previous copy is still
+            // the one at `latest` and still complete — which is what makes a `--replace`
+            // that is killed mid-dump cost nothing at all.
+            if let Some(latest) = swap_into {
+                store::swap_in(&directory, &latest)?;
+                return Ok(Taken {
+                    directory: latest,
+                    manifest,
+                });
+            }
+            Ok(Taken {
+                directory,
+                manifest,
+            })
+        }
         Err(failure) => {
             if !existed {
                 // Best effort, and only the directory this run created: it is named after
-                // a second that has passed, so nothing else can have put anything in it.
+                // a second that has passed, or it is this run's own `latest.writing`, so
+                // nothing else can have put anything in it.
                 let _ = std::fs::remove_dir_all(&directory);
             }
             Err(failure)
         }
     }
+}
+
+/// How a backup is written, and it is a flag rather than a mode the tool remembers.
+///
+/// A scheduled run honours both identically: there is no interactive half to either, and
+/// nothing about the choice is recorded in the registry. What a crontab says is what it
+/// gets, every time, which is the only way a retention policy and a cron line can be
+/// reasoned about together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    /// A new `<utc-timestamp>/` directory per run. The default, and `R9`'s behaviour.
+    #[default]
+    Sequential,
+    /// One directory per label, overwritten — `backups/<engine>/<label>/latest`.
+    Replace,
+}
+
+/// Where this run writes, and what it has to be swapped into afterwards.
+///
+/// Sequential returns the timestamped directory and nothing to swap. Replace returns
+/// `latest.writing` and the `latest` it will become — because a replace that writes straight
+/// into `latest` would spend the length of a dump with neither a finished backup nor a
+/// recoverable one on the disk.
+fn destination(
+    root: &Path,
+    engine: crate::engine::Engine,
+    name: &str,
+    taken: Stamp,
+    mode: Mode,
+) -> Outcome<(PathBuf, Option<PathBuf>)> {
+    if mode == Mode::Sequential {
+        let directory = directory_for(root, engine, name, taken);
+        refuse_to_overwrite(&directory, name)?;
+        return Ok((directory, None));
+    }
+
+    let label_dir = backup::label_dir(root, engine, name);
+    std::fs::create_dir_all(&label_dir).map_err(|error| {
+        Failure::new(
+            Exit::Dump,
+            format!("could not create {}: {error}", label_dir.display()),
+        )
+    })?;
+
+    // Anything left over from a run that was killed is put right before this one starts,
+    // and out loud: a directory that repaired itself in silence teaches nobody anything.
+    for note in store::recover_replace(&label_dir)? {
+        anstream::println!("  {}", style::dim(&note));
+    }
+
+    Ok((
+        label_dir.join(backup::WRITING),
+        Some(label_dir.join(backup::LATEST)),
+    ))
 }
 
 /// **A finished backup is never overwritten.**

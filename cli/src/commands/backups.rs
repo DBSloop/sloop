@@ -287,15 +287,16 @@ fn print_group(group: &[&Stored]) {
         return;
     };
 
-    let bytes: u64 = group.iter().map(|stored| stored.bytes()).sum();
+    // The same counting as the footer, for the same reason: a heading reading "2 backups"
+    // over a list where one of them is a half-written directory is the silent count again,
+    // one line higher up.
     anstream::println!(
         "{}  {}",
         style::paint(&first.label),
         style::dim(&format!(
-            "{} · {} · {}",
+            "{} · {}",
             first.engine,
-            plural(count(group.len()), "backup"),
-            describe_bytes(bytes)
+            Tally::of(group).clauses()
         ))
     );
 
@@ -320,7 +321,7 @@ fn when_of(stored: &Stored) -> String {
 fn line_for(stored: &Stored) -> String {
     let when = when_of(stored);
 
-    let detail = match (&stored.state, &stored.manifest) {
+    let mut detail = match (&stored.state, &stored.manifest) {
         (State::Complete, Some(manifest)) => format!(
             "{}{} · {}",
             describe_bytes(manifest.dump.bytes),
@@ -336,6 +337,14 @@ fn line_for(stored: &Stored) -> String {
             .unwrap_or("nothing readable in this directory")
             .to_owned(),
     };
+
+    // `--replace`'s directories are named for what they are rather than for when they were
+    // taken, so the line says which one it is looking at. Without it, two copies of a
+    // database would read identically and only one of them would be at `latest`.
+    if let Some(note) = stored.kind.note() {
+        detail.push_str(" · ");
+        detail.push_str(note);
+    }
 
     format!("{when}  {}", style::dim(&detail))
 }
@@ -417,13 +426,14 @@ fn preview(plans: &[(Scope, Plan)]) -> (usize, u64) {
         removing += plan.remove.len();
         total += plan.bytes();
 
-        // The ones worth naming rather than counting: something is wrong with them, or
-        // something may still be writing them. A half-written dump is reported, never
-        // silently passed over.
+        // The ones worth naming rather than counting: something is wrong with them,
+        // something may still be writing them, or retention does not apply to them at all.
+        // None of those may be passed over in silence — a prune that skipped a whole label
+        // without saying so is a retention policy nobody can trust.
         for (stored, held) in plan
             .held
             .iter()
-            .filter(|(_, held)| matches!(held, Held::Broken | Held::MaybeRunning))
+            .filter(|(_, held)| matches!(held, Held::Broken | Held::MaybeRunning | Held::Replaced))
         {
             // The held reason and nothing else. `line_for` would print what is wrong with
             // the directory as well, and two overlapping explanations of the same thing is
@@ -476,6 +486,13 @@ struct Tally {
 }
 
 impl Tally {
+    /// One group's counts, for the heading above it.
+    fn of(group: &[&Stored]) -> Self {
+        let mut tally = Self::default();
+        tally.add(group);
+        tally
+    }
+
     /// Count a printed group.
     fn add(&mut self, group: &[&Stored]) {
         for stored in group {
@@ -491,25 +508,31 @@ impl Tally {
         }
     }
 
-    /// The line under the list.
-    fn summary(&self, check: bool) -> String {
+    /// What there is, in the words both the heading and the footer use.
+    fn clauses(&self) -> String {
         // Writing into a `String` cannot fail, and the alternative is an allocation per
         // clause for a line that is mostly one clause long.
         use std::fmt::Write as _;
 
-        let mut summary = format!(
+        let mut clauses = format!(
             "{}, {}",
             plural(count(self.complete), "backup"),
             describe_bytes(self.bytes)
         );
 
-        // clause for a line that is mostly one clause long.
         if self.damaged > 0 {
-            let _ = write!(summary, " · {} damaged", self.damaged);
+            let _ = write!(clauses, " · {} damaged", self.damaged);
         }
         if self.broken > 0 {
-            let _ = write!(summary, " · {} unfinished", self.broken);
+            let _ = write!(clauses, " · {} unfinished", self.broken);
         }
+
+        clauses
+    }
+
+    /// The line under the list.
+    fn summary(&self, check: bool) -> String {
+        let mut summary = self.clauses();
 
         summary.push_str(if check {
             " · every dump hashed"

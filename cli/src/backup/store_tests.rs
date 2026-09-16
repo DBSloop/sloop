@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::{Check, Found, GRACE, Held, Policy, State, Stored, label_for, parse_age, plan, scan};
+use crate::backup::Kind;
 use crate::backup::stamp::Stamp;
 use crate::backup::{directory_for, dump_file, manifest};
 use crate::engine::Engine;
@@ -258,6 +259,7 @@ fn stored_at(label: &str, at: i64, state: State) -> Stored {
         engine: Engine::Postgres,
         label: label.to_owned(),
         directory: PathBuf::from(format!("/nowhere/{label}/{at}")),
+        kind: Kind::Sequential,
         taken: Stamp::from_unix_seconds(at),
         manifest: None,
         state,
@@ -533,4 +535,225 @@ fn an_age_refuses_what_it_cannot_mean_exactly() {
 fn a_filter_finds_the_directory_a_name_produced() {
     assert_eq!(label_for("my/app"), "my_app");
     assert_eq!(label_for("app"), "app");
+}
+
+// ---------------------------------------------------------------------------------------
+// --replace: the swap, and what an interrupted one leaves behind
+// ---------------------------------------------------------------------------------------
+
+use super::{recover_replace, swap_in};
+use crate::backup::{DISPLACED, LATEST, WRITING, label_dir};
+
+/// A label's directory, with `--replace`'s three names to hand.
+fn label(root: &Path) -> PathBuf {
+    label_dir(root, Engine::Postgres, "app")
+}
+
+/// A complete backup written straight into a named directory.
+fn complete_in(directory: &Path, contents: &[u8]) {
+    std::fs::create_dir_all(directory).expect("a directory");
+    std::fs::write(dump_file(directory), contents).expect("a dump");
+    manifest_for(directory, "app", contents, "dump");
+}
+
+#[test]
+fn a_replace_directory_is_read_as_a_backup_and_dated_by_its_manifest() {
+    let root = scratch("replace-read");
+    complete_in(&label(&root).join(LATEST), b"the latest dump");
+
+    let found = read(&root);
+
+    assert_eq!(found.backups.len(), 1);
+    assert!(found.strays.is_empty(), "`latest` is not a stray");
+    let stored = &found.backups[0];
+    assert_eq!(stored.kind, Kind::Replaced);
+    assert!(stored.is_complete());
+    // Its name is a word, so the moment comes from the manifest rather than the path.
+    assert_eq!(stored.taken.unix_seconds(), NOW);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// **The swap leaves exactly one directory.** That is the whole promise of `--replace`: a
+/// path a script can name, with one backup at it.
+#[test]
+fn a_swap_leaves_one_directory_and_the_newer_dump() {
+    let root = scratch("replace-swap");
+    let label = label(&root);
+    complete_in(&label.join(LATEST), b"the older dump");
+    complete_in(&label.join(WRITING), b"the newer dump");
+
+    swap_in(&label.join(WRITING), &label.join(LATEST)).expect("the swap");
+
+    let left: Vec<String> = std::fs::read_dir(&label)
+        .expect("the label directory")
+        .filter_map(std::result::Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    assert_eq!(left, vec![LATEST.to_owned()]);
+    assert_eq!(
+        std::fs::read(dump_file(&label.join(LATEST))).expect("the dump"),
+        b"the newer dump"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Killed mid-dump: `latest.writing` holds nothing usable, and the previous backup is
+/// untouched because nothing ever renamed it.
+#[test]
+fn a_replace_killed_mid_dump_leaves_the_previous_backup_complete() {
+    let root = scratch("replace-mid-dump");
+    let label = label(&root);
+    complete_in(&label.join(LATEST), b"the previous dump");
+    std::fs::create_dir_all(label.join(WRITING)).expect("a writing directory");
+    std::fs::write(dump_file(&label.join(WRITING)), b"half a du").expect("half a dump");
+
+    let notes = recover_replace(&label).expect("recovery");
+
+    assert!(
+        notes.iter().any(|note| note.contains("did not finish")),
+        "{notes:?} never said what it cleared"
+    );
+    assert!(
+        !label.join(WRITING).exists(),
+        "the half dump is still there"
+    );
+    let found = read(&root);
+    assert_eq!(found.backups.len(), 1);
+    assert!(found.backups[0].is_complete());
+    assert_eq!(
+        std::fs::read(dump_file(&label.join(LATEST))).expect("the dump"),
+        b"the previous dump"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Killed between the two renames, with the new backup already finished: there is no
+/// `latest` at all, and the swap is completed rather than thrown away.
+#[test]
+fn a_replace_killed_between_the_renames_finishes_the_swap() {
+    let root = scratch("replace-mid-swap");
+    let label = label(&root);
+    complete_in(&label.join(DISPLACED), b"the previous dump");
+    complete_in(&label.join(WRITING), b"the newer dump");
+
+    let notes = recover_replace(&label).expect("recovery");
+
+    assert!(
+        notes
+            .iter()
+            .any(|note| note.contains("finishing that swap")),
+        "{notes:?}"
+    );
+    assert_eq!(
+        std::fs::read(dump_file(&label.join(LATEST))).expect("the dump"),
+        b"the newer dump"
+    );
+    assert!(!label.join(DISPLACED).exists());
+    assert!(!label.join(WRITING).exists());
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Killed between the renames with the new one *not* finished: the displaced copy goes
+/// back, because a backup that exists beats a backup that was being written.
+#[test]
+fn an_interrupted_swap_puts_the_displaced_copy_back() {
+    let root = scratch("replace-restore");
+    let label = label(&root);
+    complete_in(&label.join(DISPLACED), b"the previous dump");
+    std::fs::create_dir_all(label.join(WRITING)).expect("a writing directory");
+    std::fs::write(dump_file(&label.join(WRITING)), b"half").expect("half a dump");
+
+    let notes = recover_replace(&label).expect("recovery");
+
+    assert!(
+        notes
+            .iter()
+            .any(|note| note.contains("putting the previous copy back")),
+        "{notes:?}"
+    );
+    assert_eq!(
+        std::fs::read(dump_file(&label.join(LATEST))).expect("the dump"),
+        b"the previous dump"
+    );
+    assert!(!label.join(WRITING).exists());
+    assert!(!label.join(DISPLACED).exists());
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Killed after the second rename: the new backup is in place and the displaced copy is
+/// just litter.
+#[test]
+fn a_displaced_copy_left_beside_a_good_latest_is_cleared() {
+    let root = scratch("replace-litter");
+    let label = label(&root);
+    complete_in(&label.join(LATEST), b"the newer dump");
+    complete_in(&label.join(DISPLACED), b"the previous dump");
+
+    let notes = recover_replace(&label).expect("recovery");
+
+    assert!(
+        notes.iter().any(|note| note.contains("displaced")),
+        "{notes:?}"
+    );
+    assert!(!label.join(DISPLACED).exists());
+    assert_eq!(read(&root).backups.len(), 1);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn recovery_on_a_label_that_has_never_been_replaced_does_nothing() {
+    let root = scratch("replace-clean");
+    let label = label(&root);
+    std::fs::create_dir_all(&label).expect("a label directory");
+    complete(&root, "app", NOW, b"a sequential dump");
+
+    assert!(recover_replace(&label).expect("recovery").is_empty());
+    assert_eq!(read(&root).backups.len(), 1);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// **Retention has nothing to say about `--replace`**, and says so rather than passing over
+/// it in silence.
+#[test]
+fn retention_holds_every_replace_directory_and_names_why() {
+    let mut backups = vec![
+        stored_at("app", NOW, State::Complete),
+        stored_at("app", NOW - 500 * DAY, State::Complete),
+    ];
+    for kind in [Kind::Replaced, Kind::Writing, Kind::Displaced] {
+        let mut one = stored_at("app", NOW - 500 * DAY, State::Complete);
+        one.kind = kind;
+        backups.push(one);
+    }
+
+    let decided = plan(
+        backups,
+        Stamp::from_unix_seconds(NOW),
+        &Policy {
+            keep: Some(1),
+            older_than: Some(Duration::from_secs(30 * 24 * 60 * 60)),
+            include_broken: true,
+        },
+    );
+
+    // Only the old sequential one goes.
+    assert_eq!(decided.remove.len(), 1);
+    assert_eq!(decided.remove[0].kind, Kind::Sequential);
+
+    let replaced: Vec<&Held> = decided
+        .held
+        .iter()
+        .filter(|(stored, _)| stored.kind.is_replace())
+        .map(|(_, why)| why)
+        .collect();
+    assert_eq!(replaced.len(), 3);
+    assert!(replaced.iter().all(|why| **why == Held::Replaced));
+    assert!(Held::Replaced.why().contains("fixed path"));
 }

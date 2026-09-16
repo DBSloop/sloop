@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use super::manifest::{self, Manifest};
 use super::stamp::Stamp;
-use super::{DIR, dump_file};
+use super::{DIR, DISPLACED, Kind, LATEST, WRITING, dump_file};
 use crate::crypt;
 use crate::engine::Engine;
 use crate::exit::Exit;
@@ -50,6 +50,8 @@ pub struct Stored {
     pub label: String,
     /// The directory itself.
     pub directory: PathBuf,
+    /// What its name says it is: a copy of its own, or one of `--replace`'s.
+    pub kind: Kind,
     /// When it was taken, read from the directory name, which is the only source a backup
     /// with no manifest has left.
     pub taken: Stamp,
@@ -162,9 +164,9 @@ pub fn scan(root: &Path, check: Check) -> Outcome<Found> {
             };
 
             for entry in children(&label_entry)? {
-                let Some(taken) = file_name(&entry)
+                let Some(kind) = file_name(&entry)
                     .filter(|_| entry.is_dir())
-                    .and_then(Stamp::from_utc_path)
+                    .and_then(Kind::of)
                 else {
                     found.strays.push(entry);
                     continue;
@@ -172,7 +174,7 @@ pub fn scan(root: &Path, check: Check) -> Outcome<Found> {
 
                 found
                     .backups
-                    .push(read_one(engine, label.clone(), entry, taken, check));
+                    .push(read_one(engine, label.clone(), entry, kind, check));
             }
         }
     }
@@ -195,21 +197,25 @@ pub fn scan(root: &Path, check: Check) -> Outcome<Found> {
 /// Never fails. Everything that can be wrong with a stored backup is a *finding* about that
 /// backup rather than a reason to abandon the listing — one unreadable manifest must not be
 /// what stops somebody seeing the other nine.
-fn read_one(
-    engine: Engine,
-    label: String,
-    directory: PathBuf,
-    taken: Stamp,
-    check: Check,
-) -> Stored {
+fn read_one(engine: Engine, label: String, directory: PathBuf, kind: Kind, check: Check) -> Stored {
     let mut stored = Stored {
         engine,
         label,
         directory,
-        taken,
+        kind,
+        // Corrected below for anything whose name is not the moment it was taken.
+        taken: Stamp::from_unix_seconds(0),
         manifest: None,
         state: State::Unfinished,
     };
+
+    if let Some(taken) = file_name(&stored.directory).and_then(Stamp::from_utc_path) {
+        stored.taken = taken;
+    } else if let Some(modified) = modified_at(&stored.directory) {
+        // `--replace`'s directories are named `latest`, so the disk is all they have until
+        // a manifest is read back below and overrides this with the real moment.
+        stored.taken = modified;
+    }
 
     if !manifest::completed(&stored.directory) {
         return stored;
@@ -222,6 +228,12 @@ fn read_one(
             return stored;
         }
     };
+
+    if kind.is_replace() {
+        // The manifest is the authority for a directory whose name is a word: it is where
+        // the moment, the offset and the clock that took it were written down.
+        stored.taken = Stamp::from_unix_seconds(manifest.taken.unix);
+    }
 
     stored.state = inspect_dump(&stored.directory, &manifest, check);
     stored.manifest = Some(manifest);
@@ -305,6 +317,8 @@ pub enum Held {
     Broken,
     /// Broken, but recent enough that it may be a backup being written right now.
     MaybeRunning,
+    /// One of `--replace`'s, which retention has nothing to say about.
+    Replaced,
 }
 
 impl Held {
@@ -316,6 +330,7 @@ impl Held {
             Self::Young => "not old enough",
             Self::Broken => "not a finished backup — --include-broken removes these",
             Self::MaybeRunning => "may still be being written — left alone",
+            Self::Replaced => "replace-mode: one copy at a fixed path, so retention skips it",
         }
     }
 }
@@ -355,6 +370,15 @@ pub fn plan(found: Vec<Stored>, now: Stamp, policy: &Policy) -> Plan {
     let mut kept_in_group: Vec<((Engine, String), usize)> = Vec::new();
 
     for stored in found {
+        // **Retention has nothing to say about `--replace`.** A label that keeps one copy at
+        // a fixed path cannot have a newest seven, and the two directories a swap passes
+        // through belong to the next `--replace` run, which repairs them. So all three are
+        // held, and the preview says which they are instead of passing over them in silence.
+        if stored.kind.is_replace() {
+            plan.held.push((stored, Held::Replaced));
+            continue;
+        }
+
         if !stored.is_complete() {
             // Broken, and possibly not broken at all: a dump still being written looks
             // exactly like one that was abandoned.
@@ -512,4 +536,118 @@ pub fn remove(stored: &Stored) -> Outcome<()> {
 #[must_use]
 pub fn label_for(name: &str) -> String {
     super::sanitise(name)
+}
+
+// ---------------------------------------------------------------------------------------
+// The replace swap
+// ---------------------------------------------------------------------------------------
+
+/// Put a label's `--replace` directories back in order before writing a new one.
+///
+/// **A swap has a middle, and a machine can be turned off in it.** Two renames stand between
+/// a finished write and `latest` pointing at it, so there are exactly four states to find on
+/// the way in, and each has one right answer:
+///
+/// | found | done |
+/// |---|---|
+/// | no `latest`, a finished `latest.writing` | the swap is completed — that *is* the new backup |
+/// | no `latest`, a `latest.previous` | the displaced copy goes back |
+/// | a `latest` and a `latest.previous` | the previous one was already replaced; it goes |
+/// | a `latest` and a `latest.writing` | an attempt that never finished; it goes |
+///
+/// The order matters: the first two can create `latest`, and the last two then tidy up
+/// behind them. What comes back are the lines worth printing, because a run that quietly
+/// repaired itself is a run nobody learns anything from.
+pub fn recover_replace(label_dir: &Path) -> Outcome<Vec<String>> {
+    let latest = label_dir.join(LATEST);
+    let writing = label_dir.join(WRITING);
+    let displaced = label_dir.join(DISPLACED);
+    let mut notes = Vec::new();
+
+    if !latest.is_dir() && manifest::completed(&writing) {
+        rename(&writing, &latest)?;
+        notes.push(
+            "a replace was interrupted after its manifest was written — finishing that swap"
+                .to_owned(),
+        );
+    } else if !latest.is_dir() && displaced.is_dir() {
+        rename(&displaced, &latest)?;
+        notes.push("a replace was interrupted — putting the previous copy back".to_owned());
+    }
+
+    if latest.is_dir() && displaced.is_dir() {
+        discard(&displaced)?;
+        notes.push("cleared the copy an earlier replace had displaced".to_owned());
+    }
+    if latest.is_dir() && writing.is_dir() {
+        discard(&writing)?;
+        notes.push("cleared a replace that did not finish".to_owned());
+    }
+
+    Ok(notes)
+}
+
+/// Make a finished write the label's `latest`, without a moment where there is neither.
+///
+/// **The previous copy is moved aside, not deleted.** `rename` onto an existing directory
+/// fails on Windows, so a swap is two renames — and between them the displaced copy is
+/// still whole under [`DISPLACED`], which is what makes an interrupted replace recoverable
+/// rather than a backup somebody used to have.
+pub fn swap_in(writing: &Path, latest: &Path) -> Outcome<()> {
+    let Some(label_dir) = latest.parent() else {
+        return Err(Failure::new(
+            Exit::Dump,
+            format!("{} has nowhere to be swapped into", writing.display()),
+        ));
+    };
+    let displaced = label_dir.join(DISPLACED);
+
+    if latest.is_dir() {
+        rename(latest, &displaced)?;
+    }
+    rename(writing, latest)?;
+    if displaced.is_dir() {
+        discard(&displaced)?;
+    }
+
+    Ok(())
+}
+
+/// Move a directory, with both paths in the error.
+fn rename(from: &Path, to: &Path) -> Outcome<()> {
+    std::fs::rename(from, to).map_err(|error| {
+        Failure::new(
+            Exit::Dump,
+            format!(
+                "could not move {} to {}: {error}",
+                from.display(),
+                to.display()
+            ),
+        )
+        .hint("nothing was lost — both are still where they were")
+    })
+}
+
+/// Remove a directory that is finished with.
+fn discard(directory: &Path) -> Outcome<()> {
+    std::fs::remove_dir_all(directory).map_err(|error| {
+        Failure::new(
+            Exit::Dump,
+            format!("could not remove {}: {error}", directory.display()),
+        )
+        .hint("the backup itself is fine; this is the copy it replaced")
+    })
+}
+
+/// When a directory was last written to.
+///
+/// The fallback for a directory whose name is a word rather than a moment, and only until
+/// its manifest has been read. A clock before 1970 or a filesystem with no timestamps gives
+/// `None`, and the caller keeps what it had.
+fn modified_at(directory: &Path) -> Option<Stamp> {
+    let modified = std::fs::metadata(directory).ok()?.modified().ok()?;
+    let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    i64::try_from(since.as_secs())
+        .ok()
+        .map(Stamp::from_unix_seconds)
 }

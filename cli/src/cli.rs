@@ -87,6 +87,14 @@ pub enum Command {
         /// Back up every registered database, and do not stop at the first failure.
         #[arg(long, conflicts_with = "name")]
         all: bool,
+
+        /// Keep every backup, in a directory named for the moment it was taken. The default.
+        #[arg(long, group = "how")]
+        sequential: bool,
+
+        /// Keep one backup per database, at `backups/<engine>/<name>/latest`.
+        #[arg(long, group = "how")]
+        replace: bool,
     },
 
     /// Inspect and prune stored backups.
@@ -250,7 +258,20 @@ rather than a backup.
 
 --all runs to the end whatever happens. It exits with the failures' own code when they
 agree on one — 3 when servers were unreachable, 4 when dumps failed — and 1 when they
-do not, which means read the output.";
+do not, which means read the output.
+
+Two ways to write one, and both behave the same way in a crontab:
+
+  sloop backup app                  a new directory per run, named for the moment
+  sloop backup app --replace        one directory, overwritten: .../app/latest
+
+--replace is for the operator who wants the newest copy at a path a script can name
+once and keep. The new dump is written beside the old one and swapped in only when it
+is finished, so a replace that is interrupted leaves the previous backup complete and
+restorable.
+
+Retention does not apply to --replace — one copy at a fixed path has no newest seven
+— and `sloop backups prune` says so rather than passing over it in silence.";
 
 /// The connection, field by field.
 ///

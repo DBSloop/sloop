@@ -107,13 +107,27 @@ fn run(cli: &Cli) -> Outcome<Exit> {
                 ));
             }
 
-            if let Some(Command::Backup { name, all }) = &cli.command {
+            if let Some(Command::Backup {
+                name,
+                all,
+                sequential: _,
+                replace,
+            }) = &cli.command
+            {
                 let mut context = commands::backup::Context {
                     registries,
                     global: &global,
                     password_command: cli.password_command.as_deref(),
                 };
-                return commands::backup::run(&mut context, name.as_deref(), *all);
+                // `--sequential` is the default, so it is read for what it says rather than
+                // for what it changes: a cron line that spells the mode out stays correct
+                // whatever a later release makes the default.
+                let mode = if *replace {
+                    commands::backup::Mode::Replace
+                } else {
+                    commands::backup::Mode::Sequential
+                };
+                return commands::backup::run(&mut context, name.as_deref(), *all, mode);
             }
 
             if let Some(Command::Backups { command }) = &cli.command {

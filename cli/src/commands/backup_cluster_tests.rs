@@ -15,7 +15,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{Context, Taken, refuse_to_overwrite, run};
+use super::{Context, Mode, Taken, refuse_to_overwrite, run};
 use crate::backup::manifest::{self, Manifest};
 use crate::crypt::PrivateKey;
 use crate::engine::Engine;
@@ -259,7 +259,8 @@ fn every_database_is_backed_up_and_a_broken_one_does_not_stop_the_rest() {
     };
 
     // --- --all, with one of the three unreachable ------------------------------------
-    let exit = run(&mut context, None, true).expect("--all reports rather than stops");
+    let exit =
+        run(&mut context, None, true, Mode::Sequential).expect("--all reports rather than stops");
     assert_eq!(
         exit,
         Exit::Connect,
@@ -296,7 +297,7 @@ fn every_database_is_backed_up_and_a_broken_one_does_not_stop_the_rest() {
     // Whether it *is* the same second depends on how fast this machine is, so both answers
     // are accepted; what is not accepted is the first backup being replaced. One database
     // by name is exercised end to end by the test below.
-    let again = run(&mut context, Some("orders"), false);
+    let again = run(&mut context, Some("orders"), false, Mode::Sequential);
     let after = stored(&store, "orders");
     match again {
         Ok(exit) => {
@@ -319,8 +320,8 @@ fn every_database_is_backed_up_and_a_broken_one_does_not_stop_the_rest() {
     );
 
     // --- an unknown name is usage, and nothing is written ------------------------------
-    let unknown =
-        run(&mut context, Some("nope"), false).expect_err("nothing is registered as nope");
+    let unknown = run(&mut context, Some("nope"), false, Mode::Sequential)
+        .expect_err("nothing is registered as nope");
     assert_eq!(unknown.exit(), Exit::Usage);
     assert!(stored(&store, "nope").is_empty());
 }
@@ -388,7 +389,7 @@ fn what_it_prints_is_in_local_time_and_names_where_the_backup_went() {
     };
 
     assert_eq!(
-        run(&mut context, Some("orders"), false).expect("backing it up"),
+        run(&mut context, Some("orders"), false, Mode::Sequential).expect("backing it up"),
         Exit::Success
     );
 
