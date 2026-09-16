@@ -50,7 +50,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::failure::Outcome;
+use crate::failure::{Failure, Outcome};
 use crate::secret::Secret;
 
 /// The engines. Three today; the shape of this module is what keeps a fourth cheap.
@@ -85,6 +85,26 @@ impl Engine {
             Self::Postgres => "postgres",
             Self::Mysql => "mysql",
             Self::Mariadb => "mariadb",
+        }
+    }
+
+    /// Read an engine from what somebody typed after `--engine`.
+    ///
+    /// The aliases are the names these engines are actually called in the wild, and
+    /// refusing `postgresql` because the canonical spelling here is `postgres` would be
+    /// pedantry that costs somebody a minute. `mariadb` is **not** an alias of `mysql`:
+    /// it is a separate adapter with a separate dump program, and quietly folding the two
+    /// together is how a MariaDB server gets dumped by MySQL's tools.
+    pub fn parse(input: &str) -> Outcome<Self> {
+        match input.trim().to_ascii_lowercase().as_str() {
+            "postgres" | "postgresql" | "pg" | "psql" => Ok(Self::Postgres),
+            "mysql" => Ok(Self::Mysql),
+            "mariadb" | "maria" => Ok(Self::Mariadb),
+            _ => Err(
+                Failure::usage(format!("{input} is not an engine sloop knows")).hint(
+                    "postgres, mysql or mariadb — and mariadb is its own engine, not an alias",
+                ),
+            ),
         }
     }
 }

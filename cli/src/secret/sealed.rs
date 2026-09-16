@@ -89,10 +89,24 @@ pub fn get(path: &Path, key: &str) -> Outcome<Secret> {
 }
 
 /// Store a password under `key`, rewriting the file.
-///
-/// Waits for R7's `db add` to call it. Present now because R3 has to prove the round trip.
-#[allow(dead_code)]
 pub fn put(path: &Path, key: &str, secret: &Secret) -> Outcome<()> {
+    rewrite(path, key, Some(secret))
+}
+
+/// Take a password out of the file.
+///
+/// A key that is not in there is not a failure: `db edit` calls this to clear the old key
+/// after moving a password, and a record whose password was never stored has nothing to
+/// clear. Reporting that as an error would make a successful edit look like a failed one.
+pub fn forget(path: &Path, key: &str) -> Outcome<()> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    rewrite(path, key, None)
+}
+
+/// Read the whole store, replace or drop one entry, and write it back.
+fn rewrite(path: &Path, key: &str, secret: Option<&Secret>) -> Outcome<()> {
     let passphrase = passphrase(true)?;
 
     let mut stored: Vec<(String, Secret)> = if path.is_file() {
@@ -108,7 +122,9 @@ pub fn put(path: &Path, key: &str, secret: &Secret) -> Outcome<()> {
     };
 
     stored.retain(|(name, _)| name != key);
-    stored.push((key.to_owned(), secret.clone()));
+    if let Some(secret) = secret {
+        stored.push((key.to_owned(), secret.clone()));
+    }
 
     let plaintext = encode(&stored);
     let sealed = seal(&plaintext, &passphrase)?;

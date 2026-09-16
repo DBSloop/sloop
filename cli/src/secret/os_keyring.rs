@@ -20,16 +20,14 @@ pub fn get(key: &str) -> Outcome<Secret> {
 }
 
 /// Store a password for `key`.
-///
-/// Nothing calls this until R7 puts `db add` in front of it. It exists now because the
-/// round-trip is R3's to prove, and half a round trip proves nothing.
-#[allow(dead_code)]
 pub fn set(key: &str, secret: &Secret) -> Outcome<()> {
     set_in(SERVICE, key, secret)
 }
 
-/// Forget the password stored for `key`. Waits for R8's `db remove`, for the same reason.
-#[allow(dead_code)]
+/// Forget the password stored for `key`.
+///
+/// A key that was never there is not a failure — `db edit` clears the old key after
+/// moving a password, and a record whose password lived elsewhere has nothing to clear.
 pub fn delete(key: &str) -> Outcome<()> {
     delete_from(SERVICE, key)
 }

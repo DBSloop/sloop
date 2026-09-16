@@ -53,6 +53,12 @@ pub struct Cli {
 }
 
 /// Everything `sloop` can be asked to do.
+///
+/// `db add` carries a dozen optional fields and makes this enum lopsided, which clippy is
+/// right about in general and wrong about here: exactly one of these is ever built, once,
+/// from the command line, and boxing it would trade a clear derive for a pointer nothing
+/// in this program is fast enough to notice.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Start a project registry in this directory, or in the one `-C` names.
@@ -104,20 +110,153 @@ pub enum Command {
 #[derive(Debug, Subcommand)]
 pub enum DbCommand {
     /// Register a database, by URL or field by field.
-    Add,
+    #[command(after_long_help = ADD_EXAMPLES)]
+    Add {
+        /// What to call it here. Not the database's own name — the label you will type.
+        name: String,
+
+        /// The whole connection in one string: `postgres://app@db:5432/orders`.
+        ///
+        /// Anything you also pass as a flag wins over what the URL said, so a URL with a
+        /// password in it can be corrected without retyping the rest.
+        #[arg(long, value_name = "URL")]
+        url: Option<String>,
+
+        #[command(flatten)]
+        fields: Fields,
+
+        #[command(flatten)]
+        password: PasswordSource,
+
+        /// Connect before saving, and refuse to save if it does not work.
+        #[arg(long)]
+        test: bool,
+
+        /// Replace an entry already registered under this name.
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Show every registered database. Never shows a secret.
     List,
+
     /// Open a connection to a registered database and report what happened.
-    Test,
+    Test {
+        /// Which one. Every registered database when this is left out.
+        name: Option<String>,
+    },
+
     /// Change a registered database's details.
-    Edit,
+    Edit {
+        /// Which one.
+        name: String,
+
+        /// Replace every connection field at once, from a URL.
+        #[arg(long, value_name = "URL")]
+        url: Option<String>,
+
+        #[command(flatten)]
+        fields: Fields,
+
+        #[command(flatten)]
+        password: PasswordSource,
+
+        /// Connect before saving, and refuse to save if it does not work.
+        #[arg(long)]
+        test: bool,
+    },
+
     /// Give a registered database a different name.
-    Rename,
+    Rename {
+        /// What it is called now.
+        from: String,
+        /// What to call it instead.
+        to: String,
+    },
+
     /// Forget a registered database. The server is not touched.
     Remove,
+
     /// Drop a database on the server. Backs it up first and asks for its name.
     Drop,
 }
+
+/// The connection, field by field.
+///
+/// Shared by `add` and `edit` so the two can never drift into accepting different things,
+/// which is the difference the "Done when" of R7 is about.
+#[derive(Debug, clap::Args)]
+pub struct Fields {
+    /// postgres, mysql or mariadb.
+    #[arg(long, value_name = "ENGINE")]
+    pub engine: Option<String>,
+
+    /// Host name or address.
+    #[arg(long, value_name = "HOST")]
+    pub host: Option<String>,
+
+    /// Port. Defaults to the engine's own.
+    #[arg(long, value_name = "PORT")]
+    pub port: Option<u16>,
+
+    /// The database's name on the server.
+    #[arg(long, value_name = "NAME")]
+    pub database: Option<String>,
+
+    /// The role to connect as.
+    #[arg(long, value_name = "ROLE")]
+    pub user: Option<String>,
+}
+
+/// Where the password will come from, from now on.
+///
+/// **Never a `--password` flag, and there never will be one.** Everything in `argv` is
+/// readable by every process on the machine, so a password that arrives that way is a
+/// password that has already leaked. These four are the routes; the value itself is typed
+/// at a prompt or piped in.
+#[derive(Debug, clap::Args)]
+pub struct PasswordSource {
+    /// Keep the password in the OS keyring. The default.
+    #[arg(long, group = "route")]
+    pub keyring: bool,
+
+    /// Keep it in the Argon2id-encrypted file, for a machine with no keyring.
+    #[arg(long, group = "route")]
+    pub encrypted_file: bool,
+
+    /// Read it from this environment variable at run time, for automation.
+    #[arg(long, value_name = "VARIABLE", group = "route")]
+    pub env: Option<String>,
+
+    /// Run this and read the password from its output, for a team password manager.
+    #[arg(long, value_name = "COMMAND", group = "route")]
+    pub password_from: Option<String>,
+
+    /// Take the password from standard input instead of asking for it.
+    ///
+    /// The only way to register a stored password without a terminal. One trailing
+    /// newline is removed and nothing else is touched.
+    #[arg(long)]
+    pub password_stdin: bool,
+}
+
+/// The half of `db add` that a paragraph explains better than a flag list.
+const ADD_EXAMPLES: &str = "\
+Examples:
+  sloop db add orders --url postgres://app@db.internal:5432/orders
+      Asks for the password and files it in the OS keyring.
+
+  sloop db add orders --engine postgres --host db.internal --database orders --user app
+      The same registration, field by field. The two are indistinguishable afterwards.
+
+  sloop db add ci --url mysql://ci@db/app --env CI_DB_PASSWORD
+      Nothing is stored: the password is read from that variable on every run.
+
+  printf %s \"$PW\" | sloop db add nightly --url postgres://bk@db/app --password-stdin
+      For a machine with no terminal to ask at.
+
+A password never goes in a flag. `ps` shows every argument of every process on the
+machine, so a password passed that way has already been read by anyone who wanted it.";
 
 /// `sloop backups …` — everything that reads what has already been taken.
 #[derive(Debug, Subcommand)]
@@ -185,11 +324,11 @@ impl DbCommand {
     #[must_use]
     pub fn path(&self) -> &'static str {
         match self {
-            Self::Add => "db add",
+            Self::Add { .. } => "db add",
             Self::List => "db list",
-            Self::Test => "db test",
-            Self::Edit => "db edit",
-            Self::Rename => "db rename",
+            Self::Test { .. } => "db test",
+            Self::Edit { .. } => "db edit",
+            Self::Rename { .. } => "db rename",
             Self::Remove => "db remove",
             Self::Drop => "db drop",
         }

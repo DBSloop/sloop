@@ -184,7 +184,7 @@ fn a_command_run_from_a_subdirectory_finds_the_project() {
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
     let deep = sandbox.make_dir("demo/src/inner/deeper");
-    let run = sandbox.sloop_in(&deep, &["db", "list"]);
+    let run = sandbox.sloop_in(&deep, &["backup"]);
 
     run.expect_said(&project.join(".sloop").display().to_string());
     run.expect_said("nearest .sloop");
@@ -200,14 +200,14 @@ fn the_nearest_project_wins_when_one_is_inside_another() {
 
     let below = sandbox.make_dir("outer/inner/src");
     sandbox
-        .sloop_in(&below, &["db", "list"])
+        .sloop_in(&below, &["backup"])
         .expect_said(&inner.join(".sloop").display().to_string());
 }
 
 #[test]
 fn with_no_project_anywhere_it_reads_the_global_store() {
     let sandbox = Sandbox::new("no-project");
-    let run = sandbox.sloop(&["db", "list"]);
+    let run = sandbox.sloop(&["backup"]);
 
     run.expect_said(&sandbox.global_dir().display().to_string());
     run.expect_said("no .sloop");
@@ -219,7 +219,7 @@ fn global_ignores_a_project_that_is_right_here() {
     let project = sandbox.make_dir("demo");
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
-    let run = sandbox.sloop_in(&project, &["--global", "db", "list"]);
+    let run = sandbox.sloop_in(&project, &["--global", "backup"]);
 
     run.expect_said(&sandbox.global_dir().display().to_string());
     run.expect_said("--global");
@@ -233,11 +233,11 @@ fn a_name_is_looked_for_in_the_project_before_the_global_store() {
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
     sandbox
-        .sloop_in(&project, &["db", "list"])
+        .sloop_in(&project, &["backup"])
         .expect_said("this project, then the global store");
 
     sandbox
-        .sloop_in(&project, &["--global", "db", "list"])
+        .sloop_in(&project, &["--global", "backup"])
         .expect_said("looked for in the global store")
         .expect_silent_about("this project, then");
 }
@@ -250,7 +250,7 @@ fn the_flag_reaches_a_project_by_name_from_anywhere() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .sloop_in(&elsewhere, &["-C", "demo", "db", "list"])
+        .sloop_in(&elsewhere, &["-C", "demo", "backup"])
         .expect_said(&project.join(".sloop").display().to_string())
         .expect_said("named by -C");
 }
@@ -265,7 +265,7 @@ fn the_flag_reaches_a_project_by_path_from_anywhere() {
     sandbox
         .sloop_in(
             &elsewhere,
-            &["-C", &project.display().to_string(), "db", "list"],
+            &["-C", &project.display().to_string(), "backup"],
         )
         .expect_said(&project.join(".sloop").display().to_string());
 }
@@ -274,7 +274,7 @@ fn the_flag_reaches_a_project_by_path_from_anywhere() {
 fn a_flag_that_names_nothing_is_a_usage_error() {
     let sandbox = Sandbox::new("bad-flag");
     sandbox
-        .sloop(&["-C", "no-such-project", "db", "list"])
+        .sloop(&["-C", "no-such-project", "backup"])
         .expect_code(2)
         .expect_said("no-such-project");
 }
@@ -287,7 +287,7 @@ fn the_environment_variable_does_what_the_flag_does() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .command(&elsewhere, &["db", "list"])
+        .command(&elsewhere, &["backup"])
         .env("SLOOP_PROJECT", "demo")
         .run()
         .expect_said(&project.join(".sloop").display().to_string())
@@ -298,7 +298,7 @@ fn the_environment_variable_does_what_the_flag_does() {
 fn an_environment_variable_that_names_nothing_is_a_usage_error() {
     let sandbox = Sandbox::new("env-bad");
     sandbox
-        .command(sandbox.work(), &["db", "list"])
+        .command(sandbox.work(), &["backup"])
         .env("SLOOP_PROJECT", "no-such-project")
         .run()
         .expect_code(2)
@@ -312,7 +312,7 @@ fn an_empty_environment_variable_means_unset() {
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
     sandbox
-        .command(&project, &["db", "list"])
+        .command(&project, &["backup"])
         .env("SLOOP_PROJECT", "")
         .run()
         .expect_code(1)
@@ -329,7 +329,7 @@ fn the_flag_outranks_the_environment_variable() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .command(&elsewhere, &["-C", "wanted", "db", "list"])
+        .command(&elsewhere, &["-C", "wanted", "backup"])
         .env("SLOOP_PROJECT", "other")
         .run()
         .expect_said(&wanted.join(".sloop").display().to_string())
@@ -343,7 +343,7 @@ fn asking_for_both_registries_at_once_is_a_usage_error() {
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
     sandbox
-        .sloop_in(&project, &["--global", "-C", "demo", "db", "list"])
+        .sloop_in(&project, &["--global", "-C", "demo", "backup"])
         .expect_code(2);
 }
 
@@ -378,7 +378,7 @@ fn a_pointer_written_with_windows_line_endings_still_resolves() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .sloop_in(&elsewhere, &["-C", "demo", "db", "list"])
+        .sloop_in(&elsewhere, &["-C", "demo", "backup"])
         .expect_said(&project.join(".sloop").display().to_string());
 }
 
@@ -395,7 +395,7 @@ fn a_project_path_with_spaces_in_it_survives_the_round_trip() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .sloop_in(&elsewhere, &["-C", "the demo", "db", "list"])
+        .sloop_in(&elsewhere, &["-C", "the demo", "backup"])
         .expect_said(&project.join(".sloop").display().to_string());
 }
 

@@ -1,0 +1,364 @@
+//! What `db` decides before it touches a disk or a server.
+//!
+//! The parts that need a database are in `engine::cluster_tests`, and the parts that need
+//! a whole process are in `tests/db.rs`.
+
+use super::{Draft, draft, route_for};
+use crate::cli::{Fields, PasswordSource};
+use crate::engine::Engine;
+use crate::registry::file::Database;
+use crate::secret::{Route, Secret};
+
+fn no_fields() -> Fields {
+    Fields {
+        engine: None,
+        host: None,
+        port: None,
+        database: None,
+        user: None,
+    }
+}
+
+fn no_password() -> PasswordSource {
+    PasswordSource {
+        keyring: false,
+        encrypted_file: false,
+        env: None,
+        password_from: None,
+        password_stdin: false,
+    }
+}
+
+fn built(url: Option<&str>, fields: &Fields) -> Database {
+    let (draft, _) = draft(None, url, fields).expect("a draft");
+    draft.into_database(Route::Keyring).expect("a database")
+}
+
+/// R7's "Done when", as a test rather than as an intention: the two ways of registering
+/// the same connection have to produce records that cannot be told apart afterwards.
+#[test]
+fn a_url_and_the_fields_it_stands_for_produce_the_same_record() {
+    let by_url = built(Some("postgres://app@db.internal:5432/orders"), &no_fields());
+    let by_field = built(
+        None,
+        &Fields {
+            engine: Some("postgres".to_owned()),
+            host: Some("db.internal".to_owned()),
+            port: Some(5432),
+            database: Some("orders".to_owned()),
+            user: Some("app".to_owned()),
+        },
+    );
+
+    assert_eq!(by_url, by_field);
+    // And the derived key too, because that is what the password is filed under: two
+    // records that looked equal but keyed differently would be a password that vanishes.
+    assert_eq!(by_url.credential_key(), by_field.credential_key());
+    assert_eq!(
+        by_url.credential_key(),
+        "postgres://app@db.internal:5432/orders"
+    );
+}
+
+/// The same, for a URL that leaves the port out. The engine's default has to be filled in
+/// at the same point in both paths, or the two records differ by a number nobody typed.
+#[test]
+fn a_missing_port_becomes_the_engines_default_whichever_way_it_was_given() {
+    let by_url = built(Some("mysql://root@127.0.0.1/shop"), &no_fields());
+    let by_field = built(
+        None,
+        &Fields {
+            engine: Some("mysql".to_owned()),
+            host: Some("127.0.0.1".to_owned()),
+            port: None,
+            database: Some("shop".to_owned()),
+            user: Some("root".to_owned()),
+        },
+    );
+
+    assert_eq!(by_url, by_field);
+    assert_eq!(by_url.port, 3306);
+    assert_eq!(
+        built(Some("mariadb://r@h/d"), &no_fields()).port,
+        3306,
+        "MariaDB shares MySQL's port"
+    );
+    assert_eq!(built(Some("postgres://r@h/d"), &no_fields()).port, 5432);
+}
+
+/// A flag beats the URL it came with, so a pasted connection string can be corrected in
+/// place rather than retyped — the same rule that makes `-C` outrank `SLOOP_PROJECT`.
+#[test]
+fn a_flag_outranks_the_url() {
+    let record = built(
+        Some("postgres://app@db.internal:5432/orders"),
+        &Fields {
+            host: Some("replica.internal".to_owned()),
+            port: Some(6432),
+            user: Some("readonly".to_owned()),
+            ..no_fields()
+        },
+    );
+
+    assert_eq!(record.host, "replica.internal");
+    assert_eq!(record.port, 6432);
+    assert_eq!(record.user, "readonly");
+    // Untouched by the flags, so still whatever the URL said.
+    assert_eq!(record.database, "orders");
+    assert_eq!(record.engine, Engine::Postgres);
+}
+
+/// Editing keeps what was not mentioned. An edit that quietly reset the fields nobody
+/// named would be a very fast way to lose a connection.
+#[test]
+fn an_edit_changes_only_what_was_named() {
+    let before = built(Some("postgres://app@db.internal:5432/orders"), &no_fields());
+
+    let (changed, _) = draft(
+        Some(&before),
+        None,
+        &Fields {
+            user: Some("backup".to_owned()),
+            ..no_fields()
+        },
+    )
+    .expect("a draft");
+    let after = changed.into_database(Route::Keyring).expect("a database");
+
+    assert_eq!(after.user, "backup");
+    assert_eq!(after.host, before.host);
+    assert_eq!(after.port, before.port);
+    assert_eq!(after.database, before.database);
+    assert_eq!(after.engine, before.engine);
+}
+
+/// A URL in an edit replaces the whole connection, and a port it does not mention becomes
+/// the engine's default rather than the old host's. Carrying an old port onto a new host
+/// is a connection nobody asked for.
+#[test]
+fn a_url_in_an_edit_does_not_leave_the_old_port_behind() {
+    let before = built(Some("postgres://app@db.internal:6432/orders"), &no_fields());
+    let (changed, _) = draft(
+        Some(&before),
+        Some("postgres://app@new.host/orders"),
+        &no_fields(),
+    )
+    .expect("a draft");
+    let after = changed.into_database(Route::Keyring).expect("a database");
+
+    assert_eq!(after.host, "new.host");
+    assert_eq!(after.port, 5432, "the old 6432 must not follow it");
+}
+
+/// Every missing field names the flag that supplies it. An error that says only "invalid"
+/// is an error somebody has to guess their way out of.
+#[test]
+fn what_is_missing_is_said_with_the_flag_that_fixes_it() {
+    let cases = [
+        ("--engine", Draft::default()),
+        (
+            "--host",
+            Draft {
+                engine: Some(Engine::Postgres),
+                ..Draft::default()
+            },
+        ),
+        (
+            "--database",
+            Draft {
+                engine: Some(Engine::Postgres),
+                host: Some("h".to_owned()),
+                ..Draft::default()
+            },
+        ),
+        (
+            "--user",
+            Draft {
+                engine: Some(Engine::Postgres),
+                host: Some("h".to_owned()),
+                database: Some("d".to_owned()),
+                ..Draft::default()
+            },
+        ),
+    ];
+
+    for (flag, draft) in cases {
+        let failure = draft
+            .into_database(Route::Keyring)
+            .expect_err("should be incomplete");
+        assert_eq!(failure.exit().code(), 2, "{flag}");
+        assert!(
+            failure.hint_text().is_some_and(|hint| hint.contains(flag)),
+            "{flag} is not named: {:?}",
+            failure.hint_text()
+        );
+    }
+}
+
+/// The four routes, and the one that is chosen when nobody chooses.
+#[test]
+fn the_four_routes_and_the_default() {
+    let keyring = PasswordSource {
+        keyring: true,
+        ..no_password()
+    };
+    let sealed = PasswordSource {
+        encrypted_file: true,
+        ..no_password()
+    };
+    let variable = PasswordSource {
+        env: Some("PGPASSWORD".to_owned()),
+        ..no_password()
+    };
+    let command = PasswordSource {
+        password_from: Some("op read op://vault/db/pw".to_owned()),
+        ..no_password()
+    };
+
+    assert_eq!(route_for(&keyring, None).unwrap(), Route::Keyring);
+    assert_eq!(route_for(&sealed, None).unwrap(), Route::EncryptedFile);
+    assert_eq!(
+        route_for(&variable, None).unwrap(),
+        Route::Environment("PGPASSWORD".to_owned())
+    );
+    assert_eq!(
+        route_for(&command, None).unwrap(),
+        Route::Command("op read op://vault/db/pw".to_owned())
+    );
+
+    // Nothing chosen on a new registration: the keyring, which needs no setting up.
+    assert_eq!(route_for(&no_password(), None).unwrap(), Route::Keyring);
+
+    // Nothing chosen on an edit: whatever the record already said, because an edit that
+    // silently moved a password to a different store would be an edit that loses it.
+    let existing = Route::Environment("CI_DB_PASSWORD".to_owned());
+    assert_eq!(
+        route_for(&no_password(), Some(&existing)).unwrap(),
+        existing
+    );
+}
+
+/// `--env` goes through the same reader the registry file uses, so a name that would be
+/// refused in the file is refused here too rather than written and refused on the way back.
+#[test]
+fn a_variable_name_is_checked_the_same_way_the_file_checks_it() {
+    for bad in ["not a name", "has$dollar", ""] {
+        let source = PasswordSource {
+            env: Some(bad.to_owned()),
+            ..no_password()
+        };
+        assert!(route_for(&source, None).is_err(), "{bad:?} was accepted");
+    }
+
+    let empty_command = PasswordSource {
+        password_from: Some("   ".to_owned()),
+        ..no_password()
+    };
+    assert!(route_for(&empty_command, None).is_err());
+}
+
+/// Only two of the four keep anything. The other two are directions, fetched fresh every
+/// run — which is what makes them the right answer for a scheduled job.
+#[test]
+fn only_the_two_stored_routes_have_anything_to_store() {
+    assert!(Route::Keyring.is_stored());
+    assert!(Route::EncryptedFile.is_stored());
+    assert!(!Route::Environment("X".to_owned()).is_stored());
+    assert!(!Route::Command("true".to_owned()).is_stored());
+}
+
+/// A password in a URL is taken rather than refused — see the module comment — and it
+/// never reaches the record, which holds a route and nothing else.
+#[test]
+fn a_password_in_a_url_is_taken_out_of_it_and_never_written_back() {
+    let (draft, password) = draft(
+        None,
+        Some("postgres://app:s3cr%40t@db.internal/orders"),
+        &no_fields(),
+    )
+    .expect("a draft");
+
+    assert_eq!(password.as_ref().map(Secret::expose), Some("s3cr@t"));
+
+    let record = draft.into_database(Route::Keyring).expect("a database");
+    let written = crate::registry::file::Registry::default();
+    let mut written = written;
+    written.insert("orders".to_owned(), record);
+    let toml = written.to_toml().expect("serialising");
+
+    assert!(
+        !toml.contains("s3cr@t"),
+        "the password reached the file:\n{toml}"
+    );
+    assert!(
+        !toml.contains("s3cr%40t"),
+        "the encoded form reached it:\n{toml}"
+    );
+    assert!(
+        toml.contains("keyring"),
+        "the route is what is written:\n{toml}"
+    );
+}
+
+/// What an edit leaves behind, and through which door it has to be cleared.
+///
+/// **The route is the half that was a bug.** Clearing the old key through the *new* route
+/// reads correctly and is wrong: migrating a keyring record to `--encrypted-file` wrote
+/// the password into the file and then asked the file to forget a key it had never held,
+/// while the keyring kept the password for a connection that no longer existed. Caught by
+/// reading the real Credential Manager after a run, which is why it is pinned here.
+#[test]
+fn what_an_edit_orphans_is_cleared_through_the_route_that_held_it() {
+    use super::Retiring;
+
+    let record = |url: &str, route: Route| {
+        let (draft, _) = draft(None, Some(url), &no_fields()).expect("a draft");
+        draft.into_database(route).expect("a database")
+    };
+    let here = "postgres://app@db.internal:5432/orders";
+    let moved = "postgres://app@db.internal:5432/replica";
+
+    // Nothing changed: nothing to clear.
+    assert!(
+        Retiring::between(&record(here, Route::Keyring), &record(here, Route::Keyring)).is_none()
+    );
+
+    // The connection moved. Same route, old key.
+    let by_key = Retiring::between(
+        &record(here, Route::Keyring),
+        &record(moved, Route::Keyring),
+    )
+    .expect("the old key is orphaned");
+    assert_eq!(by_key.route, Route::Keyring);
+    assert_eq!(by_key.key, "postgres://app@db.internal:5432/orders");
+
+    // The route moved and the key did not — the case that was silently leaking. It has to
+    // be cleared from the keyring, which is where it is, and not from the file it is
+    // going to.
+    let by_route = Retiring::between(
+        &record(here, Route::Keyring),
+        &record(here, Route::EncryptedFile),
+    )
+    .expect("the keyring entry is orphaned");
+    assert_eq!(by_route.route, Route::Keyring);
+    assert_eq!(by_route.key, "postgres://app@db.internal:5432/orders");
+
+    // Moving to a route that stores nothing still has to clear what the old one held.
+    let to_a_variable = Retiring::between(
+        &record(here, Route::Keyring),
+        &record(here, Route::Environment("PW".to_owned())),
+    )
+    .expect("the keyring entry is orphaned");
+    assert_eq!(to_a_variable.route, Route::Keyring);
+
+    // And a record that never stored anything leaves nothing behind, however it changes.
+    for after in [
+        record(moved, Route::Keyring),
+        record(here, Route::EncryptedFile),
+    ] {
+        assert!(
+            Retiring::between(&record(here, Route::Environment("PW".to_owned())), &after).is_none(),
+            "a ${{VAR}} record has nothing for sloop to clear"
+        );
+    }
+}

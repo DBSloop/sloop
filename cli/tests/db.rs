@@ -1,0 +1,527 @@
+//! `sloop db …`, through the real binary, in a sandbox of its own.
+//!
+//! **No server and no keyring.** Both would make these tests depend on the machine — and
+//! the keyring in particular is shared, real and outside the sandbox, so a test that wrote
+//! to it would be writing to the developer's own credential store. So every registration
+//! here uses `--env` or `--password-from`, the two routes that keep nothing, and what is
+//! actually checked is the part that is entirely sloop's: what lands in the registry file,
+//! what comes back out of it, and what is refused.
+//!
+//! The parts that need a database are in `engine::cluster_tests`.
+
+mod support;
+
+use support::Sandbox;
+
+/// Read the registry a run just wrote, so a test can assert on the file rather than on
+/// the message the command printed about it.
+fn written(sandbox: &Sandbox) -> String {
+    let path = sandbox.global_dir().join("registry.toml");
+    std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("no registry at {}: {error}", path.display());
+    })
+}
+
+/// R7's "Done when", end to end: the same connection registered two ways has to come back
+/// out identical. Checked on the file, because that is the thing that outlives the run.
+#[test]
+fn a_url_and_the_fields_it_stands_for_register_the_same_connection() {
+    let sandbox = Sandbox::new("db-same");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "by-url",
+            "--url",
+            "postgres://app@db.internal:5432/orders",
+            "--env",
+            "PGPASSWORD",
+        ])
+        .expect_code(0);
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "by-field",
+            "--engine",
+            "postgres",
+            "--host",
+            "db.internal",
+            "--port",
+            "5432",
+            "--database",
+            "orders",
+            "--user",
+            "app",
+            "--env",
+            "PGPASSWORD",
+        ])
+        .expect_code(0);
+
+    // The two blocks differ only in their heading. Anything else and the two ways of
+    // registering a database have drifted apart.
+    let file = written(&sandbox);
+    let block = |name: &str| {
+        file.split(&format!("[databases.{name}]"))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{name} is not in the registry:\n{file}"))
+            .split("\n[")
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
+
+    assert_eq!(block("by-url"), block("by-field"), "\n{file}");
+}
+
+/// `db list` prints a route and never a value. The one assertion in this file that is
+/// about the product rather than about the plumbing.
+#[test]
+fn listing_shows_the_route_and_never_the_password() {
+    let sandbox = Sandbox::new("db-list");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "orders",
+            // A password in the URL, which is the one way a real secret can reach these
+            // commands at all. It must not come back out of any of them.
+            "--url",
+            "postgres://app:hunter2@db.internal/orders",
+            "--env",
+            "PGPASSWORD",
+        ])
+        .expect_code(0);
+
+    let run = sandbox.sloop(&["db", "list"]);
+    run.expect_code(0)
+        .expect_said("orders")
+        .expect_said("postgres://app@db.internal:5432/orders")
+        .expect_said("the environment variable PGPASSWORD")
+        .expect_silent_about("hunter2");
+
+    assert!(
+        !written(&sandbox).contains("hunter2"),
+        "the password reached the registry file:\n{}",
+        written(&sandbox)
+    );
+}
+
+/// Rule 4, on the command most likely to meet it: a registration that needs a password
+/// and has no terminal to ask at must exit `2` and name the flag, not hang.
+#[test]
+fn without_a_terminal_a_stored_password_exits_two_and_names_the_flag() {
+    let sandbox = Sandbox::new("db-no-tty");
+
+    let run = sandbox.sloop(&[
+        "db",
+        "add",
+        "orders",
+        "--url",
+        "postgres://app@db.internal/orders",
+        "--keyring",
+    ]);
+
+    run.expect_code(2)
+        .expect_said("no terminal")
+        .expect_said("--password-stdin");
+
+    // And nothing was written on the way to refusing.
+    assert!(
+        !sandbox.global_dir().join("registry.toml").exists(),
+        "a refused registration still wrote a registry"
+    );
+}
+
+/// The escape hatch from the test above, and the shape a scheduled job uses.
+///
+/// `--password-from` rather than `--keyring`, because a keyring write would reach outside
+/// the sandbox. What is being checked is that the run completes without a terminal.
+#[test]
+fn a_route_that_stores_nothing_needs_no_terminal_at_all() {
+    let sandbox = Sandbox::new("db-headless");
+
+    let helper = if cfg!(windows) {
+        "cmd /c echo pw"
+    } else {
+        "echo pw"
+    };
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "nightly",
+            "--url",
+            "mysql://bk@db.internal/app",
+            "--password-from",
+            helper,
+        ])
+        .expect_code(0);
+
+    assert!(
+        written(&sandbox).contains("command:"),
+        "{}",
+        written(&sandbox)
+    );
+}
+
+/// A password that arrives on standard input is taken exactly as it was sent: one trailing
+/// newline comes off and nothing else does, because a password may legitimately end in a
+/// space and trimming would register something different from what was piped.
+#[test]
+fn a_piped_password_is_taken_verbatim_and_is_never_echoed() {
+    let sandbox = Sandbox::new("db-stdin");
+
+    // An awkward one on purpose. It goes to the encrypted file rather than the keyring so
+    // that nothing outside the sandbox is touched, and `SLOOP_PASSPHRASE` supplies the
+    // passphrase that would otherwise be prompted for.
+    let nasty = "pw with a space and >|$# \"quotes\" ";
+    let run = sandbox
+        .command(
+            sandbox.work(),
+            &[
+                "db",
+                "add",
+                "sealed",
+                "--url",
+                "postgres://app@db.internal/orders",
+                "--encrypted-file",
+                "--password-stdin",
+            ],
+        )
+        .env("SLOOP_PASSPHRASE", "a test passphrase")
+        .stdin(format!("{nasty}\n").as_bytes())
+        .run();
+
+    run.expect_code(0).expect_silent_about(nasty.trim());
+
+    let sealed = sandbox.global_dir().join("secrets.sealed");
+    assert!(sealed.is_file(), "nothing was sealed");
+
+    // The encrypted file is encrypted: the password is not sitting in it in the clear.
+    let bytes = std::fs::read(&sealed).expect("reading the sealed file");
+    assert!(
+        !bytes
+            .windows(nasty.len())
+            .any(|window| window == nasty.as_bytes()),
+        "the password is readable in the sealed file"
+    );
+
+    assert!(
+        written(&sandbox).contains("encrypted-file"),
+        "{}",
+        written(&sandbox)
+    );
+}
+
+/// Registering the same name twice is refused rather than silently overwritten, and
+/// `--force` is the way to mean it.
+#[test]
+fn a_name_already_taken_is_refused_until_force_says_otherwise() {
+    let sandbox = Sandbox::new("db-force");
+    let add = |name: &str, url: &str, force: bool| {
+        let mut args = vec!["db", "add", name, "--url", url, "--env", "PGPASSWORD"];
+        if force {
+            args.push("--force");
+        }
+        sandbox.sloop(&args)
+    };
+
+    add("orders", "postgres://app@one.internal/orders", false).expect_code(0);
+
+    add("orders", "postgres://app@two.internal/orders", false)
+        .expect_code(2)
+        .expect_said("already registered");
+    assert!(
+        written(&sandbox).contains("one.internal"),
+        "it was replaced"
+    );
+
+    add("orders", "postgres://app@two.internal/orders", true).expect_code(0);
+    assert!(
+        written(&sandbox).contains("two.internal"),
+        "it was not replaced"
+    );
+}
+
+/// Renaming moves the label and leaves the connection — and therefore the key the password
+/// is filed under — exactly where it was.
+#[test]
+fn renaming_moves_the_label_and_nothing_else() {
+    let sandbox = Sandbox::new("db-rename");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "old",
+            "--url",
+            "mariadb://app@db.internal:3306/shop",
+            "--env",
+            "PW",
+        ])
+        .expect_code(0);
+    let before = written(&sandbox);
+
+    sandbox
+        .sloop(&["db", "rename", "old", "new"])
+        .expect_code(0);
+    let after = written(&sandbox);
+
+    assert!(after.contains("[databases.new]"), "{after}");
+    assert!(!after.contains("[databases.old]"), "{after}");
+    assert_eq!(
+        before.replace("[databases.old]", "[databases.new]"),
+        after,
+        "renaming changed something other than the name"
+    );
+
+    sandbox
+        .sloop(&["db", "rename", "missing", "whatever"])
+        .expect_code(2)
+        .expect_said("no database is registered as missing");
+}
+
+/// Editing changes what was named and keeps what was not.
+#[test]
+fn editing_changes_only_what_was_named() {
+    let sandbox = Sandbox::new("db-edit");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "orders",
+            "--url",
+            "postgres://app@db.internal:5432/orders",
+            "--env",
+            "PGPASSWORD",
+        ])
+        .expect_code(0);
+
+    sandbox
+        .sloop(&["db", "edit", "orders", "--user", "backup"])
+        .expect_code(0);
+
+    let file = written(&sandbox);
+    assert!(file.contains("user = \"backup\""), "{file}");
+    assert!(file.contains("host = \"db.internal\""), "{file}");
+    assert!(file.contains("port = 5432"), "{file}");
+    assert!(file.contains("database = \"orders\""), "{file}");
+
+    // An edit that changes nothing says so rather than rewriting the file for no reason.
+    sandbox
+        .sloop(&["db", "edit", "orders", "--user", "backup"])
+        .expect_code(0)
+        .expect_said("already like that");
+
+    sandbox
+        .sloop(&["db", "edit", "nope", "--user", "x"])
+        .expect_code(2)
+        .expect_said("no database is registered as nope");
+}
+
+/// A project registry and the global store are both live, and a bare name finds the
+/// nearer one — R2's rule, and R7 is the first command that can demonstrate it.
+#[test]
+fn a_project_entry_shadows_a_global_one_and_the_listing_says_so() {
+    let sandbox = Sandbox::new("db-scopes");
+
+    // Global first, from a directory with no project in it.
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "orders",
+            "--url",
+            "postgres://app@global.internal/orders",
+            "--env",
+            "PW",
+        ])
+        .expect_code(0);
+
+    let project = sandbox.make_dir("app");
+    sandbox.sloop_in(&project, &["init"]).expect_code(0);
+    sandbox
+        .sloop_in(
+            &project,
+            &[
+                "db",
+                "add",
+                "orders",
+                "--url",
+                "postgres://app@project.internal/orders",
+                "--env",
+                "PW",
+            ],
+        )
+        .expect_code(0);
+
+    // From inside the project: both are listed, the project one first, and the global one
+    // is marked as the one a bare `orders` will not reach.
+    let inside = sandbox.sloop_in(&project, &["db", "list"]);
+    inside
+        .expect_code(0)
+        .expect_said("project.internal")
+        .expect_said("global.internal")
+        .expect_said("shadowed");
+
+    assert!(
+        inside.stdout().find("project.internal") < inside.stdout().find("global.internal"),
+        "the nearer entry should be listed first:\n{}",
+        inside.stdout()
+    );
+
+    // `--global` reaches past the project to the other one.
+    sandbox
+        .sloop_in(&project, &["--global", "db", "list"])
+        .expect_code(0)
+        .expect_said("global.internal")
+        .expect_silent_about("project.internal");
+}
+
+/// The qualifier is understood by the commands that take a name, and it is not part of
+/// the name that gets written down.
+#[test]
+fn the_global_qualifier_reaches_past_a_project() {
+    let sandbox = Sandbox::new("db-qualifier");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "orders",
+            "--url",
+            "postgres://app@global.internal/orders",
+            "--env",
+            "PW",
+        ])
+        .expect_code(0);
+
+    let project = sandbox.make_dir("app");
+    sandbox.sloop_in(&project, &["init"]).expect_code(0);
+    sandbox
+        .sloop_in(
+            &project,
+            &[
+                "db",
+                "add",
+                "orders",
+                "--url",
+                "postgres://app@project.internal/orders",
+                "--env",
+                "PW",
+            ],
+        )
+        .expect_code(0);
+
+    // `global:orders` edits the global one even though a nearer one exists.
+    sandbox
+        .sloop_in(&project, &["db", "edit", "global:orders", "--user", "far"])
+        .expect_code(0);
+
+    let global = std::fs::read_to_string(sandbox.global_dir().join("registry.toml")).unwrap();
+    assert!(global.contains("user = \"far\""), "{global}");
+    // The qualifier is not part of the stored name.
+    assert!(global.contains("[databases.orders]"), "{global}");
+    assert!(!global.contains("global:orders"), "{global}");
+
+    let project_file =
+        std::fs::read_to_string(project.join(".sloop").join("registry.toml")).unwrap();
+    assert!(project_file.contains("user = \"app\""), "{project_file}");
+}
+
+/// Nothing registered is a sentence, not an empty screen or an error.
+#[test]
+fn an_empty_registry_says_what_to_do_about_it() {
+    let sandbox = Sandbox::new("db-empty");
+    sandbox
+        .sloop(&["db", "list"])
+        .expect_code(0)
+        .expect_said("Nothing is registered")
+        .expect_said("sloop db add");
+
+    sandbox
+        .sloop(&["db", "test"])
+        .expect_code(0)
+        .expect_said("Nothing is registered");
+}
+
+/// What a half-given registration says. Each one names the flag that completes it.
+#[test]
+fn an_incomplete_registration_names_the_flag_that_completes_it() {
+    let sandbox = Sandbox::new("db-incomplete");
+
+    let cases = [
+        (vec!["db", "add", "x", "--env", "PW"], "--engine"),
+        (
+            vec!["db", "add", "x", "--engine", "postgres", "--env", "PW"],
+            "--host",
+        ),
+        (
+            vec![
+                "db", "add", "x", "--engine", "postgres", "--host", "h", "--env", "PW",
+            ],
+            "--database",
+        ),
+        (
+            vec![
+                "db",
+                "add",
+                "x",
+                "--engine",
+                "postgres",
+                "--host",
+                "h",
+                "--database",
+                "d",
+                "--env",
+                "PW",
+            ],
+            "--user",
+        ),
+    ];
+
+    for (args, flag) in cases {
+        sandbox.sloop(&args).expect_code(2).expect_said(flag);
+    }
+
+    // And a URL that is not one.
+    sandbox
+        .sloop(&["db", "add", "x", "--url", "just-a-string", "--env", "PW"])
+        .expect_code(2)
+        .expect_said("no scheme");
+
+    sandbox
+        .sloop(&["db", "add", "x", "--url", "redis://h/0", "--env", "PW"])
+        .expect_code(2)
+        .expect_said("not an engine sloop knows");
+}
+
+/// There is no `--password` flag, and its absence is the product rather than an omission.
+#[test]
+fn there_is_no_way_to_put_a_password_in_argv() {
+    let sandbox = Sandbox::new("db-no-password-flag");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "x",
+            "--url",
+            "postgres://app@h/d",
+            "--password",
+            "hunter2",
+        ])
+        .expect_code(2);
+
+    // And the help says why, rather than leaving somebody looking for the flag.
+    sandbox
+        .sloop(&["db", "add", "--help"])
+        .expect_code(0)
+        .expect_said("password never goes in a flag");
+}

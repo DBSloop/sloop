@@ -50,10 +50,16 @@ fn a_registry_is_read_and_each_route_named() {
 
     sandbox
         .sloop_in(&project, &["db", "list"])
-        .expect_said("It holds 3 databases")
-        .expect_said("staging via the OS keyring")
-        .expect_said("nightly via the environment variable REPORTS_PASSWORD")
-        .expect_said("team via the command");
+        .expect_code(0)
+        .expect_said("the OS keyring")
+        .expect_said("the environment variable REPORTS_PASSWORD")
+        .expect_said("the command `op read op://vault/db/password`");
+
+    // The count comes from a command that still only describes what it would read, which
+    // keeps the other half of the same reader — `describe_registry` — under test.
+    sandbox
+        .sloop_in(&project, &["backup"])
+        .expect_said("It holds 3 databases");
 }
 
 /// A registry saved by a Windows editor, or checked out with `core.autocrlf`, has to load.
@@ -71,8 +77,9 @@ fn a_registry_with_windows_line_endings_loads() {
 
     sandbox
         .sloop_in(&project, &["db", "list"])
-        .expect_said("It holds 3 databases")
-        .expect_said("staging via the OS keyring");
+        .expect_code(0)
+        .expect_said("staging")
+        .expect_said("the OS keyring");
 }
 
 /// The rule that makes rule 3 enforceable, checked where a person would actually hit it.
@@ -138,10 +145,23 @@ fn the_flag_overrides_every_route_in_the_file() {
         ],
     );
 
-    run.expect_said("staging via the command `op read op://vault/everything`")
-        .expect_said("nightly via the command `op read op://vault/everything`")
+    // Every entry, whatever its own route said. One flag, one answer for the whole run.
+    run.expect_code(0)
+        .expect_said("staging")
+        .expect_said("nightly")
+        .expect_said("the command `op read op://vault/everything`")
         .expect_silent_about("the OS keyring")
         .expect_silent_about("REPORTS_PASSWORD");
+
+    assert_eq!(
+        run.stdout()
+            .matches("op read op://vault/everything")
+            .count(),
+        3,
+        "the override should reach all three:
+{}",
+        run.stdout()
+    );
 }
 
 /// Everything printed about a database is a direction, never a value. Nothing sloop says
@@ -170,6 +190,10 @@ fn a_project_with_no_registry_file_yet_is_not_an_error() {
     assert!(!Path::new(&project.join(".sloop").join("registry.toml")).exists());
     sandbox
         .sloop_in(&project, &["db", "list"])
+        .expect_code(0)
+        .expect_said("Nothing is registered");
+    sandbox
+        .sloop_in(&project, &["backup"])
         .expect_code(1)
         .expect_said("no databases in it yet");
 }
@@ -188,15 +212,28 @@ fn the_global_store_has_its_own_registry() {
     )
     .unwrap();
 
-    // Standing in the project, the project's registry is the one read.
-    sandbox
-        .sloop_in(&project, &["db", "list"])
-        .expect_said("It holds 3 databases")
-        .expect_silent_about("shared via");
+    // Standing in the project, a bare name resolves to the project first — but both
+    // registries are live, so a listing shows the global one too rather than pretending
+    // it is not there. That is R2's rule, and R7 is the first command that can show it.
+    let inside = sandbox.sloop_in(&project, &["db", "list"]);
+    inside
+        .expect_code(0)
+        .expect_said("staging")
+        .expect_said("shared")
+        .expect_said("this project, then the global store");
 
-    // `--global` reaches the other one.
+    assert!(
+        inside.stdout().find("staging") < inside.stdout().find("shared"),
+        "the project's entries should come first:
+{}",
+        inside.stdout()
+    );
+
+    // `--global` takes the project out of the picture entirely.
     sandbox
         .sloop_in(&project, &["--global", "db", "list"])
-        .expect_said("It holds 1 database")
-        .expect_said("shared via the OS keyring");
+        .expect_code(0)
+        .expect_said("shared")
+        .expect_said("the OS keyring")
+        .expect_silent_about("staging");
 }

@@ -14,11 +14,6 @@ use support::Sandbox;
 
 /// Every command that will do something one day and does not yet.
 const STUBS: &[&[&str]] = &[
-    &["db", "add"],
-    &["db", "list"],
-    &["db", "test"],
-    &["db", "edit"],
-    &["db", "rename"],
     &["db", "remove"],
     &["db", "drop"],
     &["backup"],
@@ -33,7 +28,19 @@ const STUBS: &[&[&str]] = &[
 ];
 
 /// Commands with a body. They move here one task at a time.
-const IMPLEMENTED: &[&[&str]] = &[&["init"]];
+///
+/// Only their `--help` is exercised from this list: several of them take a required
+/// argument, and half of those want a live server. What they actually do is checked in
+/// `tests/db.rs` and against a real cluster in `engine::cluster_tests`.
+const IMPLEMENTED: &[&[&str]] = &[
+    &["init"],
+    &["doctor"],
+    &["db", "add"],
+    &["db", "list"],
+    &["db", "test"],
+    &["db", "edit"],
+    &["db", "rename"],
+];
 
 /// The commands that only hold other commands.
 const GROUPS: &[&[&str]] = &[&["db"], &["backups"], &["key"]];
@@ -190,6 +197,7 @@ fn long_help_prints_the_frozen_exit_codes() {
         "5 restore",
         "6 mismatch",
         "7 locked",
+        "8 doctor found a problem",
     ] {
         run.expect_said(code);
     }

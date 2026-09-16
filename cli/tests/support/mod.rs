@@ -15,8 +15,9 @@
 
 #![allow(dead_code)]
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -132,6 +133,7 @@ impl Sandbox {
 
         Invocation {
             command,
+            stdin: None,
             shown: args.to_vec().join(" "),
         }
     }
@@ -148,6 +150,7 @@ impl Drop for Sandbox {
 /// A prepared command, so a test can add to the environment before running it.
 pub struct Invocation {
     command: Command,
+    stdin: Option<Vec<u8>>,
     shown: String,
 }
 
@@ -159,14 +162,51 @@ impl Invocation {
         self
     }
 
+    /// Write these bytes to the child's standard input.
+    ///
+    /// Bytes rather than a string, and written verbatim: `--password-stdin` is supposed to
+    /// take exactly what it was given, so a helper that appended a newline of its own would
+    /// be testing something other than what a caller does.
+    #[must_use]
+    pub fn stdin(mut self, bytes: &[u8]) -> Self {
+        self.stdin = Some(bytes.to_vec());
+        self
+    }
+
     /// Run it.
+    ///
+    /// **Standard input is closed unless a test opened it.** `Command::output` does that
+    /// by itself, and it is the state that matters most here: it is what a scheduled run
+    /// looks like, and rule 4 says nothing may stop and ask a question in it.
     pub fn run(mut self) -> Run {
-        let output = self
+        let Some(bytes) = self.stdin.take() else {
+            let output = self
+                .command
+                .output()
+                .expect("the binary these tests were built alongside should run");
+            return Run {
+                output,
+                shown: self.shown,
+            };
+        };
+
+        let mut child = self
             .command
-            .output()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .expect("the binary these tests were built alongside should run");
+
+        // Dropped straight after, so the child sees end of file rather than waiting for
+        // more — a pipe left open is the other way to make a command hang forever.
+        {
+            let mut pipe = child.stdin.take().expect("stdin was piped");
+            pipe.write_all(&bytes).expect("writing to the child");
+        }
+
         Run {
-            output,
+            output: child.wait_with_output().expect("the child should finish"),
             shown: self.shown,
         }
     }

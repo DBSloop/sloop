@@ -22,12 +22,11 @@ use std::process::ExitCode;
 
 use clap::Parser as _;
 
-use crate::cli::{Cli, Command};
+use crate::cli::{Cli, Command, DbCommand};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
-use crate::registry::file::{self, Registry};
 use crate::registry::locations::Locations;
-use crate::registry::{Disk, projects, resolve};
+use crate::registry::{Disk, Registries, projects, resolve};
 
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
@@ -82,11 +81,11 @@ fn run(cli: &Cli) -> Outcome<Exit> {
                 environment_project().as_deref(),
             )?;
 
-            // Reading the registry here is what makes R3 visible from outside: a file
+            // Reading the registries here is what makes R3 visible from outside: a file
             // that will not parse fails now, with the file named, instead of surprising
-            // someone in the middle of a backup.
-            let registry_dir = resolution.registry_dir().unwrap_or_else(|| global.clone());
-            let registry = Registry::load(&registry_dir.join(file::FILE))?;
+            // someone in the middle of a backup. Both scopes, because R2's rule is that a
+            // bare name searches the project and then the global store.
+            let registries = Registries::open(resolution.clone(), &global)?;
 
             if let Some(Command::Doctor { offline }) = &cli.command {
                 // Only offer to install when there is somebody there to answer. Without a
@@ -97,13 +96,21 @@ fn run(cli: &Cli) -> Outcome<Exit> {
                     &global,
                     interactive,
                     &commands::doctor::Registered {
-                        registry: &registry,
+                        registries: &registries,
                         from: resolution.describe(&global),
-                        sealed_file: &registry_dir.join(file::SEALED_FILE),
                         password_command: cli.password_command.as_deref(),
                         offline: *offline,
                     },
                 ));
+            }
+
+            if let Some(Command::Db { command }) = &cli.command {
+                let mut context = commands::db::Context {
+                    registries,
+                    password_command: cli.password_command.as_deref(),
+                    global: &global,
+                };
+                return db(&mut context, command);
             }
 
             Ok(unimplemented(
@@ -114,13 +121,51 @@ fn run(cli: &Cli) -> Outcome<Exit> {
                         "A name would be looked for in {}.",
                         resolution.describe_lookup(&global)
                     ),
-                    describe_registry(&registry, cli.password_command.as_deref()),
+                    describe_registry(&registries, cli.password_command.as_deref()),
                 ]),
             ))
         }
 
         Some(command) => Ok(unimplemented(&format!("'{}'", command.path()), None)),
         None => Ok(unimplemented("the interactive menu", None)),
+    }
+}
+
+/// Hand a `db` subcommand its arguments.
+///
+/// One place, so that the shape of each command is declared in `cli` and taken apart
+/// here, and nowhere in `commands::db` has to know what clap looks like.
+fn db(context: &mut commands::db::Context<'_>, command: &DbCommand) -> Outcome<Exit> {
+    match command {
+        DbCommand::Add {
+            name,
+            url,
+            fields,
+            password,
+            test,
+            force,
+        } => commands::db::add(
+            context,
+            name,
+            url.as_deref(),
+            fields,
+            password,
+            *test,
+            *force,
+        ),
+        DbCommand::List => Ok(commands::db::list(context)),
+        DbCommand::Test { name } => commands::db::test(context, name.as_deref()),
+        DbCommand::Edit {
+            name,
+            url,
+            fields,
+            password,
+            test,
+        } => commands::db::edit(context, name, url.as_deref(), fields, password, *test),
+        DbCommand::Rename { from, to } => commands::db::rename(context, from, to),
+        // R8's, both of them: forgetting a record and dropping a database on the server
+        // are different weights of thing and get their own entry.
+        other => Ok(unimplemented(&format!("'{}'", other.path()), None)),
     }
 }
 
@@ -154,31 +199,31 @@ fn init_target(flag: Option<&str>, global: &Path) -> Outcome<PathBuf> {
     )
 }
 
-/// What the registry holds, and where each password would be fetched from.
+/// What the registries hold, and where each password would be fetched from.
 ///
 /// Routes only. Not one of these phrases can contain a password, because a route is a
 /// direction and never a value — which is the property that lets this be printed at all.
-fn describe_registry(registry: &Registry, password_command: Option<&str>) -> String {
-    if registry.is_empty() {
+fn describe_registry(registries: &Registries, password_command: Option<&str>) -> String {
+    if registries.is_empty() {
         return "It has no databases in it yet.".to_owned();
     }
 
-    let listed: Vec<String> = registry
-        .entries()
-        .map(|(name, database)| {
+    let listed: Vec<String> = registries
+        .all()
+        .map(|(_, name, database)| {
             let route = database.password.overridden_by(password_command);
             format!("{name} via {}", route.describe())
         })
         .collect();
 
-    let plural = if registry.len() == 1 {
+    let plural = if registries.len() == 1 {
         "database"
     } else {
         "databases"
     };
     format!(
         "It holds {} {plural}: {}.",
-        registry.len(),
+        registries.len(),
         listed.join(", ")
     )
 }

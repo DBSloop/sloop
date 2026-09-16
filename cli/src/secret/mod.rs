@@ -159,6 +159,17 @@ impl Route {
         }
     }
 
+    /// Does sloop have to keep the password itself for this route?
+    ///
+    /// The split that decides what `db add` asks for. Two of the four routes are places
+    /// sloop puts a value; the other two are *directions* — an environment variable and a
+    /// command — where the answer is fetched fresh on every run and there is nothing here
+    /// to store, rotate or lose.
+    #[must_use]
+    pub const fn is_stored(&self) -> bool {
+        matches!(self, Self::Keyring | Self::EncryptedFile)
+    }
+
     /// The route actually used this run, once `--password-command` has had its say.
     ///
     /// The flag outranks the file because it is the more immediate instruction, the same

@@ -19,6 +19,7 @@
 pub mod file;
 pub mod locations;
 pub mod projects;
+pub mod url;
 
 #[cfg(test)]
 mod tests;
@@ -26,6 +27,7 @@ mod tests;
 use std::path::{Component, Path, PathBuf};
 
 use crate::failure::{Failure, Outcome};
+use file::Registry;
 use locations::PROJECT_DIR;
 
 /// One of the two registries.
@@ -141,16 +143,12 @@ impl Resolution {
 }
 
 /// A name as the user typed it, with the one qualifier this tool understands.
-///
-/// Unused until R7 brings the first command that takes a name. See `scope_for`.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Qualified<'a> {
     scope: Option<Scope>,
     name: &'a str,
 }
 
-#[allow(dead_code)]
 impl<'a> Qualified<'a> {
     /// Split `global:name` from `name`.
     ///
@@ -186,6 +184,163 @@ impl<'a> Qualified<'a> {
     #[must_use]
     pub const fn name(&self) -> &'a str {
         self.name
+    }
+}
+
+impl Scope {
+    /// The word a listing puts beside an entry.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Global => "global",
+        }
+    }
+}
+
+/// Both registries, open at once.
+///
+/// **Both, because that is what R2 promised.** A bare name is looked for in the project
+/// first and in the global store second, and `global:name` forces the far one — a rule
+/// that cannot be implemented by a command holding one registry and guessing. So every
+/// command that takes a name gets both, and the search order lives in [`Resolution`],
+/// where it was settled, rather than being re-derived here.
+pub struct Registries {
+    project: Option<(PathBuf, Registry)>,
+    global: (PathBuf, Registry),
+    resolution: Resolution,
+}
+
+impl Registries {
+    /// Read whichever of the two exist. A registry that is not there yet is an empty one,
+    /// not an error: that is the state of every machine before the first `db add`.
+    pub fn open(resolution: Resolution, global_dir: &Path) -> Outcome<Self> {
+        let read = |dir: &Path| Registry::load(&dir.join(file::FILE));
+
+        let project = match resolution.registry_dir() {
+            Some(dir) => {
+                let registry = read(&dir)?;
+                Some((dir, registry))
+            }
+            None => None,
+        };
+
+        Ok(Self {
+            project,
+            global: (global_dir.to_path_buf(), read(global_dir)?),
+            resolution,
+        })
+    }
+
+    /// How the registry was chosen, for the commands that say so.
+    #[must_use]
+    pub const fn resolution(&self) -> &Resolution {
+        &self.resolution
+    }
+
+    /// The registry in one scope, if it is in play at all.
+    #[must_use]
+    pub fn in_scope(&self, scope: Scope) -> Option<&Registry> {
+        match scope {
+            Scope::Project => self.project.as_ref().map(|(_, registry)| registry),
+            Scope::Global => Some(&self.global.1),
+        }
+    }
+
+    /// Where a scope's encrypted password file is.
+    #[must_use]
+    pub fn sealed_in(&self, scope: Scope) -> Option<PathBuf> {
+        self.dir_of(scope).map(|dir| dir.join(file::SEALED_FILE))
+    }
+
+    fn dir_of(&self, scope: Scope) -> Option<PathBuf> {
+        match scope {
+            Scope::Project => self.project.as_ref().map(|(dir, _)| dir.clone()),
+            Scope::Global => Some(self.global.0.clone()),
+        }
+    }
+
+    /// The scope a new entry goes in: the project when there is one, the global store
+    /// otherwise — and always the global store under `--global`.
+    #[must_use]
+    pub const fn writes_to(&self) -> Scope {
+        if self.project.is_some() {
+            Scope::Project
+        } else {
+            Scope::Global
+        }
+    }
+
+    /// Find a name, honouring the qualifier and the search order.
+    pub fn find(&self, input: &str) -> Outcome<(Scope, &file::Database)> {
+        let qualified = Qualified::parse(input)?;
+
+        let scope = self
+            .resolution
+            .scope_for(&qualified, |scope| {
+                self.in_scope(scope)
+                    .is_some_and(|registry| registry.get(qualified.name()).is_some())
+            })
+            .ok_or_else(|| file::unknown(input))?;
+
+        let database = self
+            .in_scope(scope)
+            .and_then(|registry| registry.get(qualified.name()))
+            .ok_or_else(|| file::unknown(input))?;
+
+        Ok((scope, database))
+    }
+
+    /// Every registered database, nearest scope first.
+    ///
+    /// The order matters for a listing: a project entry shadows a global one of the same
+    /// name, and showing the shadowed one second is how somebody works out why.
+    pub fn all(&self) -> impl Iterator<Item = (Scope, &str, &file::Database)> {
+        self.resolution
+            .search_order()
+            .iter()
+            .copied()
+            .filter_map(move |scope| {
+                self.in_scope(scope)
+                    .map(move |registry| (scope, registry.entries()))
+            })
+            .flat_map(|(scope, entries)| {
+                entries.map(move |(name, database)| (scope, name, database))
+            })
+    }
+
+    /// How many are registered, across both.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.all().count()
+    }
+
+    /// Is there nothing registered anywhere?
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.all().next().is_none()
+    }
+
+    /// Read a scope's registry, change it, and write it back.
+    ///
+    /// The read-modify-write is in one place because the write half has to be atomic —
+    /// see [`Registry::save`] — and a second copy of this is a second chance to forget.
+    pub fn update<T>(
+        &mut self,
+        scope: Scope,
+        change: impl FnOnce(&mut Registry) -> Outcome<T>,
+    ) -> Outcome<T> {
+        let (dir, registry) = match scope {
+            Scope::Project => self
+                .project
+                .as_mut()
+                .ok_or_else(|| Failure::usage("there is no project registry here"))?,
+            Scope::Global => &mut self.global,
+        };
+
+        let outcome = change(registry)?;
+        registry.save(&dir.join(file::FILE))?;
+        Ok(outcome)
     }
 }
 

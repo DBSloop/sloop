@@ -25,8 +25,7 @@ use crate::secret::{Route, Secret};
 /// The registry file's name, inside `.sloop` or inside the global store.
 pub const FILE: &str = "registry.toml";
 
-/// The encrypted password file, beside the registry it belongs to. Waits for R7.
-#[allow(dead_code)]
+/// The encrypted password file, beside the registry it belongs to.
 pub const SEALED_FILE: &str = "secrets.sealed";
 
 /// Bumped only when the shape below changes in a way an older sloop could misread.
@@ -76,8 +75,6 @@ pub struct Database {
     pub password: Route,
 }
 
-// Waits for R7 to file the first password under it.
-#[allow(dead_code)]
 impl Database {
     /// The key this database's password is filed under, in the keyring and in the
     /// encrypted file.
@@ -120,13 +117,19 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// How many databases are registered.
+    /// How many databases are registered in this one.
+    ///
+    /// Read by the tests. A command asks [`super::Registries`] instead, because a command
+    /// cares about the project and the global store together and one of these is only
+    /// ever half the answer.
+    #[allow(dead_code)]
     #[must_use]
     pub fn len(&self) -> usize {
         self.databases.len()
     }
 
-    /// Is it empty?
+    /// Is this one empty? See [`Registry::len`] for why a command does not ask this.
+    #[allow(dead_code)]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.databases.is_empty()
@@ -137,6 +140,75 @@ impl Registry {
         self.databases
             .iter()
             .map(|(name, database)| (name.as_str(), database))
+    }
+
+    /// The database registered under `name`.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&Database> {
+        self.databases.get(name)
+    }
+
+    /// Register one, or replace the entry already under that name.
+    ///
+    /// Returns what was there before, which is what `db add` needs in order to refuse
+    /// rather than overwrite, and what `db edit` needs in order to know the old
+    /// [`Database::credential_key`] and move the stored password off it.
+    pub fn insert(&mut self, name: String, database: Database) -> Option<Database> {
+        self.databases.insert(name, database)
+    }
+
+    /// Forget one. The server is never touched; that is `db drop`, and R8's problem.
+    ///
+    /// So is this: R8 is `db remove`. It lives here because taking an entry out is the
+    /// other half of putting one in, and the two belong side by side.
+    #[allow(dead_code)]
+    pub fn remove(&mut self, name: &str) -> Option<Database> {
+        self.databases.remove(name)
+    }
+
+    /// Move an entry to a different name, keeping everything else about it.
+    ///
+    /// Only a label moves. [`Database::credential_key`] is derived from the connection
+    /// and not from the name, precisely so that this cannot orphan a password.
+    pub fn rename(&mut self, from: &str, to: String) -> Outcome<()> {
+        let Some(database) = self.databases.remove(from) else {
+            return Err(unknown(from));
+        };
+        self.databases.insert(to, database);
+        Ok(())
+    }
+
+    /// Write the registry back, atomically.
+    ///
+    /// **Through a temporary file and a rename**, because the alternative is a process
+    /// that dies mid-write and leaves a half-written registry — which parses as a syntax
+    /// error and takes every *other* registered database down with it. A rename over an
+    /// existing file is atomic on every platform this ships to.
+    pub fn save(&self, path: &std::path::Path) -> Outcome<()> {
+        let text = self.to_toml()?;
+
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty());
+        if let Some(parent) = parent {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                Failure::usage(format!("could not create {}: {error}", parent.display()))
+            })?;
+        }
+
+        // Beside the real file rather than in the system temp directory: a rename across
+        // filesystems is not atomic, and on Linux `/tmp` is very often a different one.
+        let staged = path.with_extension("toml.writing");
+        std::fs::write(&staged, text.as_bytes()).map_err(|error| {
+            Failure::usage(format!("could not write {}: {error}", staged.display()))
+        })?;
+
+        std::fs::rename(&staged, path).map_err(|error| {
+            // The staged file is no use to anybody if the rename failed, and leaving it
+            // behind makes the next run look like it crashed.
+            let _ = std::fs::remove_file(&staged);
+            Failure::usage(format!("could not replace {}: {error}", path.display()))
+        })
     }
 
     /// Read a registry from the text of a file.
@@ -187,8 +259,7 @@ impl Registry {
         Ok(Self { databases })
     }
 
-    /// Write a registry back out. Waits for R7's `db add`.
-    #[allow(dead_code)]
+    /// Write a registry back out.
     pub fn to_toml(&self) -> Outcome<String> {
         let raw = RawFile {
             version: VERSION,
@@ -230,6 +301,45 @@ impl Registry {
             )),
         }
     }
+}
+
+/// A name nothing is registered under.
+///
+/// One sentence, in one place, because six commands say it and six slightly different
+/// wordings is how a user starts wondering whether they mean different things.
+pub fn unknown(name: &str) -> Failure {
+    Failure::new(Exit::Usage, format!("no database is registered as {name}"))
+        .hint("`sloop db list` shows what is, and `sloop db add` registers one")
+}
+
+/// Check that a database name is one a person can type back.
+///
+/// Looser than a project name — this one never becomes a filename — but not a free-for-all:
+/// a leading or trailing space is invisible in every listing, and a colon is the qualifier
+/// that tells `global:staging` from a database actually called `global:staging`.
+pub fn check_name(name: &str) -> Outcome<&str> {
+    let refuse = |why: &str| {
+        Failure::usage(format!("{name} cannot be a database name: {why}"))
+            .hint("letters, digits and the usual punctuation, with no colon and no stray spaces")
+    };
+
+    if name.is_empty() {
+        return Err(refuse("it is empty"));
+    }
+    if name.trim() != name {
+        return Err(refuse("it starts or ends with whitespace"));
+    }
+    if name.contains(':') {
+        return Err(refuse("a colon is the `global:` qualifier"));
+    }
+    if let Some(bad) = name.chars().find(|letter| letter.is_control()) {
+        return Err(refuse(&format!(
+            "{} is not something you could type back",
+            bad.escape_debug()
+        )));
+    }
+
+    Ok(name)
 }
 
 /// Take a carriage return off the end of every line.

@@ -41,19 +41,19 @@ use crate::engine::privileges::{self, Phase, Report, Verdict};
 use crate::engine::{Engine, adapter_for};
 use crate::exit::Exit;
 use crate::failure::Failure;
-use crate::registry::file::{Database, Registry};
+use crate::registry::file::Database;
+use crate::registry::{Registries, Scope};
 use crate::secret::{self, Lookup};
 use crate::style;
 use crate::tools::{Candidate, Inventory, Tool, acquire};
 
 /// What `doctor` needs in order to check the second half.
 pub struct Registered<'a> {
-    /// The databases to ask, already resolved to one registry.
-    pub registry: &'a Registry,
-    /// Which registry that was, and why — the same sentence every other command prints.
+    /// The databases to ask. Both scopes, because a name that resolves is a name whose
+    /// role has to work — and a global entry is just as real from inside a project.
+    pub registries: &'a Registries,
+    /// Which registry was resolved, and why — the same sentence every other command prints.
     pub from: String,
-    /// Where the encrypted password file for that registry lives.
-    pub sealed_file: &'a Path,
     /// `--password-command`, which outranks whatever route the file names.
     pub password_command: Option<&'a str>,
     /// Do not open a connection at all.
@@ -232,7 +232,7 @@ fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool 
         )
     );
 
-    if registered.registry.is_empty() {
+    if registered.registries.is_empty() {
         anstream::println!();
         anstream::println!(
             "{}",
@@ -260,9 +260,9 @@ fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool 
 
     let mut every_role_can_dump = true;
 
-    for (name, database) in registered.registry.entries() {
+    for (scope, name, database) in registered.registries.all() {
         anstream::println!();
-        match check(database, registered) {
+        match check(database, registered, scope) {
             Ok(report) => {
                 every_role_can_dump &= report.can_dump();
                 print_one(name, database, &report);
@@ -286,14 +286,21 @@ fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool 
 }
 
 /// Open the connection and ask it.
-fn check(database: &Database, registered: &Registered<'_>) -> Result<Report, Failure> {
+fn check(
+    database: &Database,
+    registered: &Registered<'_>,
+    scope: Scope,
+) -> Result<Report, Failure> {
     let key = database.credential_key();
     let route = database.password.overridden_by(registered.password_command);
+    // The encrypted file sits beside the registry that names the database, so a project
+    // entry and a global one of the same name read from two different stores.
+    let sealed = registered.registries.sealed_in(scope).unwrap_or_default();
     let resolved = secret::resolve(
         &route,
         &Lookup {
             key: &key,
-            sealed_file: registered.sealed_file,
+            sealed_file: &sealed,
         },
     )?;
 
