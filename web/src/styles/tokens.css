@@ -1,0 +1,273 @@
+/* ==========================================================================
+   tokens.css — the one place.
+
+   Every colour, size, radius, shadow and duration the site uses is written
+   here and nowhere else. `tailwind.config.js` gives these names — `bg-surface`,
+   `text-muted`, `text-3xl` — but restates no value, so changing a number here
+   changes it everywhere, in both themes, with no second edit.
+
+   Colours are space-separated sRGB channels rather than `#rrggbb`, so Tailwind's
+   opacity modifiers work — `bg-surface/60`, `border-line/40` — from the same
+   single definition. Hand-written CSS spells it `rgb(var(--ch-line))`; there is
+   deliberately no second set of pre-wrapped `--c-*` variables, because a
+   convenience layer is a second place for a value to live.
+
+   How a theme is chosen
+   ---------------------
+   `:root` holds the dark palette outright: dark is the default, and an explicit
+   `[data-theme="dark"]` needs no block of its own because `:root` already is it.
+   The light palette is parked under `--p-light-*` and pointed at by two
+   selectors — the OS preference when nothing has been chosen, and an explicit
+   choice. Those two lists are identical on purpose: CSS gives no way to share
+   one declaration block between a media query and a plain selector, and
+   duplicating *names* is the cheapest of the available duplications. No colour
+   value appears twice anywhere in this file.
+   ========================================================================== */
+
+:root {
+  /* -- Dark. The default, and the palette the site is designed in. --------- */
+
+  --ch-bg: 13 12 11; /* the page */
+  --ch-surface: 20 19 17; /* a panel lifted off it */
+  --ch-surface-2: 28 26 24; /* hover, and a panel on a panel */
+  --ch-line: 42 38 35; /* hairlines */
+  --ch-line-strong: 61 56 51; /* a border meant to be seen */
+
+  --ch-text: 237 233 228; /* 15.8:1 on --ch-bg */
+  --ch-muted: 167 158 149; /*  7.4:1 - comfortable secondary */
+  --ch-faint: 133 125 116; /*  4.8:1 - labels and metadata */
+
+  --ch-accent: 217 119 87; /*  6.3:1 - the brand, readable as-is on dark */
+  --ch-accent-soft: 38 23 18; /* a tinted panel */
+
+  /* Named, because a terminal block is dark in both themes and needs these
+     exact values there too — see --ch-term-ok below. Defined once, used twice. */
+  --p-dark-ok: 111 191 138;
+  --p-dark-warn: 224 178 86;
+  --p-dark-bad: 232 112 106;
+
+  --ch-ok: var(--p-dark-ok);
+  --ch-warn: var(--p-dark-warn);
+  --ch-bad: var(--p-dark-bad);
+
+  --ch-shadow: 0 0 0;
+  --ch-scrim: 0 0 0;
+  --shadow-k: 1.45; /* shadows need more weight on a dark page */
+
+  /* -- Light. Parked here, applied by the two selectors below. ------------- */
+
+  --p-light-bg: 251 250 248;
+  --p-light-surface: 255 255 255;
+  --p-light-surface-2: 245 243 239;
+  --p-light-line: 231 227 219;
+  --p-light-line-strong: 210 204 194;
+
+  --p-light-text: 26 23 20; /* 17.1:1 */
+  --p-light-muted: 87 80 74; /*  7.5:1 */
+  --p-light-faint: 119 111 102; /*  4.7:1 */
+
+  /* #D97757 is only 3.0:1 on a light page, which fails as text and as a focus
+     ring. The brand mark keeps the real orange - see --ch-brand - and this is
+     the darkened terracotta used wherever the accent has to be *read*. */
+  --p-light-accent: 176 79 45; /*  5.1:1 */
+  --p-light-accent-soft: 252 240 234;
+
+  --p-light-ok: 30 111 68;
+  --p-light-warn: 140 94 8;
+  --p-light-bad: 175 44 38;
+
+  --p-light-shadow: 40 33 26; /* warm, not neutral grey */
+  --p-light-scrim: 26 23 20;
+  --p-light-shadow-k: 1;
+
+  /* -- The same in both themes. ------------------------------------------- */
+
+  /* Claude Code orange, untouched. The mark, a filled button, the cursor in a
+     terminal block - anything whose job is to *be* the brand rather than to be
+     read as text against the page. */
+  --ch-brand: 217 119 87;
+  --ch-brand-ink: 32 20 14; /* 5.8:1 on the brand fill, in either theme */
+
+  /* A terminal is dark. Keeping these out of the theme switch is the point:
+     a CLI block on the light site still looks like a terminal rather than a
+     grey box, and the orange inside it is the orange the real CLI prints. */
+  --ch-term-bg: 9 8 8;
+  --ch-term-line: 34 31 29;
+  --ch-term-text: 224 220 214;
+  --ch-term-dim: 140 132 124;
+
+  /* And so do the statuses printed inside one. Using --ch-ok in a terminal block
+     would follow the theme and put the light palette's #1E6F44 on a near-black
+     background at 3.2:1, which fails — the container did not change theme, so
+     neither may its text. */
+  --ch-term-ok: var(--p-dark-ok);
+  --ch-term-warn: var(--p-dark-warn);
+  --ch-term-bad: var(--p-dark-bad);
+
+  /* -- Type. A scale, not a size list: each step grows faster than the last,
+        tracks tighter as it grows, and leads tighter still. 390px -> 1440px. -- */
+
+  --font-sans:
+    'Inter Variable', 'Inter Fallback', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono:
+    'JetBrains Mono Variable', 'JetBrains Mono Fallback', ui-monospace, SFMono-Regular, 'SF Mono',
+    Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --fs-xs: clamp(0.75rem, 0.7268rem + 0.0952vw, 0.8125rem);
+  --fs-sm: clamp(0.8438rem, 0.8205rem + 0.0952vw, 0.9063rem);
+  --fs-base: clamp(0.9688rem, 0.9339rem + 0.1429vw, 1.0625rem);
+  --fs-lg: clamp(1.0938rem, 1.0473rem + 0.1905vw, 1.2188rem);
+  --fs-xl: clamp(1.25rem, 1.192rem + 0.2381vw, 1.4063rem);
+  --fs-2xl: clamp(1.4688rem, 1.3759rem + 0.381vw, 1.7188rem);
+  --fs-3xl: clamp(1.75rem, 1.6107rem + 0.5714vw, 2.125rem);
+  --fs-4xl: clamp(2.0625rem, 1.8304rem + 0.9524vw, 2.6875rem);
+  --fs-5xl: clamp(2.375rem, 1.9804rem + 1.619vw, 3.4375rem);
+  --fs-6xl: clamp(2.75rem, 2.1464rem + 2.4762vw, 4.375rem);
+  --fs-7xl: clamp(3.125rem, 2.15rem + 4vw, 5.75rem);
+
+  --lh-xs: 1.5;
+  --lh-sm: 1.55;
+  --lh-base: 1.65;
+  --lh-lg: 1.6;
+  --lh-xl: 1.45;
+  --lh-2xl: 1.3;
+  --lh-3xl: 1.22;
+  --lh-4xl: 1.15;
+  --lh-5xl: 1.08;
+  --lh-6xl: 1.04;
+  --lh-7xl: 1;
+
+  --tr-xs: 0.01em;
+  --tr-sm: 0.005em;
+  --tr-base: 0em;
+  --tr-lg: -0.005em;
+  --tr-xl: -0.011em;
+  --tr-2xl: -0.016em;
+  --tr-3xl: -0.019em;
+  --tr-4xl: -0.022em;
+  --tr-5xl: -0.025em;
+  --tr-6xl: -0.028em;
+  --tr-7xl: -0.032em;
+
+  /* Prose stops here however wide the window gets. Rule 9's capped measure. */
+  --measure: 70ch;
+
+  /* -- Shape --------------------------------------------------------------- */
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-2xl: 28px;
+
+  /* -- Depth. One colour and one strength per theme; the three levels are
+        composed from them, so a shadow is never re-authored per theme. ------ */
+
+  --shadow-1:
+    0 1px 2px rgb(var(--ch-shadow) / calc(0.18 * var(--shadow-k))),
+    0 1px 1px rgb(var(--ch-shadow) / calc(0.12 * var(--shadow-k)));
+  --shadow-2:
+    0 4px 10px -2px rgb(var(--ch-shadow) / calc(0.26 * var(--shadow-k))),
+    0 2px 4px -2px rgb(var(--ch-shadow) / calc(0.16 * var(--shadow-k)));
+  --shadow-3:
+    0 18px 40px -12px rgb(var(--ch-shadow) / calc(0.4 * var(--shadow-k))),
+    0 6px 14px -6px rgb(var(--ch-shadow) / calc(0.22 * var(--shadow-k)));
+  --shadow-glow:
+    0 0 0 1px rgb(var(--ch-brand) / 0.28), 0 12px 44px -14px rgb(var(--ch-brand) / 0.5);
+
+  /* -- Motion. Every transition on the site reads its duration from one of
+        these four, which is what makes the kill switch at the bottom of this
+        file a kill switch rather than a suggestion. ------------------------- */
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 320ms;
+  --dur-4: 560ms;
+
+  /* Native widgets - form controls, the default scrollbar before our CSS has
+     painted, the canvas the browser flashes between documents. */
+  color-scheme: dark;
+}
+
+/* The OS asks for light and the visitor has not chosen dark. Two visitors reach
+   this branch, and the `:not` rather than a bare `:root` is what serves both:
+
+     - the one who picked **System**, the third of the three options. The script
+       writes `data-theme="system"`, which this matches and the rule below does
+       not, so the OS decides — and goes on deciding, in both directions.
+     - the one with **scripting turned off**, where no attribute is written at
+       all and `prefers-color-scheme` is the only signal there is.
+
+   A first visit with JavaScript on is neither: the script writes `dark`
+   outright, whatever the OS says, and the rule that dark is the default
+   survives. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --ch-bg: var(--p-light-bg);
+    --ch-surface: var(--p-light-surface);
+    --ch-surface-2: var(--p-light-surface-2);
+    --ch-line: var(--p-light-line);
+    --ch-line-strong: var(--p-light-line-strong);
+    --ch-text: var(--p-light-text);
+    --ch-muted: var(--p-light-muted);
+    --ch-faint: var(--p-light-faint);
+    --ch-accent: var(--p-light-accent);
+    --ch-accent-soft: var(--p-light-accent-soft);
+    --ch-ok: var(--p-light-ok);
+    --ch-warn: var(--p-light-warn);
+    --ch-bad: var(--p-light-bad);
+    --ch-shadow: var(--p-light-shadow);
+    --ch-scrim: var(--p-light-scrim);
+    --shadow-k: var(--p-light-shadow-k);
+    color-scheme: light;
+  }
+}
+
+/* The visitor chose light. Wins over a dark OS, which is the half of "both
+   directions" that a bare media query cannot do. */
+:root[data-theme='light'] {
+  --ch-bg: var(--p-light-bg);
+  --ch-surface: var(--p-light-surface);
+  --ch-surface-2: var(--p-light-surface-2);
+  --ch-line: var(--p-light-line);
+  --ch-line-strong: var(--p-light-line-strong);
+  --ch-text: var(--p-light-text);
+  --ch-muted: var(--p-light-muted);
+  --ch-faint: var(--p-light-faint);
+  --ch-accent: var(--p-light-accent);
+  --ch-accent-soft: var(--p-light-accent-soft);
+  --ch-ok: var(--p-light-ok);
+  --ch-warn: var(--p-light-warn);
+  --ch-bad: var(--p-light-bad);
+  --ch-shadow: var(--p-light-shadow);
+  --ch-scrim: var(--p-light-scrim);
+  --shadow-k: var(--p-light-shadow-k);
+  color-scheme: light;
+}
+
+/* One switch for the whole site. Durations come from these four tokens, so
+   collapsing them here stops every transition and animation at once - including
+   ones written later, by someone who forgot. The blanket rule underneath catches
+   anything that hard-codes a duration anyway. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-1: 1ms;
+    --dur-2: 1ms;
+    --dur-3: 1ms;
+    --dur-4: 1ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}

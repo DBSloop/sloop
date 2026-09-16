@@ -1,0 +1,18 @@
+/* The entry stylesheet, and the whole order of the cascade in one place.
+ *
+ * `@import` first because CSS requires it, and because postcss-import inlines
+ * these before Tailwind runs — which is what lets base.css put its rules in
+ * `@layer base` and have them land in Tailwind's base layer rather than in a
+ * native cascade layer that every utility would then outrank.
+ *
+ *   fonts    the @font-face declarations, self-hosted
+ *   tokens   THE ONE PLACE: every colour, size, radius, shadow and duration
+ *   base     element defaults, focus ring, selection, the scrollbar
+ */
+@import './styles/fonts.css';
+@import './styles/tokens.css';
+@import './styles/base.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

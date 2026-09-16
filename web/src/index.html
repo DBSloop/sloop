@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <base href="/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>sloop — register your databases once, then back them up, restore, mirror and sync</title>
+    <meta
+      name="description"
+      content="sloop is a cross-platform database operations CLI for PostgreSQL, MySQL and MariaDB. Register a database once, then back it up, restore it, mirror it or sync it — from a menu or from a flag. Your credentials never leave your machine: there is no HTTP client in the binary."
+    />
+
+    <!--
+      Told to the browser before any CSS is parsed, so the canvas it paints
+      between documents is the right colour and native widgets match.
+    -->
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0d0c0b" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#fbfaf8" media="(prefers-color-scheme: light)" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="sloop" />
+    <meta property="og:title" content="sloop — database backups that never phone home" />
+    <meta
+      property="og:description"
+      content="Register your databases once, then back them up, restore them, mirror them and sync them — on Windows, Linux and macOS, without your credentials ever leaving the machine."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+
+    <!--
+      Dark on first paint, with no flash.
+
+      This runs synchronously in <head>, before the body exists and therefore
+      before anything is painted, so the attribute is already on <html> when
+      the first frame is composed. Putting it in the Angular app instead would
+      paint one frame of the wrong theme and then correct it, which is the
+      flash this exists to prevent.
+
+      Three stored values, and one of them is not a theme:
+
+        'dark'    force dark
+        'light'   force light
+        'system'  follow prefers-color-scheme, in either direction
+        absent    a first visit, which is dark whatever the OS says
+
+      'system' is written onto <html> like the other two rather than left off,
+      so the state is visible in the inspector. tokens.css matches it with
+      :root:not([data-theme='dark']) inside the prefers-color-scheme query,
+      which is the same selector that already served visitors with scripting
+      turned off — so the third option needed no new CSS, only this line.
+
+      Dark on a first visit whatever the OS says is the owner's call, recorded
+      in docs/OWNER-DECISIONS.md.
+
+      localStorage throws rather than returning null in a few configurations —
+      Safari's private mode historically, and any browser with site data blocked
+      — so the read is guarded and the page falls back to dark.
+
+      A3 adds the three-way control that writes this key.
+    -->
+    <script>
+      (function () {
+        var choice = null;
+        try {
+          choice = localStorage.getItem('sloop-theme');
+        } catch (e) {
+          /* site data blocked; dark it is */
+        }
+        document.documentElement.setAttribute(
+          'data-theme',
+          choice === 'light' || choice === 'system' ? choice : 'dark',
+        );
+      })();
+    </script>
+  </head>
+  <body>
+    <app-root></app-root>
+  </body>
+</html>

@@ -1,0 +1,113 @@
+/* ==========================================================================
+   base.css — element defaults, and the chrome the browser would otherwise
+   draw for us.
+
+   Everything here reads its values from tokens.css. No colour, size or
+   duration is written in this file.
+   ========================================================================== */
+
+@layer base {
+  html {
+    /* Reduced motion turns this off — see the kill switch in tokens.css. */
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: rgb(var(--ch-bg));
+    color: rgb(var(--ch-text));
+    font-family: var(--font-sans);
+    font-size: var(--fs-base);
+    line-height: var(--lh-base);
+    letter-spacing: var(--tr-base);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* A variable face has every weight for real; let it never be faked. */
+    font-synthesis-weight: none;
+  }
+
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
+    font-feature-settings: 'liga' 0; /* no -> or != ligatures in shown commands */
+  }
+
+  /* Anything the page scrolls to with a fragment stops clear of a sticky
+     header rather than underneath it. */
+  :target {
+    scroll-margin-top: 6rem;
+  }
+
+  ::selection {
+    background-color: rgb(var(--ch-brand) / 0.28);
+    color: rgb(var(--ch-text));
+  }
+
+  /* A designed focus ring, not the browser's, and only for keyboard users.
+     Two rings: the accent, and a gap in the page colour so it stays visible
+     on top of a filled button as well as on the page. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--ch-accent));
+    outline-offset: 2px;
+  }
+
+  /* The browser's default ring would otherwise still appear for mouse clicks
+     in some engines. */
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   The scrollbar. Two implementations, fenced apart on purpose.
+
+   Chrome and Edge ignore ::-webkit-scrollbar entirely as soon as
+   `scrollbar-color` is set on the element, so setting both unconditionally
+   gets the thin standard bar and throws away the designed one. The @supports
+   test is false in every engine that has the pseudo-elements, which leaves
+   the standard properties to Firefox, where they are all there is.
+   -------------------------------------------------------------------------- */
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--ch-line-strong)) transparent;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+/* The transparent border plus `background-clip: content-box` is what makes the
+   thumb a floating capsule with breathing room rather than a bar wedged
+   against the edge of the window. */
+::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--ch-line-strong));
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+  transition: background-color var(--dur-2) var(--ease-out);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--ch-faint));
+}
+
+::-webkit-scrollbar-thumb:active {
+  background-color: rgb(var(--ch-accent));
+}
+
+/* Where a horizontal and a vertical bar meet. Left alone it is a grey square
+   in the corner of the window, in the one colour we never chose. */
+::-webkit-scrollbar-corner {
+  background-color: transparent;
+}
