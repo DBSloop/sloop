@@ -545,7 +545,8 @@ fn secret_for(
             Err(failure) => anstream::eprintln!(
                 "{}",
                 style::dim(&format!(
-                    "note: {} — registered anyway, because {} is read on every run rather                      than kept here",
+                    "note: {} — registered anyway, because {} is read on every run rather \
+                     than kept here",
                     failure.message(),
                     route.describe()
                 ))

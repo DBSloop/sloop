@@ -406,7 +406,8 @@ fn a_nasty_password_round_trips_through_the_keyring() {
             Ok(back) => assert_eq!(back.expose(), written, "the password came back mangled"),
             Err(why) => {
                 eprintln!(
-                    "the OS keyring accepted the password {what} and then would not return                      it ({}); skipping the rest of the round trip",
+                    "the OS keyring accepted the password {what} and then would not return \
+                     it ({}); skipping the rest of the round trip",
                     why.message()
                 );
                 return;
