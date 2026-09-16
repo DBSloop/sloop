@@ -53,6 +53,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::secret::Secret;
 
@@ -344,8 +345,91 @@ pub trait Adapter {
     /// `verify` never turns an estimate into a failure.
     fn estimated_row_counts(&self, target: &Target<'_>) -> Outcome<Vec<TableCount>>;
 
-    /// Write a dump of `target` to `to`. Reads the source and nothing else.
-    fn dump(&self, target: &Target<'_>, to: &Path) -> Outcome<DumpSummary>;
+    /// Write a dump of `target` into `sink`. Reads the source and nothing else.
+    ///
+    /// **A stream rather than a path, because `R11` encrypts.** The dump programs both
+    /// write to standard output, so the bytes can go through sloop on their way to wherever
+    /// they are going — a file, or an `age` writer. Writing a plaintext dump to disk and
+    /// encrypting it afterwards would need twice the free space and would put the very
+    /// thing being protected on the disk it was being protected from, however briefly.
+    ///
+    /// Anything the caller wants buffered, the caller buffers: an adapter writes what the
+    /// dump program gave it.
+    fn dump_into(&self, target: &Target<'_>, sink: &mut dyn std::io::Write) -> Outcome<()>;
+
+    /// Write a dump of `target` to the file `to`.
+    ///
+    /// Provided once here rather than in each adapter, because "put a dump in a file" is
+    /// the same job whichever engine produced it — and because the two properties that
+    /// matter are easy to lose in a second copy: an empty dump is a failure, and a dump
+    /// that failed leaves no file behind for somebody to find later and trust.
+    fn dump(&self, target: &Target<'_>, to: &Path) -> Outcome<DumpSummary> {
+        use std::io::Write as _;
+
+        if let Some(parent) = to.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                Failure::new(
+                    Exit::Dump,
+                    format!("could not create {}: {error}", parent.display()),
+                )
+            })?;
+        }
+
+        let started = std::time::Instant::now();
+        let existed = to.exists();
+
+        let outcome = (|| -> Outcome<()> {
+            let file = std::fs::File::create(to).map_err(|error| {
+                Failure::new(
+                    Exit::Dump,
+                    format!("could not create {}: {error}", to.display()),
+                )
+            })?;
+            let mut sink = std::io::BufWriter::with_capacity(256 * 1024, file);
+            self.dump_into(target, &mut sink)?;
+            sink.flush().map_err(|error| {
+                Failure::new(
+                    Exit::Dump,
+                    format!("could not finish writing {}: {error}", to.display()),
+                )
+            })
+        })();
+
+        if let Err(failure) = outcome {
+            // Only a file this call created. A failure that leaves a short dump behind is
+            // a failure somebody restores from six months later.
+            if !existed {
+                let _ = std::fs::remove_file(to);
+            }
+            return Err(failure);
+        }
+
+        let bytes = std::fs::metadata(to)
+            .map(|meta| meta.len())
+            .map_err(|error| {
+                Failure::new(
+                    Exit::Dump,
+                    format!(
+                        "the dump reported success but {} is not there: {error}",
+                        to.display()
+                    ),
+                )
+            })?;
+
+        if bytes == 0 {
+            let _ = std::fs::remove_file(to);
+            return Err(Failure::new(
+                Exit::Dump,
+                format!("the dump wrote nothing to {}", to.display()),
+            ));
+        }
+
+        Ok(DumpSummary {
+            path: to.to_path_buf(),
+            bytes,
+            took: started.elapsed(),
+        })
+    }
 
     /// Load a dump written by [`Adapter::dump`] into `target`.
     fn restore(&self, target: &Target<'_>, from: &Path) -> Outcome<()>;

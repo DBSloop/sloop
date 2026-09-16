@@ -27,19 +27,16 @@
 //!   the user who owns the process; `argv` is readable by everyone on the machine.
 
 use std::borrow::Cow;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::OnceLock;
-use std::time::Instant;
 
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 
 use super::privileges::{self, Finding, Report, Verdict, verdict_from};
-use super::{
-    Adapter, Capabilities, DumpSummary, Engine, ServerInfo, Table, TableCount, Target, Version,
-};
+use super::{Adapter, Capabilities, Engine, ServerInfo, Table, TableCount, Target, Version};
 
 /// Long enough to cross a slow link, short enough that a scheduled run does not sit on a
 /// dead host until someone notices. Matches the PostgreSQL adapter.
@@ -598,18 +595,9 @@ impl Adapter for MysqlFamily {
             .collect())
     }
 
-    fn dump(&self, target: &Target<'_>, to: &Path) -> Outcome<DumpSummary> {
+    fn dump_into(&self, target: &Target<'_>, sink: &mut dyn Write) -> Outcome<()> {
         // Before anything is written: is this the engine it was registered as?
         self.probe(target)?;
-
-        if let Some(parent) = to.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent).map_err(|error| {
-                Failure::new(
-                    Exit::Dump,
-                    format!("could not create {}: {error}", parent.display()),
-                )
-            })?;
-        }
 
         let mut command = self.spawn(&self.tools.dump, target);
         command
@@ -632,25 +620,7 @@ impl Adapter for MysqlFamily {
         // decision — which is what lets a backup of `app` land in `app_staging`.
         command.arg(target.database);
 
-        let started = Instant::now();
-        let bytes = self.run_the_dump(command, target, to)?;
-
-        if bytes == 0 {
-            return Err(Failure::new(
-                Exit::Dump,
-                format!(
-                    "{} wrote nothing to {}",
-                    self.family.dump_program(),
-                    to.display()
-                ),
-            ));
-        }
-
-        Ok(DumpSummary {
-            path: to.to_path_buf(),
-            bytes,
-            took: started.elapsed(),
-        })
+        self.run_the_dump(command, target, sink)
     }
 
     fn restore(&self, target: &Target<'_>, from: &Path) -> Outcome<()> {
@@ -1174,7 +1144,12 @@ impl MysqlFamily {
     /// `DEFINER` is taken off are only ever the two shapes in [`without_a_definer`] —
     /// neither of which a row of data can have. `mysqldump` escapes a newline inside a
     /// value as `\n`, so one statement is always exactly one line.
-    fn run_the_dump(&self, mut command: Command, target: &Target<'_>, to: &Path) -> Outcome<u64> {
+    fn run_the_dump(
+        &self,
+        mut command: Command,
+        target: &Target<'_>,
+        sink: &mut dyn Write,
+    ) -> Outcome<()> {
         let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1191,7 +1166,7 @@ impl MysqlFamily {
             said
         });
 
-        let written = Self::copy_the_dump(&mut child, to);
+        let copied = Self::copy_the_dump(&mut child, sink);
 
         let status = child.wait().map_err(|error| {
             Failure::new(
@@ -1202,23 +1177,21 @@ impl MysqlFamily {
         let said = String::from_utf8_lossy(&draining.join().unwrap_or_default()).into_owned();
 
         if !status.success() {
-            // The tool's own complaint outranks whatever went wrong writing the file: if
-            // the dump failed, a short file is the symptom and not the cause.
+            // The tool's own complaint outranks whatever went wrong writing the bytes: if
+            // the dump failed, a short stream is the symptom and not the cause.
             return Err(from_stderr(&self.tools.dump, &said, Exit::Dump, target));
         }
 
-        written
+        copied
     }
 
-    /// Copy the dump program's output into `to`, correcting it on the way. See
+    /// Copy the dump program's output into `out`, correcting it on the way. See
     /// [`MysqlFamily::run_the_dump`].
-    fn copy_the_dump(child: &mut Child, to: &Path) -> Outcome<u64> {
+    fn copy_the_dump(child: &mut Child, out: &mut dyn Write) -> Outcome<()> {
         let failed = |what: &str, error: &std::io::Error| {
-            Failure::new(Exit::Dump, format!("{what} {}: {error}", to.display()))
+            Failure::new(Exit::Dump, format!("{what} the dump: {error}"))
         };
 
-        let file = std::fs::File::create(to).map_err(|error| failed("could not create", &error))?;
-        let mut out = BufWriter::with_capacity(256 * 1024, file);
         let mut reading =
             BufReader::with_capacity(256 * 1024, child.stdout.take().expect("stdout was piped"));
 
@@ -1226,13 +1199,12 @@ impl MysqlFamily {
         // table is not valid UTF-8 — reading it as text would replace the bytes it could not
         // decode and quietly corrupt the backup.
         let mut line = Vec::with_capacity(8 * 1024);
-        let mut written = 0_u64;
 
         loop {
             line.clear();
             let read = reading
                 .read_until(b'\n', &mut line)
-                .map_err(|error| failed("could not read the dump for", &error))?;
+                .map_err(|error| failed("could not read", &error))?;
             if read == 0 {
                 break;
             }
@@ -1248,18 +1220,15 @@ impl MysqlFamily {
             let corrected = without_a_definer(&line);
             out.write_all(&corrected)
                 .map_err(|error| failed("could not write", &error))?;
-            written += corrected.len() as u64;
 
             if had_newline {
                 out.write_all(b"\n")
                     .map_err(|error| failed("could not write", &error))?;
-                written += 1;
             }
         }
 
         out.flush()
-            .map_err(|error| failed("could not finish writing", &error))?;
-        Ok(written)
+            .map_err(|error| failed("could not finish writing", &error))
     }
 }
 

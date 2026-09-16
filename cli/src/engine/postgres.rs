@@ -15,15 +15,12 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::Instant;
 
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 
 use super::privileges::{self, Finding, Report, Verdict, verdict_from};
-use super::{
-    Adapter, Capabilities, DumpSummary, Engine, ServerInfo, Table, TableCount, Target, Version,
-};
+use super::{Adapter, Capabilities, Engine, ServerInfo, Table, TableCount, Target, Version};
 
 /// A separator that cannot turn up inside an identifier or a number.
 const FIELD: &str = "\u{1f}";
@@ -341,22 +338,16 @@ impl Adapter for Postgres {
             .collect())
     }
 
-    fn dump(&self, target: &Target<'_>, to: &Path) -> Outcome<DumpSummary> {
+    fn dump_into(&self, target: &Target<'_>, sink: &mut dyn std::io::Write) -> Outcome<()> {
         // Before anything is written: is this pg_dump even allowed to read that server?
         let server = self.probe(target)?;
         self.refuse_an_old_client(server.version)?;
 
-        if let Some(parent) = to.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent).map_err(|error| {
-                Failure::new(
-                    Exit::Dump,
-                    format!("could not create {}: {error}", parent.display()),
-                )
-            })?;
-        }
-
-        let started = Instant::now();
-        let output = self
+        // **No `--file`, so the archive comes back on standard output.** Custom format is a
+        // stream either way, and `pg_dump -Fc` to a pipe is what every `pg_dump | gzip`
+        // does. Reading it here is what lets the bytes be encrypted on the way past without
+        // a plaintext copy ever reaching the disk.
+        let mut child = self
             .spawn_dump(target)
             .args(Self::connection_args(target))
             // Custom format: compressed, and the only format pg_restore can read
@@ -366,39 +357,39 @@ impl Adapter for Postgres {
             // across is how a restore fails on a machine that never had them.
             .arg("--no-owner")
             .arg("--no-privileges")
-            .arg("--file")
-            .arg(to)
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|error| missing_tool(&self.tools.dump, &error))?;
 
-        if !output.status.success() {
-            return Err(from_tool(&self.tools.dump, &output, Exit::Dump, target));
+        // Drained on a thread of its own: a full stderr pipe stops the child writing to
+        // stdout, which would be a backup that hangs rather than one that fails.
+        let mut complaining = child.stderr.take().expect("stderr was piped");
+        let draining = std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut complaining, &mut said);
+            said
+        });
+
+        let copied = {
+            let mut archive = child.stdout.take().expect("stdout was piped");
+            std::io::copy(&mut archive, sink)
+        };
+
+        let status = child.wait().map_err(|error| {
+            Failure::new(Exit::Dump, format!("pg_dump would not finish: {error}"))
+        })?;
+        let said = String::from_utf8_lossy(&draining.join().unwrap_or_default()).into_owned();
+
+        if !status.success() {
+            // The tool's own complaint outranks whatever went wrong writing the bytes: if
+            // the dump failed, a short stream is the symptom and not the cause.
+            return Err(from_stderr(&self.tools.dump, &said, Exit::Dump, target));
         }
 
-        let bytes = std::fs::metadata(to)
-            .map(|meta| meta.len())
-            .map_err(|error| {
-                Failure::new(
-                    Exit::Dump,
-                    format!(
-                        "pg_dump reported success but {} is not there: {error}",
-                        to.display()
-                    ),
-                )
-            })?;
-
-        if bytes == 0 {
-            return Err(Failure::new(
-                Exit::Dump,
-                format!("pg_dump wrote nothing to {}", to.display()),
-            ));
-        }
-
-        Ok(DumpSummary {
-            path: to.to_path_buf(),
-            bytes,
-            took: started.elapsed(),
-        })
+        copied
+            .map(|_| ())
+            .map_err(|error| Failure::new(Exit::Dump, format!("could not write the dump: {error}")))
     }
 
     fn restore(&self, target: &Target<'_>, from: &Path) -> Outcome<()> {
@@ -680,14 +671,26 @@ fn missing_tool(tool: &Path, error: &std::io::Error) -> Failure {
 /// is the distinction a scheduler acts on: a server that is down will be up later, and a
 /// dump that failed on its own terms will not fix itself.
 fn from_tool(tool: &Path, output: &Output, otherwise: Exit, target: &Target<'_>) -> Failure {
-    let said = String::from_utf8_lossy(&output.stderr);
+    from_stderr(
+        tool,
+        &String::from_utf8_lossy(&output.stderr),
+        otherwise,
+        target,
+    )
+}
+
+/// The same, where the complaint was collected from a pipe rather than by `output()`.
+///
+/// A dump that streams cannot use `Command::output` — its standard output is being read a
+/// block at a time — so its stderr arrives as a string that was drained on a thread.
+fn from_stderr(tool: &Path, said: &str, otherwise: Exit, target: &Target<'_>) -> Failure {
     let first = said
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or("it said nothing");
 
-    let exit = if looks_like_a_connection_problem(&said) {
+    let exit = if looks_like_a_connection_problem(said) {
         Exit::Connect
     } else {
         otherwise
