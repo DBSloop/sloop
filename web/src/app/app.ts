@@ -1,11 +1,12 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 
-/** The application shell. It holds the router outlet and nothing else: the
- *  navbar lands here in A3, once there is more than one route to move between. */
+import { Navbar } from './navbar/navbar';
+
+/** The application shell: the navbar, which every route shares, and the outlet. */
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet],
+  imports: [Navbar, RouterOutlet],
   templateUrl: './app.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
