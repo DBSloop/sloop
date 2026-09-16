@@ -369,10 +369,10 @@ fn what_an_edit_orphans_is_cleared_through_the_route_that_held_it() {
 // ---------------------------------------------------------------------------------------
 
 /// The flags, with nothing set but the two that have no default.
-fn creating() -> super::Creating<'static> {
-    super::Creating {
+fn creating() -> super::Building<'static> {
+    super::Building {
         name: "orders",
-        engine: "postgres",
+        engine: crate::engine::Engine::Postgres,
         host: "127.0.0.1",
         port: None,
         superuser: None,
@@ -406,7 +406,7 @@ fn an_unattended_create_names_every_flag_it_needs_at_once() {
 
 #[test]
 fn an_unattended_create_with_both_sources_is_accepted() {
-    super::unattended_needs(&super::Creating {
+    super::unattended_needs(&super::Building {
         superuser_password_command: Some("echo secret"),
         role_password_stdin: true,
         ..creating()
@@ -417,7 +417,7 @@ fn an_unattended_create_with_both_sources_is_accepted() {
 /// One of the two is not enough, and the message says which one is still missing.
 #[test]
 fn half_the_flags_is_still_refused() {
-    let only_role = super::unattended_needs(&super::Creating {
+    let only_role = super::unattended_needs(&super::Building {
         role_password_stdin: true,
         ..creating()
     })
@@ -433,7 +433,7 @@ fn half_the_flags_is_still_refused() {
         only_role.message()
     );
 
-    let only_admin = super::unattended_needs(&super::Creating {
+    let only_admin = super::unattended_needs(&super::Building {
         superuser_password_stdin: true,
         ..creating()
     })

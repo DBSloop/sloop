@@ -93,7 +93,14 @@ pub fn add(
     let retire = replacing
         .as_ref()
         .and_then(|existing| Retiring::between(existing, &database));
-    write(context, scope, name, &database, secret.as_ref(), retire)?;
+    write(
+        &mut context.registries,
+        scope,
+        name,
+        &database,
+        secret.as_ref(),
+        retire,
+    )?;
 
     anstream::println!(
         "{} {} in the {} registry, {}",
@@ -137,6 +144,48 @@ pub struct Creating<'a> {
     pub role_password_stdin: bool,
 }
 
+/// The same thing, with the engine already settled rather than still a string.
+///
+/// **`mirror --create` never asks which engine**, because a copy is of something: the
+/// destination is whatever the source is, and a flag that could disagree with that is a flag
+/// that can produce a mirror which cannot be restored. So the one field `db create` reads
+/// from the command line is the one field this does not have — see [`build`].
+pub struct Building<'a> {
+    /// What to register it as.
+    pub name: &'a str,
+    /// Which engine. Typed by `db create`, taken from the source by `mirror --create`.
+    pub engine: Engine,
+    /// The server.
+    pub host: &'a str,
+    /// Its port, or the engine's default.
+    pub port: Option<u16>,
+    /// The account to create it with, or the engine's usual superuser.
+    pub superuser: Option<&'a str>,
+    /// Take that account's password from standard input.
+    pub superuser_password_stdin: bool,
+    /// Run this for that account's password.
+    pub superuser_password_command: Option<&'a str>,
+    /// The database's own name, or the label.
+    pub database: Option<&'a str>,
+    /// The role to create, or the database's name.
+    pub role: Option<&'a str>,
+    /// Take the new role's password from standard input rather than generating one.
+    pub role_password_stdin: bool,
+}
+
+/// What [`build`] left on the server and in the registry.
+///
+/// **The password comes back rather than being looked up again.** `mirror --create` needs to
+/// connect as the role it just made, and reading it straight back out of the keyring would
+/// turn one more failure — a locked keychain, a headless box — into a database that exists,
+/// is registered, and cannot be copied into by the command that made it.
+pub struct Built {
+    /// The record as it was registered.
+    pub record: Database,
+    /// The new role's password, still in hand.
+    pub secret: Secret,
+}
+
 /// Create a database, the role that owns it, and the grants that make the two usable.
 ///
 /// **Two passwords, treated completely differently, and that is the whole shape of this
@@ -149,9 +198,43 @@ pub struct Creating<'a> {
 /// because what "usable" means is PostgreSQL's business on PostgreSQL and MySQL's on MySQL,
 /// while the flags a person types stay identical.
 pub fn create(context: &mut Context<'_>, asked: &Creating<'_>) -> Outcome<Exit> {
+    let engine = Engine::parse(asked.engine)?;
+    build(
+        &mut context.registries,
+        context.global,
+        context.consent,
+        &Building {
+            name: asked.name,
+            engine,
+            host: asked.host,
+            port: asked.port,
+            superuser: asked.superuser,
+            superuser_password_stdin: asked.superuser_password_stdin,
+            superuser_password_command: asked.superuser_password_command,
+            database: asked.database,
+            role: asked.role,
+            role_password_stdin: asked.role_password_stdin,
+        },
+    )?;
+    Ok(Exit::Success)
+}
+
+/// The body of `db create`, reachable from any command that needs a database to exist.
+///
+/// **Three borrowed pieces rather than a [`Context`]**, because `mirror --create` is holding
+/// a context of its own and the alternative is two commands passing one struct back and
+/// forth around a call. These are exactly what creating a database touches: the registries
+/// it is written to, the store the client tools live in, and whether a refusal was overridden
+/// on purpose.
+pub fn build(
+    registries: &mut Registries,
+    global: &Path,
+    consent: Consent<'_>,
+    asked: &Building<'_>,
+) -> Outcome<Built> {
     check_name(asked.name)?;
 
-    let engine = Engine::parse(asked.engine)?;
+    let engine = asked.engine;
     let port = asked.port.unwrap_or_else(|| engine.default_port());
     let database = asked.database.unwrap_or(asked.name).to_owned();
     let role = asked.role.unwrap_or(&database).to_owned();
@@ -159,13 +242,12 @@ pub fn create(context: &mut Context<'_>, asked: &Creating<'_>) -> Outcome<Exit> 
         .superuser
         .map_or_else(|| usual_superuser(engine).to_owned(), str::to_owned);
 
-    let scope = context.registries.writes_to();
-    if context
-        .registries
+    let scope = registries.writes_to();
+    if registries
         .in_scope(scope)
         .and_then(|registry| registry.get(asked.name))
         .is_some()
-        && !context.consent.forced()
+        && !consent.forced()
     {
         return Err(Failure::usage(format!(
             "{} is already registered in the {} registry",
@@ -201,7 +283,7 @@ pub fn create(context: &mut Context<'_>, asked: &Creating<'_>) -> Outcome<Exit> 
     let (role_password, generated) = role_password(asked)?;
     let admin_password = superuser_password(asked, &superuser, asked.host, port)?;
 
-    let adapter = super::adapter_for(engine, context.global);
+    let adapter = super::adapter_for(engine, global);
     let maintenance = Target {
         engine,
         host: asked.host,
@@ -236,7 +318,7 @@ pub fn create(context: &mut Context<'_>, asked: &Creating<'_>) -> Outcome<Exit> 
         password: route.clone(),
     };
     write(
-        context,
+        registries,
         scope,
         asked.name,
         &record,
@@ -258,7 +340,10 @@ pub fn create(context: &mut Context<'_>, asked: &Creating<'_>) -> Outcome<Exit> 
         print_once(&role, &role_password, &route);
     }
 
-    Ok(Exit::Success)
+    Ok(Built {
+        record,
+        secret: role_password,
+    })
 }
 
 /// Show a generated password, once.
@@ -326,7 +411,7 @@ fn announce_created(database: &str, role: &str, done: &crate::engine::Provisione
 /// shape: the superuser's password from a command, the new role's from standard input. Being
 /// told about one flag, then run again and told about the other, is how a tool earns the
 /// reputation this project is trying not to have.
-fn unattended_needs(asked: &Creating<'_>) -> Outcome<()> {
+pub fn unattended_needs(asked: &Building<'_>) -> Outcome<()> {
     if std::io::stdin().is_terminal() {
         return Ok(());
     }
@@ -363,7 +448,7 @@ fn unattended_needs(asked: &Creating<'_>) -> Outcome<()> {
 /// print to has to bring its own password, and is told which flag does that. That is also
 /// the honest answer: whatever creates a database unattended already has to know the
 /// password to configure anything with it.
-fn role_password(asked: &Creating<'_>) -> Outcome<(Secret, bool)> {
+fn role_password(asked: &Building<'_>) -> Outcome<(Secret, bool)> {
     if asked.role_password_stdin {
         return Ok((from_stdin()?, false));
     }
@@ -431,7 +516,7 @@ fn generated_password() -> Outcome<String> {
 /// a flag that names a command, standard input, or a hidden prompt — and with no terminal
 /// and neither flag, the two flags are named in the error rather than guessed at.
 fn superuser_password(
-    asked: &Creating<'_>,
+    asked: &Building<'_>,
     superuser: &str,
     host: &str,
     port: u16,
@@ -690,7 +775,7 @@ pub fn edit(
     }
 
     write(
-        context,
+        &mut context.registries,
         scope,
         name,
         &after,
@@ -1085,7 +1170,7 @@ fn announce_server(server: &crate::engine::ServerInfo) {
 /// fails on the next backup. So the record goes last, and a failure there takes the
 /// credential back out rather than leaving the pair half made.
 fn write(
-    context: &mut Context<'_>,
+    registries: &mut Registries,
     scope: Scope,
     name: &str,
     database: &Database,
@@ -1095,17 +1180,15 @@ fn write(
     let key = database.credential_key();
 
     if let Some(secret) = secret {
-        store(&database.password, &key, secret, context, scope)?;
+        store(&database.password, &key, secret, registries, scope)?;
     }
 
     let stored = crate::registry::Qualified::parse(name)?.name().to_owned();
     let entry = database.clone();
-    let saved = context
-        .registries
-        .update(scope, move |registry| Ok(registry.insert(stored, entry)));
+    let saved = registries.update(scope, move |registry| Ok(registry.insert(stored, entry)));
 
     if saved.is_err() && secret.is_some() {
-        let _ = forget(&database.password, &key, context, scope);
+        let _ = forget(&database.password, &key, registries, scope);
     }
     saved?;
 
@@ -1113,7 +1196,7 @@ fn write(
     // is clutter at best, and clearing it before the write would have been clutter plus a
     // lost password if the write then failed.
     if let Some(old) = retire {
-        if let Err(failure) = forget(&old.route, &old.key, context, scope) {
+        if let Err(failure) = forget(&old.route, &old.key, registries, scope) {
             anstream::eprintln!(
                 "{}",
                 style::dim(&format!(
@@ -1161,13 +1244,13 @@ fn store(
     route: &Route,
     key: &str,
     secret: &Secret,
-    context: &Context<'_>,
+    registries: &Registries,
     scope: Scope,
 ) -> Outcome<()> {
     match route {
         Route::Keyring => crate::secret::os_keyring::set(key, secret),
         Route::EncryptedFile => {
-            let path = context.registries.sealed_in(scope).ok_or_else(|| {
+            let path = registries.sealed_in(scope).ok_or_else(|| {
                 Failure::usage("there is nowhere to put the encrypted password file")
             })?;
             crate::secret::sealed::put(&path, key, secret)
@@ -1177,11 +1260,11 @@ fn store(
     }
 }
 
-fn forget(route: &Route, key: &str, context: &Context<'_>, scope: Scope) -> Outcome<()> {
+fn forget(route: &Route, key: &str, registries: &Registries, scope: Scope) -> Outcome<()> {
     match route {
         Route::Keyring => crate::secret::os_keyring::delete(key),
         Route::EncryptedFile => {
-            let path = context.registries.sealed_in(scope).ok_or_else(|| {
+            let path = registries.sealed_in(scope).ok_or_else(|| {
                 Failure::usage("there is nowhere to look for the encrypted password file")
             })?;
             crate::secret::sealed::forget(&path, key)
@@ -1241,7 +1324,12 @@ pub fn remove(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
         .update(scope, move |registry| Ok(registry.remove(&stored)))?;
 
     if record.password.is_stored() {
-        if let Err(failure) = forget(&record.password, &record.credential_key(), context, scope) {
+        if let Err(failure) = forget(
+            &record.password,
+            &record.credential_key(),
+            &context.registries,
+            scope,
+        ) {
             anstream::eprintln!(
                 "{}",
                 style::dim(&format!(

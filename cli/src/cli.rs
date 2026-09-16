@@ -142,8 +142,19 @@ pub enum Command {
         source: String,
 
         /// The registered database to copy it over. Its contents are replaced.
+        #[arg(long, value_name = "NAME", conflicts_with = "create")]
+        to: Option<String>,
+
+        /// Make the destination first, then copy into it. What to call it here.
+        ///
+        /// The database, the role that owns it and the grants all get made — the same work
+        /// `sloop db create` does, with the engine taken from the source rather than asked
+        /// for. On the source's own server unless --host says otherwise.
         #[arg(long, value_name = "NAME")]
-        to: String,
+        create: Option<String>,
+
+        #[command(flatten)]
+        new: NewDestination,
 
         /// Dump to a file first, so a copy that fails can be retried.
         ///
@@ -397,6 +408,100 @@ pub struct Fields {
     /// The role to connect as.
     #[arg(long, value_name = "ROLE")]
     pub user: Option<String>,
+}
+
+/// The destination `mirror --create` is about to make, when it is making one.
+///
+/// **The same flags `db create` takes, minus `--engine`.** One vocabulary rather than two:
+/// somebody who has created a database with `sloop db create` already knows every word of
+/// this. The engine is missing because it is not a choice — a copy is of something, and the
+/// destination is whatever the source is.
+///
+/// Every one of them `requires = "create"`, so passing `--role` to a plain `mirror --to`
+/// is a usage error naming the flag that would have made it mean something, rather than a
+/// value quietly ignored.
+#[derive(Debug, clap::Args)]
+pub struct NewDestination {
+    /// The server to make it on. The source's own server when left out.
+    #[arg(
+        long,
+        value_name = "HOST",
+        requires = "create",
+        conflicts_with = "to",
+        help_heading = "Making the destination"
+    )]
+    pub host: Option<String>,
+
+    /// Its port. The source's port when the host is the source's, the engine's default
+    /// otherwise.
+    #[arg(
+        long,
+        value_name = "PORT",
+        requires = "create",
+        conflicts_with = "to",
+        help_heading = "Making the destination"
+    )]
+    pub port: Option<u16>,
+
+    /// The account to create it with — `postgres` or `root` when left out.
+    ///
+    /// Used for this one connection and never stored, never logged, never in `ps`.
+    #[arg(
+        long,
+        value_name = "USER",
+        requires = "create",
+        conflicts_with = "to",
+        help_heading = "Making the destination"
+    )]
+    pub superuser: Option<String>,
+
+    /// Read that account's password from standard input.
+    #[arg(
+        long,
+        requires = "create",
+        conflicts_with = "to",
+        help_heading = "Making the destination"
+    )]
+    pub superuser_password_stdin: bool,
+
+    /// Run this and read that account's password from its output.
+    #[arg(
+        long,
+        value_name = "COMMAND",
+        requires = "create",
+        conflicts_with = "to",
+        help_heading = "Making the destination"
+    )]
+    pub superuser_password_command: Option<String>,
+
+    /// The new database's own name on the server. The label when left out.
+    #[arg(
+        long,
+        value_name = "NAME",
+        requires = "create",
+        conflicts_with = "to",
+        help_heading = "Making the destination"
+    )]
+    pub database: Option<String>,
+
+    /// The role to create and hand it to. The database's name when left out.
+    #[arg(
+        long,
+        value_name = "ROLE",
+        requires = "create",
+        conflicts_with = "to",
+        help_heading = "Making the destination"
+    )]
+    pub role: Option<String>,
+
+    /// Read the new role's password from standard input instead of generating one.
+    #[arg(
+        long,
+        requires = "create",
+        conflicts_with_all = ["to", "superuser_password_stdin"],
+        help_heading = "Making the destination"
+    )]
+    pub role_password_stdin: bool,
 }
 
 /// Where the password will come from, from now on.
@@ -691,6 +796,18 @@ fails halfway has nothing to retry from, which is what --safe is for.
 
   sloop mirror live --to staging
   sloop mirror live --to staging --safe    # dump to a file first, deleted once verified
+
+The destination does not have to exist. --create makes it first — the database, the role
+that owns it, and the grants that make the role able to use it — and then copies into it.
+The engine is not asked for: it is the source's, because a copy is of something.
+
+  sloop mirror live --create staging
+  sloop mirror live --create staging --host db2.internal --role staging_app
+
+The account that creates it is used for one connection and kept nowhere. The new role's
+password is generated and filed where this machine keeps secrets, exactly as
+`sloop db create` does it — and the new database is registered, so the next command is
+`sloop backup staging`.
 
 Mirroring a database over itself is refused — on host, port and database together, and
 localhost counts as 127.0.0.1.

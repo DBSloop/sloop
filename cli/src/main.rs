@@ -113,20 +113,7 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
     let consent = Consent::given(cli.yes, cli.force, cli.confirm.as_deref());
 
     if let Some(Command::Doctor { offline }) = &cli.command {
-        // Only offer to install when there is somebody there to answer. Without a
-        // terminal `doctor` is a report and nothing else, which is what a health
-        // check in a pipeline wants it to be.
-        let interactive = std::io::stdin().is_terminal();
-        return Ok(commands::doctor::run(
-            &global,
-            interactive,
-            &commands::doctor::Registered {
-                registries: &registries,
-                from: resolution.describe(&global),
-                password_command: cli.password_command.as_deref(),
-                offline: *offline,
-            },
-        ));
+        return Ok(doctor(cli, &global, &resolution, &registries, *offline));
     }
 
     if let Some(Command::Backup {
@@ -141,15 +128,7 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
             global: &global,
             password_command: cli.password_command.as_deref(),
         };
-        // `--sequential` is the default, so it is read for what it says rather than
-        // for what it changes: a cron line that spells the mode out stays correct
-        // whatever a later release makes the default.
-        let mode = if *replace {
-            commands::backup::Mode::Replace
-        } else {
-            commands::backup::Mode::Sequential
-        };
-        return commands::backup::run(&mut context, name.as_deref(), *all, mode);
+        return backup(&mut context, name.as_deref(), *all, *replace);
     }
 
     if let Some(Command::Backups { command }) = &cli.command {
@@ -171,14 +150,28 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
         return commands::restore::run(&context, name, from.as_deref());
     }
 
-    if let Some(Command::Mirror { source, to, safe }) = &cli.command {
-        let context = commands::mirror::Context {
+    if let Some(Command::Mirror {
+        source,
+        to,
+        create,
+        new,
+        safe,
+    }) = &cli.command
+    {
+        let mut context = commands::mirror::Context {
             registries,
             global: &global,
             password_command: cli.password_command.as_deref(),
             consent,
         };
-        return commands::mirror::run(&context, source, to, *safe);
+        return mirror(
+            &mut context,
+            source,
+            to.as_deref(),
+            create.as_deref(),
+            new,
+            *safe,
+        );
     }
 
     if let Some(Command::Key { command }) = &cli.command {
@@ -241,6 +234,76 @@ fn backups(context: &commands::backups::Context<'_>, command: &BackupsCommand) -
             },
         ),
     }
+}
+
+/// Hand `backup` its arguments.
+fn backup(
+    context: &mut commands::backup::Context<'_>,
+    name: Option<&str>,
+    all: bool,
+    replace: bool,
+) -> Outcome<Exit> {
+    // `--sequential` is the default, so it is read for what it says rather than for what it
+    // changes: a cron line that spells the mode out stays correct whatever a later release
+    // makes the default.
+    let mode = if replace {
+        commands::backup::Mode::Replace
+    } else {
+        commands::backup::Mode::Sequential
+    };
+    commands::backup::run(context, name, all, mode)
+}
+
+/// Hand `doctor` its arguments.
+///
+/// It cannot fail, and says so: a health check that refused to report because something was
+/// wrong would be a health check nobody could use. What it found is in the exit code.
+fn doctor(
+    cli: &Cli,
+    global: &Path,
+    resolution: &registry::Resolution,
+    registries: &Registries,
+    offline: bool,
+) -> Exit {
+    // Only offer to install when there is somebody there to answer. Without a terminal
+    // `doctor` is a report and nothing else, which is what a health check in a pipeline
+    // wants it to be.
+    let interactive = std::io::stdin().is_terminal();
+    commands::doctor::run(
+        global,
+        interactive,
+        &commands::doctor::Registered {
+            registries,
+            from: resolution.describe(global),
+            password_command: cli.password_command.as_deref(),
+            offline,
+        },
+    )
+}
+
+/// Hand `mirror` its arguments.
+///
+/// The same reason `backups` and `db` have one: clap's shape is taken apart here, and the
+/// eight flags that only mean something under `--create` become one borrowed struct rather
+/// than eight more lines in `with_registry`.
+fn mirror(
+    context: &mut commands::mirror::Context<'_>,
+    source: &str,
+    to: Option<&str>,
+    create: Option<&str>,
+    new: &cli::NewDestination,
+    safe: bool,
+) -> Outcome<Exit> {
+    commands::mirror::run(
+        context,
+        &commands::mirror::Mirroring {
+            source,
+            to,
+            create,
+            safe,
+            new: new.into(),
+        },
+    )
 }
 
 /// Hand a `db` subcommand its arguments.

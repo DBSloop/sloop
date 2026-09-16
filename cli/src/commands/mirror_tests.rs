@@ -6,7 +6,7 @@
 //! works right up until the dump fails halfway. Everything else about a mirror needs two
 //! live servers and is exercised against a real cluster.
 
-use super::{refuse_a_self_mirror, same_host};
+use super::{New, proposed, refuse_a_self_mirror, same_host};
 use crate::engine::Engine;
 use crate::exit::Exit;
 use crate::registry::file::Database;
@@ -111,4 +111,145 @@ fn database_names_are_compared_exactly() {
         &record("db.internal", 5432, "orders"),
     )
     .expect("two names that differ in case are two databases");
+}
+
+// ---------------------------------------------------------------------------------------
+// R14a — the destination that does not exist yet
+// ---------------------------------------------------------------------------------------
+
+/// **The source's own server, and its port with it.** A staging copy beside the live
+/// database is the case `--create` exists for, and the defaults are what make that one flag
+/// rather than four.
+#[test]
+fn a_new_destination_lands_beside_its_source_by_default() {
+    let from = record("db.internal", 5433, "orders");
+
+    let made = proposed(&from, "staging", &New::default());
+
+    assert_eq!(made.host, "db.internal");
+    assert_eq!(
+        made.port, 5433,
+        "the source's port, not the engine's default"
+    );
+    assert_eq!(made.database, "staging", "the label names the database");
+    assert_eq!(made.role, "staging", "and the database names its owner");
+}
+
+/// **The port follows the host.** A source listening on 5433 says nothing about what any
+/// other machine listens on, so pointing `--host` somewhere else drops back to the engine's
+/// own default rather than carrying a port that was only ever true of one server.
+#[test]
+fn another_host_gets_the_engines_default_port_rather_than_the_sources() {
+    let from = record("db.internal", 5433, "orders");
+
+    let elsewhere = proposed(
+        &from,
+        "staging",
+        &New {
+            host: Some("db2.internal"),
+            ..New::default()
+        },
+    );
+    assert_eq!(elsewhere.host, "db2.internal");
+    assert_eq!(elsewhere.port, 5432);
+
+    // Spelled differently, still the same machine — so still the source's port.
+    let here = proposed(
+        &record("localhost", 5433, "orders"),
+        "staging",
+        &New {
+            host: Some("127.0.0.1"),
+            ..New::default()
+        },
+    );
+    assert_eq!(here.port, 5433);
+
+    // And an explicit --port outranks both.
+    let told = proposed(
+        &from,
+        "staging",
+        &New {
+            host: Some("db2.internal"),
+            port: Some(6000),
+            ..New::default()
+        },
+    );
+    assert_eq!(told.port, 6000);
+}
+
+/// Everything that was said is used, and only what was not said is filled in.
+#[test]
+fn what_was_named_is_what_gets_made() {
+    let from = record("db.internal", 5432, "orders");
+
+    let made = proposed(
+        &from,
+        "staging",
+        &New {
+            database: Some("orders_staging"),
+            ..New::default()
+        },
+    );
+    assert_eq!(made.database, "orders_staging");
+    assert_eq!(
+        made.role, "orders_staging",
+        "the role follows the database's name, not the label"
+    );
+
+    let owned = proposed(
+        &from,
+        "staging",
+        &New {
+            database: Some("orders_staging"),
+            role: Some("staging_app"),
+            ..New::default()
+        },
+    );
+    assert_eq!(owned.role, "staging_app");
+}
+
+/// **The guard fires before the database exists**, which is the whole reason it takes three
+/// values rather than a second record: `--create` has nothing to compare against yet.
+#[test]
+fn creating_the_source_over_again_is_refused_before_anything_is_made() {
+    let from = record("localhost", 5432, "orders");
+
+    // `--create orders --database orders` on the same server is the source.
+    let made = proposed(
+        &from,
+        "copy",
+        &New {
+            host: Some("127.0.0.1"),
+            database: Some("orders"),
+            ..New::default()
+        },
+    );
+    let failure = super::refuse_the_same_connection(
+        "live",
+        &from,
+        "copy",
+        &made.host,
+        made.port,
+        &made.database,
+    )
+    .expect_err("that names the source");
+
+    assert_eq!(failure.exit(), Exit::Usage);
+    assert!(
+        failure.message().contains("the same database"),
+        "{}",
+        failure.message()
+    );
+
+    // A different name on the same server is a real copy, and goes through.
+    let beside = proposed(&from, "staging", &New::default());
+    super::refuse_the_same_connection(
+        "live",
+        &from,
+        "staging",
+        &beside.host,
+        beside.port,
+        &beside.database,
+    )
+    .expect("a second database on one server is a copy");
 }
