@@ -92,6 +92,19 @@ impl Engine {
         }
     }
 
+    /// The database that is always there, for the statements that cannot be run from
+    /// inside the database they are about.
+    ///
+    /// Creating a database and dropping one both need a connection to somewhere else, and
+    /// "somewhere else" is a property of the engine rather than of the command asking.
+    #[must_use]
+    pub const fn maintenance_database(self) -> &'static str {
+        match self {
+            Self::Postgres => "postgres",
+            Self::Mysql | Self::Mariadb => "mysql",
+        }
+    }
+
     /// Read an engine from what somebody typed after `--engine`.
     ///
     /// The aliases are the names these engines are actually called in the wild, and
@@ -447,6 +460,25 @@ pub trait Adapter {
     /// unencrypted dump, where there is nothing to protect and the file is already there.
     fn restore_into(&self, target: &Target<'_>, source: &mut dyn std::io::Read) -> Outcome<()>;
 
+    /// Create a role, a database it owns, and the grants that make the two usable.
+    ///
+    /// `target` is a **superuser's** connection to this engine's maintenance database — see
+    /// [`Engine::maintenance_database`] — because neither statement can be run from inside
+    /// the database it is about.
+    ///
+    /// **Every statement goes down standard input, never in `argv`.** `CREATE ROLE … PASSWORD
+    /// '…'` carries the new password in its text, and `argv` is readable by every other
+    /// process on the machine. That is rule 3, and it is the reason this is one method per
+    /// adapter rather than a handful of small ones a caller composes: the whole script is
+    /// written, once, into a pipe.
+    ///
+    /// What "usable" means is the engine's own business. PostgreSQL gets ownership plus
+    /// `USAGE` and `CREATE` on `public` and default privileges for tables and sequences
+    /// created later; the MySQL family has no owner below the server, so it gets
+    /// `CREATE USER` and `GRANT ALL` on the one database. The flags a person types are
+    /// identical either way.
+    fn provision(&self, target: &Target<'_>, asked: &Provisioning<'_>) -> Outcome<Provisioned>;
+
     /// Empty the database `target` names, without dropping the database itself.
     ///
     /// **What "replaces the destination's contents" means, per engine.** A restore has to
@@ -500,4 +532,26 @@ pub trait Adapter {
     /// changes nothing — including nothing about the role's own privileges, which are an
     /// administrator's to grant and never a backup tool's to take.
     fn check_privileges(&self, target: &Target<'_>) -> Outcome<privileges::Report>;
+}
+
+/// What to create, for [`Adapter::provision`].
+pub struct Provisioning<'a> {
+    /// The database's name on the server.
+    pub database: &'a str,
+    /// The role that will own it, created if it is not there already.
+    pub role: &'a str,
+    /// That role's password. Reaches the server inside a statement fed on standard input,
+    /// and is never written anywhere by this call.
+    pub password: &'a Secret,
+}
+
+/// What [`Adapter::provision`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Provisioned {
+    /// Whether the role was already on the server. A role that was there keeps the password
+    /// it had — changing somebody else's credentials because a name collided is not a thing
+    /// a create command may do.
+    pub role_existed: bool,
+    /// The grants that were applied, in the engine's own words, for printing.
+    pub grants: Vec<String>,
 }

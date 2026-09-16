@@ -26,7 +26,7 @@ use std::path::Path;
 
 use crate::cli::{Fields, PasswordSource};
 use crate::consent::{Consent, Destroying};
-use crate::engine::{Engine, Target};
+use crate::engine::{Engine, Provisioning, Target};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::file::{Database, check_name};
@@ -104,6 +104,375 @@ pub fn add(
     );
     anstream::println!("  {}", style::dim(&database.credential_key()));
     Ok(Exit::Success)
+}
+
+// ---------------------------------------------------------------------------------------
+// create
+// ---------------------------------------------------------------------------------------
+
+/// Everything `db create` was asked for, named rather than positional.
+///
+/// Ten arguments in a row is ten chances to pass the superuser's name where the new role's
+/// goes, on a command whose whole job is to create one and use the other.
+pub struct Creating<'a> {
+    /// What to register it as.
+    pub name: &'a str,
+    /// Which engine, as typed.
+    pub engine: &'a str,
+    /// The server.
+    pub host: &'a str,
+    /// Its port, or the engine's default.
+    pub port: Option<u16>,
+    /// The account to create it with, or the engine's usual superuser.
+    pub superuser: Option<&'a str>,
+    /// Take that account's password from standard input.
+    pub superuser_password_stdin: bool,
+    /// Run this for that account's password.
+    pub superuser_password_command: Option<&'a str>,
+    /// The database's own name, or the label.
+    pub database: Option<&'a str>,
+    /// The role to create, or the database's name.
+    pub role: Option<&'a str>,
+    /// Take the new role's password from standard input rather than generating one.
+    pub role_password_stdin: bool,
+}
+
+/// Create a database, the role that owns it, and the grants that make the two usable.
+///
+/// **Two passwords, treated completely differently, and that is the whole shape of this
+/// command.** The account it creates *with* is used for one connection and forgotten — never
+/// written, never logged, never in `argv`. The password of the role being *created* is
+/// generated, filed where this machine keeps secrets, and printed once so it can be put into
+/// an application.
+///
+/// The work itself is one call per engine — see [`crate::engine::Adapter::provision`] —
+/// because what "usable" means is PostgreSQL's business on PostgreSQL and MySQL's on MySQL,
+/// while the flags a person types stay identical.
+pub fn create(context: &mut Context<'_>, asked: &Creating<'_>) -> Outcome<Exit> {
+    check_name(asked.name)?;
+
+    let engine = Engine::parse(asked.engine)?;
+    let port = asked.port.unwrap_or_else(|| engine.default_port());
+    let database = asked.database.unwrap_or(asked.name).to_owned();
+    let role = asked.role.unwrap_or(&database).to_owned();
+    let superuser = asked
+        .superuser
+        .map_or_else(|| usual_superuser(engine).to_owned(), str::to_owned);
+
+    let scope = context.registries.writes_to();
+    if context
+        .registries
+        .in_scope(scope)
+        .and_then(|registry| registry.get(asked.name))
+        .is_some()
+        && !context.consent.forced()
+    {
+        return Err(Failure::usage(format!(
+            "{} is already registered in the {} registry",
+            asked.name,
+            scope.label()
+        ))
+        .hint("--force replaces the record; the database this creates would be a new one"));
+    }
+
+    // **Everything missing, named at once, and before a word about what was going to
+    // happen.** Two secrets are needed and only one of them can come down a pipe, so an
+    // unattended run has a shape it has to take — and being told half of it, twice, under a
+    // heading announcing work that is not going to happen, is the kind of thing that makes
+    // a tool feel hostile.
+    unattended_needs(asked)?;
+
+    anstream::println!(
+        "{} {}",
+        style::paint("creating"),
+        style::dim(&crate::engine::connection_string(
+            engine, &role, asked.host, port, &database
+        ))
+    );
+    anstream::println!(
+        "  {}",
+        style::dim(&format!(
+            "as {superuser}, whose password is used once and kept nowhere"
+        ))
+    );
+
+    // The new role's password before anything is contacted: a run that cannot finish should
+    // not first ask somebody for a superuser password.
+    let (role_password, generated) = role_password(asked)?;
+    let admin_password = superuser_password(asked, &superuser, asked.host, port)?;
+
+    let adapter = super::adapter_for(engine, context.global);
+    let maintenance = Target {
+        engine,
+        host: asked.host,
+        port,
+        database: engine.maintenance_database(),
+        user: &superuser,
+        password: &admin_password,
+    };
+    let server = adapter.probe(&maintenance)?;
+    announce_server(&server);
+
+    let done = adapter.provision(
+        &maintenance,
+        &Provisioning {
+            database: &database,
+            role: &role,
+            password: &role_password,
+        },
+    )?;
+
+    announce_created(&database, &role, &done);
+
+    // Registered last, once the server has actually done the work: a record pointing at a
+    // database that does not exist is worse than no record.
+    let route = kept_where();
+    let record = Database {
+        engine,
+        host: asked.host.to_owned(),
+        port,
+        database: database.clone(),
+        user: role.clone(),
+        password: route.clone(),
+    };
+    write(
+        context,
+        scope,
+        asked.name,
+        &record,
+        Some(&role_password),
+        None,
+    )?;
+
+    anstream::println!(
+        "  {}",
+        style::dim(&format!(
+            "registered as {} in the {} registry, password in {}",
+            asked.name,
+            scope.label(),
+            route.describe()
+        ))
+    );
+
+    if generated && !done.role_existed {
+        print_once(&role, &role_password, &route);
+    }
+
+    Ok(Exit::Success)
+}
+
+/// Show a generated password, once.
+///
+/// **Only ever reached at a terminal** — `role_password` refuses to generate one when there
+/// is nothing to print it to, because a scheduled run's standard error is a log file and
+/// rule 3 does not have an exception for convenience. Standard error rather than standard
+/// output, so that a person piping this command's output somewhere does not pipe the
+/// password with it.
+fn print_once(role: &str, password: &Secret, route: &Route) {
+    anstream::eprintln!();
+    anstream::eprintln!(
+        "{} {}",
+        style::paint("the password for"),
+        style::paint(role)
+    );
+    anstream::eprintln!("  {}", password.expose());
+    anstream::eprintln!(
+        "  {}",
+        style::dim(&format!(
+            "it is in {} and this is the only time it is printed — put it in your \
+             application now",
+            route.describe()
+        ))
+    );
+}
+
+/// Where a password sloop just generated should live on *this* machine.
+///
+/// **The keyring, unless this machine has said otherwise.** A headless Linux box with no
+/// Secret Service running has no keyring to file anything in, and a `db create` that
+/// created a database and a role and then failed at the last step would be the worst
+/// possible place to find that out. `SLOOP_PASSPHRASE` being set is how `R3` says "this
+/// machine keeps secrets in the encrypted file", and the backup key already chooses the
+/// same way — see `crypt::keep_somewhere`.
+fn kept_where() -> Route {
+    if crate::secret::sealed::is_the_machines_choice() {
+        Route::EncryptedFile
+    } else {
+        Route::Keyring
+    }
+}
+
+/// What the server did, in the order it did it.
+fn announce_created(database: &str, role: &str, done: &crate::engine::Provisioned) {
+    anstream::println!("{} {database}", style::paint("created"));
+    if done.role_existed {
+        anstream::println!(
+            "  {}",
+            style::dim(&format!(
+                "{role} was already on the server, so it keeps the password it had"
+            ))
+        );
+    } else {
+        anstream::println!("  {}", style::dim(&format!("role {role} created")));
+    }
+    for grant in &done.grants {
+        anstream::println!("  {}", style::dim(&format!("granted {grant}")));
+    }
+}
+
+/// With no terminal, say everything that is missing in one go.
+///
+/// **Only one secret can come down a pipe**, so an unattended `db create` has exactly one
+/// shape: the superuser's password from a command, the new role's from standard input. Being
+/// told about one flag, then run again and told about the other, is how a tool earns the
+/// reputation this project is trying not to have.
+fn unattended_needs(asked: &Creating<'_>) -> Outcome<()> {
+    if std::io::stdin().is_terminal() {
+        return Ok(());
+    }
+
+    let mut missing: Vec<&str> = Vec::new();
+    if !asked.role_password_stdin {
+        missing.push("--role-password-stdin");
+    }
+    if !asked.superuser_password_stdin && asked.superuser_password_command.is_none() {
+        missing.push("--superuser-password-command");
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    Err(Failure::new(
+        Exit::Usage,
+        format!(
+            "there is no terminal to ask at, and {} {} missing",
+            missing.join(" and "),
+            if missing.len() == 1 { "is" } else { "are" }
+        ),
+    )
+    .hint(
+        "unattended, it looks like this: --superuser-password-command \"op read \
+         op://vault/pg/root\" --role-password-stdin, with the new password piped in",
+    ))
+}
+
+/// The password of the role being created: generated, or taken from standard input.
+///
+/// **A generated one is only ever printed at a terminal.** Rule 3 says no plaintext password
+/// anywhere, and a scheduled run's standard error is a log file — so a run with nothing to
+/// print to has to bring its own password, and is told which flag does that. That is also
+/// the honest answer: whatever creates a database unattended already has to know the
+/// password to configure anything with it.
+fn role_password(asked: &Creating<'_>) -> Outcome<(Secret, bool)> {
+    if asked.role_password_stdin {
+        return Ok((from_stdin()?, false));
+    }
+
+    if !std::io::stdin().is_terminal() {
+        return Err(Failure::new(
+            Exit::Usage,
+            "a generated password could only be printed into a log here, and there is no \
+             terminal to print it to",
+        )
+        .hint("pipe the password you want in with --role-password-stdin"));
+    }
+
+    Ok((Secret::new(generated_password()?), true))
+}
+
+/// A password for a role that is about to exist.
+///
+/// **Letters and digits only, and that is a decision rather than a shortcut.** 28 of them is
+/// about 166 bits, which is past anything that matters; what the character set buys is a
+/// password that pastes into a URL, a YAML file, a `docker-compose` environment and a shell
+/// command without one escaping rule between them. `R3` proved sloop itself round-trips a
+/// password full of punctuation — this is about every other tool it will be pasted into.
+fn generated_password() -> Outcome<String> {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const LENGTH: usize = 28;
+
+    let mut bytes = [0_u8; LENGTH];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        Failure::new(
+            Exit::Failure,
+            format!("the operating system would not provide random bytes: {error}"),
+        )
+    })?;
+
+    // **Rejection sampling, not `%`.** 62 does not divide 256, so taking the remainder would
+    // make the first few letters of the alphabet slightly likelier than the last few. One
+    // extra draw per unlucky byte costs nothing and removes the bias entirely.
+    let mut password = String::with_capacity(LENGTH);
+    let mut spare = [0_u8; 8];
+    let mut at = 0;
+    for byte in bytes {
+        let mut value = byte;
+        while value >= 248 {
+            if at == 0 {
+                getrandom::fill(&mut spare).map_err(|error| {
+                    Failure::new(
+                        Exit::Failure,
+                        format!("the operating system would not provide random bytes: {error}"),
+                    )
+                })?;
+            }
+            value = spare[at];
+            at = (at + 1) % spare.len();
+        }
+        password.push(char::from(ALPHABET[usize::from(value) % ALPHABET.len()]));
+    }
+
+    Ok(password)
+}
+
+/// The password for the account doing the creating.
+///
+/// It is never stored and never printed. Three ways in, in the order a person would expect:
+/// a flag that names a command, standard input, or a hidden prompt — and with no terminal
+/// and neither flag, the two flags are named in the error rather than guessed at.
+fn superuser_password(
+    asked: &Creating<'_>,
+    superuser: &str,
+    host: &str,
+    port: u16,
+) -> Outcome<Secret> {
+    if let Some(command) = asked.superuser_password_command {
+        let resolved = resolve(
+            &Route::Command(command.to_owned()),
+            &Lookup {
+                key: superuser,
+                sealed_file: Path::new(""),
+            },
+        )?;
+        return Ok(resolved.secret);
+    }
+
+    if asked.superuser_password_stdin {
+        return from_stdin();
+    }
+
+    if !std::io::stdin().is_terminal() {
+        return Err(Failure::new(
+            Exit::Usage,
+            format!("{superuser}'s password is needed and there is no terminal to ask at"),
+        )
+        .hint(
+            "pipe it in with --superuser-password-stdin, or have a password manager print it \
+             with --superuser-password-command",
+        ));
+    }
+
+    let typed = rpassword::prompt_password(format!("Password for {superuser}@{host}:{port}: "))
+        .map_err(|error| Failure::usage(format!("could not read the password: {error}")))?;
+    Ok(Secret::new(typed))
+}
+
+/// The account an engine is usually administered as.
+const fn usual_superuser(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Postgres => "postgres",
+        Engine::Mysql | Engine::Mariadb => "root",
+    }
 }
 
 // ---------------------------------------------------------------------------------------

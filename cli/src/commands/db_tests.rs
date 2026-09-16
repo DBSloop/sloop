@@ -6,6 +6,7 @@
 use super::{Draft, draft, route_for};
 use crate::cli::{Fields, PasswordSource};
 use crate::engine::Engine;
+use crate::exit::Exit;
 use crate::registry::file::Database;
 use crate::secret::{Route, Secret};
 
@@ -361,4 +362,119 @@ fn what_an_edit_orphans_is_cleared_through_the_route_that_held_it() {
             "a ${{VAR}} record has nothing for sloop to clear"
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// create
+// ---------------------------------------------------------------------------------------
+
+/// The flags, with nothing set but the two that have no default.
+fn creating() -> super::Creating<'static> {
+    super::Creating {
+        name: "orders",
+        engine: "postgres",
+        host: "127.0.0.1",
+        port: None,
+        superuser: None,
+        superuser_password_stdin: false,
+        superuser_password_command: None,
+        database: None,
+        role: None,
+        role_password_stdin: false,
+    }
+}
+
+/// **Everything missing, in one message.** Two secrets are needed and only one can come
+/// down a pipe, so an unattended run has one shape — and being told half of it twice is
+/// exactly the unfriendliness this project is trying to avoid.
+#[test]
+fn an_unattended_create_names_every_flag_it_needs_at_once() {
+    let failure = super::unattended_needs(&creating()).expect_err("there is no terminal here");
+
+    assert_eq!(failure.exit(), Exit::Usage);
+    let said = failure.message();
+    assert!(said.contains("--role-password-stdin"), "{said}");
+    assert!(said.contains("--superuser-password-command"), "{said}");
+    assert!(
+        failure
+            .hint_text()
+            .is_some_and(|hint| hint.contains("--role-password-stdin")),
+        "the hint has to show the shape: {:?}",
+        failure.hint_text()
+    );
+}
+
+#[test]
+fn an_unattended_create_with_both_sources_is_accepted() {
+    super::unattended_needs(&super::Creating {
+        superuser_password_command: Some("echo secret"),
+        role_password_stdin: true,
+        ..creating()
+    })
+    .expect("both secrets have a source");
+}
+
+/// One of the two is not enough, and the message says which one is still missing.
+#[test]
+fn half_the_flags_is_still_refused() {
+    let only_role = super::unattended_needs(&super::Creating {
+        role_password_stdin: true,
+        ..creating()
+    })
+    .expect_err("the superuser's password has no source");
+    assert!(
+        only_role.message().contains("--superuser-password-command"),
+        "{}",
+        only_role.message()
+    );
+    assert!(
+        !only_role.message().contains("--role-password-stdin"),
+        "it must not ask for a flag that was given: {}",
+        only_role.message()
+    );
+
+    let only_admin = super::unattended_needs(&super::Creating {
+        superuser_password_stdin: true,
+        ..creating()
+    })
+    .expect_err("the new role's password has no source");
+    assert!(
+        only_admin.message().contains("--role-password-stdin"),
+        "{}",
+        only_admin.message()
+    );
+}
+
+/// **Paste-safe on purpose.** The length is the strength; the alphabet is so that the
+/// password survives a URL, a YAML file and a shell without one escaping rule between them.
+#[test]
+fn a_generated_password_is_long_and_needs_no_escaping() {
+    let mut seen: Vec<String> = Vec::new();
+
+    for _ in 0..50 {
+        let password = super::generated_password().expect("the OS has randomness");
+        assert_eq!(password.chars().count(), 28, "{password}");
+        assert!(
+            password
+                .chars()
+                .all(|letter| letter.is_ascii_alphanumeric()),
+            "{password} would need escaping somewhere"
+        );
+        assert!(!seen.contains(&password), "{password} came back twice");
+        seen.push(password);
+    }
+}
+
+/// The engine decides which account administers it, and nothing else does.
+#[test]
+fn each_engine_has_its_usual_superuser() {
+    assert_eq!(
+        super::usual_superuser(crate::engine::Engine::Postgres),
+        "postgres"
+    );
+    assert_eq!(super::usual_superuser(crate::engine::Engine::Mysql), "root");
+    assert_eq!(
+        super::usual_superuser(crate::engine::Engine::Mariadb),
+        "root"
+    );
 }

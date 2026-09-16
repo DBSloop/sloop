@@ -673,3 +673,53 @@ fn the_two_commands_say_which_is_which() {
         .expect_code(0)
         .expect_said("server is not touched");
 }
+
+/// **`db create` is refused unattended unless both secrets have a source**, and the refusal
+/// names every flag that is missing rather than one at a time.
+#[test]
+fn create_unattended_names_every_flag_it_needs() {
+    let sandbox = Sandbox::new("db-create-flags");
+
+    let run = sandbox.sloop(&["db", "create", "orders", "--engine", "postgres"]);
+
+    run.expect_code(2)
+        .expect_said("--role-password-stdin")
+        .expect_said("--superuser-password-command");
+}
+
+/// An engine sloop does not know is refused before anything is asked for.
+#[test]
+fn create_refuses_an_engine_it_does_not_know() {
+    let sandbox = Sandbox::new("db-create-engine");
+
+    sandbox
+        .sloop(&["db", "create", "orders", "--engine", "sqlite"])
+        .expect_code(2)
+        .expect_said("sqlite is not an engine sloop knows");
+}
+
+/// A label already registered is refused, and `--force` is named as what replaces it.
+#[test]
+fn create_refuses_a_name_that_is_already_registered() {
+    let sandbox = Sandbox::new("db-create-taken");
+    registered(&sandbox, "orders", "postgres://app@db.internal:5432/orders");
+
+    sandbox
+        .sloop(&["db", "create", "orders", "--engine", "postgres"])
+        .expect_code(2)
+        .expect_said("already registered")
+        .expect_said("--force");
+}
+
+/// `db create --help` has to say which of the two passwords sloop keeps.
+#[test]
+fn create_help_says_which_password_is_kept() {
+    let sandbox = Sandbox::new("db-create-help");
+
+    sandbox
+        .sloop(&["db", "create", "--help"])
+        .expect_code(0)
+        .expect_said("used for one")
+        .expect_said("never put in a command line")
+        .expect_said("keyring");
+}

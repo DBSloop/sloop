@@ -20,7 +20,10 @@ use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 
 use super::privileges::{self, Finding, Report, Verdict, verdict_from};
-use super::{Adapter, Capabilities, Engine, ServerInfo, Table, TableCount, Target, Version};
+use super::{
+    Adapter, Capabilities, Engine, Provisioned, Provisioning, ServerInfo, Table, TableCount,
+    Target, Version,
+};
 
 /// A separator that cannot turn up inside an identifier or a number.
 const FIELD: &str = "\u{1f}";
@@ -200,6 +203,85 @@ impl Postgres {
 
     fn spawn_restore(&self, target: &Target<'_>) -> Command {
         Self::spawn(&self.tools.restore, target)
+    }
+
+    /// Run a script, fed on standard input.
+    ///
+    /// **Not `--command`, and that is the whole reason this exists.** `psql --command` puts
+    /// the statement in `argv`, where every other process on the machine can read it — and
+    /// `CREATE ROLE … PASSWORD '…'` is a statement with a password in its text. Standard
+    /// input is a pipe between two processes and is readable by neither.
+    fn execute(&self, target: &Target<'_>, sql: &str) -> Outcome<()> {
+        let mut child = Self::spawn(&self.tools.query, target)
+            .args(Self::connection_args(target))
+            .arg("--no-psqlrc")
+            .arg("--quiet")
+            .arg("--variable")
+            .arg("ON_ERROR_STOP=1")
+            // `-` is standard input. Without it psql would read the script and still be
+            // waiting for a terminal that is not there.
+            .arg("--file")
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| missing_tool(&self.tools.query, &error))?;
+
+        let mut complaining = child.stderr.take().expect("stderr was piped");
+        let draining = std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut complaining, &mut said);
+            said
+        });
+        let mut talking = child.stdout.take().expect("stdout was piped");
+        let listening = std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut talking, &mut said);
+        });
+
+        {
+            use std::io::Write as _;
+            let mut sink = child.stdin.take().expect("stdin was piped");
+            let _ = sink.write_all(sql.as_bytes());
+            // Dropped here, so psql sees the end of the script rather than waiting.
+        }
+
+        let status = child.wait().map_err(|error| {
+            Failure::new(
+                Exit::Usage,
+                format!("{} would not finish: {error}", self.tools.query.display()),
+            )
+        })?;
+        let said = String::from_utf8_lossy(&draining.join().unwrap_or_default()).into_owned();
+        let _ = listening.join();
+
+        if !status.success() {
+            return Err(from_stderr(&self.tools.query, &said, Exit::Usage, target));
+        }
+
+        Ok(())
+    }
+
+    /// Is there a row in `catalogue` whose `column` is `name`?
+    ///
+    /// The name goes in as a literal rather than being interpolated into an identifier: it
+    /// came from a command line and this is a question, not a statement about it.
+    fn exists(
+        &self,
+        target: &Target<'_>,
+        catalogue: &str,
+        column: &str,
+        name: &str,
+    ) -> Outcome<bool> {
+        let rows = self.query(
+            target,
+            &format!(
+                "SELECT 1 FROM {catalogue} WHERE {column} = {}",
+                sql_literal(name)
+            ),
+        )?;
+        Ok(!rows.is_empty())
     }
 
     /// Run a read-only statement and hand back its rows.
@@ -494,6 +576,74 @@ impl Adapter for Postgres {
                 Exit::Restore,
                 format!("could not feed the dump in: {error}"),
             )
+        })
+    }
+
+    fn provision(&self, target: &Target<'_>, asked: &Provisioning<'_>) -> Outcome<Provisioned> {
+        // The script is built in a `String`, which takes `fmt::Write`.
+        use std::fmt::Write as _;
+
+        // **Refused before anything is created.** A database that is already there belongs
+        // to somebody, and quietly reusing it is how a `db create` typo ends up pointed at
+        // production.
+        if self.exists(target, "pg_database", "datname", asked.database)? {
+            return Err(Failure::usage(format!(
+                "{} already exists on {}",
+                asked.database,
+                target.describe()
+            ))
+            .hint("`sloop db add` registers a database that is already there"));
+        }
+
+        let role_existed = self.exists(target, "pg_roles", "rolname", asked.role)?;
+        let role = quote_identifier(asked.role);
+        let database = quote_identifier(asked.database);
+
+        // One script, down standard input, so the password in it never reaches `argv`.
+        let mut script = String::new();
+        if role_existed {
+            // A role that was already there keeps the password it has. Changing somebody
+            // else's credentials because a name collided is not this command's to do, and
+            // the command says so where it prints what it did.
+            let _ = writeln!(script, "-- {} was already there", asked.role);
+        } else {
+            let _ = writeln!(
+                script,
+                "CREATE ROLE {role} LOGIN PASSWORD {};",
+                sql_literal(asked.password.expose())
+            );
+        }
+        let _ = writeln!(script, "CREATE DATABASE {database} OWNER {role};");
+        self.execute(target, &script)?;
+
+        // The rest runs *inside* the new database, because `public` is a schema in it.
+        let inside = Target {
+            database: asked.database,
+            ..*target
+        };
+        let grants = vec![
+            format!("USAGE, CREATE ON SCHEMA public TO {}", asked.role),
+            format!(
+                "default privileges on tables and sequences to {}",
+                asked.role
+            ),
+        ];
+        self.execute(
+            &inside,
+            &format!(
+                // Owning the database is not the same as being able to create in `public`:
+                // before PostgreSQL 15 that schema belongs to the bootstrap superuser, and
+                // from 15 it belongs to `pg_database_owner`. Granting explicitly is correct
+                // on both and costs nothing on the one where it was already true.
+                "GRANT USAGE, CREATE ON SCHEMA public TO {role};\n\
+                 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {role};\n\
+                 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {role};\n"
+            ),
+        )?;
+
+        Ok(Provisioned {
+            role_existed,
+            grants,
         })
     }
 

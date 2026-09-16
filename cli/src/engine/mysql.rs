@@ -36,7 +36,10 @@ use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 
 use super::privileges::{self, Finding, Report, Verdict, verdict_from};
-use super::{Adapter, Capabilities, Engine, ServerInfo, Table, TableCount, Target, Version};
+use super::{
+    Adapter, Capabilities, Engine, Provisioned, Provisioning, ServerInfo, Table, TableCount,
+    Target, Version,
+};
 
 /// Long enough to cross a slow link, short enough that a scheduled run does not sit on a
 /// dead host until someone notices. Matches the PostgreSQL adapter.
@@ -727,6 +730,71 @@ impl Adapter for MysqlFamily {
                 Exit::Restore,
                 format!("could not feed the dump in: {error}"),
             )
+        })
+    }
+
+    fn provision(&self, target: &Target<'_>, asked: &Provisioning<'_>) -> Outcome<Provisioned> {
+        // The script is built in a `String`, which takes `fmt::Write` rather than the
+        // `io::Write` this module imports for the pipes.
+        use std::fmt::Write as _;
+
+        let already = self.query(
+            target,
+            &format!(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name = {}",
+                sql_literal(asked.database)
+            ),
+        )?;
+        if !already.is_empty() {
+            return Err(Failure::usage(format!(
+                "{} already exists on {}",
+                asked.database,
+                target.describe()
+            ))
+            .hint("`sloop db add` registers a database that is already there"));
+        }
+
+        // `mysql.user` needs a privileged connection, which this one is — but a managed
+        // server can withhold it, and not knowing whether the account existed is not a
+        // reason to refuse to create a database. `CREATE USER IF NOT EXISTS` below covers
+        // both answers; this one only decides what gets printed afterwards.
+        let role_existed = self
+            .query(
+                target,
+                &format!(
+                    "SELECT user FROM mysql.user WHERE user = {}",
+                    sql_literal(asked.role)
+                ),
+            )
+            .is_ok_and(|rows| !rows.is_empty());
+
+        // **`@'%'`, deliberately.** The application that will use this database may be on
+        // another host, and sloop has no way to know which; an account tied to `localhost`
+        // would be a database nothing outside the machine can reach, which is the opposite
+        // of the feature. Who may reach the port is the operator's to decide.
+        let account = quote_account(&format!("{}@%", asked.role));
+        let database = quote_identifier(asked.database);
+
+        let mut script = String::new();
+        let _ = writeln!(
+            script,
+            "CREATE USER IF NOT EXISTS {account} IDENTIFIED BY {};",
+            sql_literal(asked.password.expose())
+        );
+        // utf8mb4 and the server's own collation for it: naming a collation would pin this
+        // to one server's idea of the default and break on the other family.
+        let _ = writeln!(script, "CREATE DATABASE {database} CHARACTER SET utf8mb4;");
+        let _ = writeln!(script, "GRANT ALL PRIVILEGES ON {database}.* TO {account};");
+        let _ = writeln!(script, "FLUSH PRIVILEGES;");
+
+        self.restore_into(target, &mut script.as_bytes())?;
+
+        Ok(Provisioned {
+            role_existed,
+            grants: vec![format!(
+                "ALL PRIVILEGES ON {}.* TO {}@%",
+                asked.database, asked.role
+            )],
         })
     }
 

@@ -24,6 +24,7 @@ const IMPLEMENTED: &[&[&str]] = &[
     &["init"],
     &["doctor"],
     &["db", "add"],
+    &["db", "create"],
     &["db", "list"],
     &["db", "test"],
     &["db", "edit"],
