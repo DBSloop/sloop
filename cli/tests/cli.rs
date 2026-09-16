@@ -14,7 +14,6 @@ use support::Sandbox;
 
 /// Every command that will do something one day and does not yet.
 const STUBS: &[&[&str]] = &[
-    &["doctor"],
     &["db", "add"],
     &["db", "list"],
     &["db", "test"],
@@ -212,4 +211,62 @@ fn help_offers_both_ways_of_choosing_a_registry() {
         .sloop(&["--help"])
         .expect_said("--global")
         .expect_said("-C");
+}
+
+/// `doctor` is a report, and a report belongs on stdout where it can be piped.
+///
+/// What it finds depends on the machine, so the assertions are about the shape of the
+/// answer rather than its content — every engine accounted for, the fetched directory named,
+/// and an exit code that agrees with what the report just said.
+#[test]
+fn doctor_reports_on_every_engine_and_exits_on_what_it_found() {
+    let sandbox = Sandbox::new("doctor");
+    let run = sandbox.sloop(&["doctor"]);
+
+    let report = run.stdout();
+    for engine in ["postgres", "mysql", "mariadb"] {
+        assert!(
+            report.contains(engine),
+            "`sloop doctor` said nothing about {engine}:
+{report}"
+        );
+    }
+    for tool in ["pg_dump", "pg_restore", "psql", "mysqldump", "mariadb-dump"] {
+        assert!(
+            report.contains(tool),
+            "`sloop doctor` said nothing about {tool}:
+{report}"
+        );
+    }
+
+    // It looks inside the sandbox and not inside the real machine's store, which is what
+    // makes this test safe to run at all.
+    assert!(
+        report.contains(&sandbox.global_dir().display().to_string()),
+        "the fetched directory is not the sandbox's:
+{report}"
+    );
+
+    // 0 when something is usable, 2 when nothing is. Derived from the report rather than
+    // from an assumption about what this machine happens to have installed.
+    let anything_ready = report.contains("— ready");
+    run.expect_code(if anything_ready { 0 } else { 2 });
+}
+
+/// There is no terminal here — which is exactly a scheduled run's situation — so nothing is
+/// offered, nothing is downloaded, and nothing waits for an answer.
+#[test]
+fn doctor_never_asks_to_install_anything_without_a_terminal() {
+    let sandbox = Sandbox::new("doctor-quiet");
+    let run = sandbox.sloop(&["doctor"]);
+
+    for asking in ["[y/N]", "Download and install", "Run that"] {
+        run.expect_silent_about(asking);
+    }
+
+    // And it fetched nothing: the directory it would install into is still not there.
+    assert!(
+        !sandbox.global_dir().join("tools").join("bin").is_dir(),
+        "something was installed without anybody being asked"
+    );
 }

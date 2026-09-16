@@ -350,11 +350,12 @@ fn asking_for_both_registries_at_once_is_a_usage_error() {
 #[test]
 fn commands_that_read_no_registry_do_not_resolve_one() {
     let sandbox = Sandbox::new("no-registry");
+
+    // The point is what these do *not* do, so the exit code is not part of it: `doctor`
+    // reports on the machine and `uninstall` is still a stub, and either could change its
+    // mind about what to exit with without changing the thing being asserted.
     for path in [["doctor"], ["uninstall"]] {
-        sandbox
-            .sloop(&path)
-            .expect_code(1)
-            .expect_silent_about("would have read");
+        sandbox.sloop(&path).expect_silent_about("would have read");
     }
 }
 

@@ -1,0 +1,742 @@
+//! Going and getting the client tools — on demand, with consent, never silently.
+//!
+//! This is the one path in sloop that reaches the internet, and every part of its shape is
+//! a consequence of that.
+//!
+//! **Nothing here is linked in.** The download is the system's own `curl`, or PowerShell's
+//! `Invoke-WebRequest`, or `wget` — whichever the machine has. The archive is opened by the
+//! system's own archiver. So `cargo tree` still shows no HTTP client, and the claim at the
+//! top of the README survives somebody reading this file.
+//!
+//! **Nobody is asked twice.** A refusal is written down and honoured, so a tool that was
+//! declined once does not nag on every command afterwards; it explains what to install and
+//! gets out of the way.
+//!
+//! **Nobody is asked at all without a terminal.** A scheduled backup that stops to ask a
+//! question nobody will ever see is the worst thing this tool can do, so without a terminal
+//! this exits `2` with the instructions written out instead.
+//!
+//! **What arrives is proved before it is used.** The archive has to be the exact size and
+//! the exact SHA-256 of a release pinned in [`releases`], or it is deleted and nothing is
+//! installed. See that module for why the hash is pinned rather than fetched.
+
+use std::collections::BTreeMap;
+use std::io::{IsTerminal, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::engine::Engine;
+use crate::exit::Exit;
+use crate::failure::{Failure, Outcome};
+use crate::style;
+
+use super::{Inventory, Tool, releases};
+
+/// How long a download is allowed to take before it is called a failure.
+///
+/// Generous: the PostgreSQL archive is a third of a gigabyte, and somebody on a slow line
+/// should still get it. Bounded all the same, because a stalled transfer with no ceiling is
+/// a command that never returns.
+const DOWNLOAD_TIMEOUT_SECONDS: u32 = 1800;
+
+/// Where sloop keeps what it fetched.
+#[must_use]
+pub fn fetched_dir(global: &Path) -> PathBuf {
+    global.join("tools").join("bin")
+}
+
+/// Where the remembered answers live.
+fn answers_file(global: &Path) -> PathBuf {
+    global.join("tools").join("answers.toml")
+}
+
+/// What somebody said last time they were asked about an engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Answer {
+    /// Yes, and it worked.
+    Installed,
+    /// No. Not to be asked again.
+    Declined,
+}
+
+/// The file of remembered answers, one per engine.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Remembered {
+    #[serde(default)]
+    answers: BTreeMap<String, Answer>,
+}
+
+impl Remembered {
+    fn load(global: &Path) -> Self {
+        // A file that will not parse is a file from a future sloop or a half-written one,
+        // and neither is worth failing a backup over. The worst an unreadable one can do is
+        // ask a question that was already answered.
+        std::fs::read_to_string(answers_file(global))
+            .ok()
+            .and_then(|text| toml::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    fn get(&self, engine: Engine) -> Option<Answer> {
+        self.answers.get(engine.scheme()).copied()
+    }
+
+    fn set(&mut self, engine: Engine, answer: Answer, global: &Path) {
+        self.answers.insert(engine.scheme().to_owned(), answer);
+
+        let path = answers_file(global);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(text) = toml::to_string_pretty(self) {
+            let _ = std::fs::write(&path, text);
+        }
+    }
+}
+
+/// Write down an answer without asking for it. The tests use this to set up the case
+/// where somebody has already said no.
+#[cfg(test)]
+pub fn remember(engine: Engine, answer: Answer, global: &Path) {
+    Remembered::load(global).set(engine, answer, global);
+}
+
+/// Make sure this engine's tools are on the machine, asking once if they are not.
+///
+/// The inventory that comes back is the one to use: after an install it has been taken
+/// again, so it names the programs that have just arrived rather than the absence that was
+/// there a moment ago.
+pub fn ensure(engine: Engine, global: &Path) -> Outcome<Inventory> {
+    let fetched = fetched_dir(global);
+    let inventory = Inventory::for_engine(engine, &fetched);
+    if inventory.has_everything_for(engine) {
+        return Ok(inventory);
+    }
+
+    let missing = inventory.missing_for(engine);
+    let mut remembered = Remembered::load(global);
+
+    if remembered.get(engine) == Some(Answer::Declined) {
+        return Err(refused_before(engine, &missing));
+    }
+
+    if !std::io::stdin().is_terminal() {
+        return Err(no_terminal(engine, &missing));
+    }
+
+    let Some(plan) = plan_for(engine) else {
+        return Err(nothing_to_offer(engine, &missing));
+    };
+
+    anstream::println!(
+        "{} {} for {engine}, and sloop does not bundle them.",
+        style::heading("Missing:"),
+        missing
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    anstream::println!("{}", plan.describe());
+
+    if !asked(&plan.question())? {
+        remembered.set(engine, Answer::Declined, global);
+        return Err(declined_now(engine, &missing));
+    }
+
+    plan.carry_out(&fetched)?;
+
+    let after = Inventory::for_engine(engine, &fetched);
+    if !after.has_everything_for(engine) {
+        return Err(Failure::new(
+            Exit::Usage,
+            format!(
+                "the install finished but {} still cannot be found",
+                after
+                    .missing_for(engine)
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
+        .hint("`sloop doctor` says where it looked"));
+    }
+
+    remembered.set(engine, Answer::Installed, global);
+    anstream::println!("{} {engine}'s tools are ready.", style::heading("Done."));
+    Ok(after)
+}
+
+/// Carry out the plan for an engine without asking first. Only the ignored end-to-end test
+/// uses this; every other route goes through [`ensure`], which asks.
+#[cfg(test)]
+pub fn install_for_tests(engine: Engine, into: &Path) -> Outcome<()> {
+    plan_for(engine)
+        .ok_or_else(|| Failure::new(Exit::Usage, "nothing to install on this platform"))?
+        .carry_out(into)
+}
+
+/// What sloop would do about a missing engine on this machine.
+pub(super) enum Plan {
+    /// Download the pinned PostgreSQL archive and take three programs out of it.
+    FetchPostgresForWindows(&'static releases::Release),
+    /// Let the machine's own package manager do it.
+    PackageManager(Offer),
+}
+
+/// A package manager, and the exact command that would be run.
+pub(super) struct Offer {
+    manager: &'static str,
+    command: Vec<String>,
+}
+
+impl Plan {
+    /// The question, and what answering yes commits to.
+    pub(super) fn describe(&self) -> String {
+        match self {
+            Self::FetchPostgresForWindows(release) => format!(
+                "  sloop can download the official {release} binaries for Windows \
+                 ({} MB), check them against a SHA-256 built into this binary, and keep \
+                 pg_dump, pg_restore and psql.\n  The download is the system's own curl. \
+                 Nothing about this machine is sent anywhere.",
+                release.bytes / 1_000_000
+            ),
+            Self::PackageManager(offer) => format!(
+                "  sloop can ask {} to install them:\n    {}",
+                offer.manager,
+                offer.command.join(" ")
+            ),
+        }
+    }
+
+    pub(super) fn question(&self) -> String {
+        match self {
+            Self::FetchPostgresForWindows(_) => "Download and install them now?".to_owned(),
+            Self::PackageManager(offer) => format!("Run that {} command now?", offer.manager),
+        }
+    }
+
+    fn carry_out(&self, into: &Path) -> Outcome<()> {
+        match self {
+            Self::FetchPostgresForWindows(release) => install_postgres_archive(release, into),
+            Self::PackageManager(offer) => offer.run(),
+        }
+    }
+}
+
+impl Offer {
+    fn run(&self) -> Outcome<()> {
+        let (program, arguments) = self
+            .command
+            .split_first()
+            .expect("an offer always names a program");
+
+        // Every stream inherited, on purpose: the package manager has its own progress to
+        // show and `sudo` has a password to ask for, and neither works down a pipe.
+        let status = Command::new(program)
+            .args(arguments)
+            .status()
+            .map_err(|error| {
+                Failure::new(Exit::Usage, format!("could not run {program}: {error}"))
+            })?;
+
+        if status.success() {
+            return Ok(());
+        }
+
+        Err(Failure::new(
+            Exit::Usage,
+            format!("{} did not finish successfully", self.manager),
+        )
+        .hint(format!("run it yourself: {}", self.command.join(" "))))
+    }
+}
+
+/// Is there anything sloop could actually do about this engine on this machine?
+///
+/// `doctor` asks before it offers. Calling [`ensure`] on an engine with no plan would print
+/// a refusal in red for something that is not a failure — there is simply nothing to
+/// install here, and that belongs in the report as a line about where to get them.
+#[must_use]
+pub fn can_offer(engine: Engine) -> bool {
+    plan_for(engine).is_some()
+}
+
+/// What this platform can offer for this engine.
+pub(super) fn plan_for(engine: Engine) -> Option<Plan> {
+    if cfg!(windows) {
+        // Only PostgreSQL. MySQL and MariaDB publish installers rather than a plain archive
+        // with a stable name, and an installer is not something to run at somebody without
+        // them watching — so those two are told where to go instead of being fetched.
+        return match engine {
+            Engine::Postgres => Some(Plan::FetchPostgresForWindows(releases::newest())),
+            Engine::Mysql | Engine::Mariadb => None,
+        };
+    }
+
+    package_manager_offer(engine).map(Plan::PackageManager)
+}
+
+/// The package manager this machine has, and what to ask it for.
+///
+/// The distribution's own package, not a third-party repository. It is the one that stays
+/// working across upgrades, and on every distribution that matters it is new enough to dump
+/// the servers that distribution ships. `sloop doctor` says the version afterwards, which is
+/// where somebody finds out they want PGDG's newer one instead.
+fn package_manager_offer(engine: Engine) -> Option<Offer> {
+    let packages =
+        |apt: &str, dnf: &str, brew: &str| (apt.to_owned(), dnf.to_owned(), brew.to_owned());
+
+    let (apt, dnf, brew) = match engine {
+        Engine::Postgres => packages("postgresql-client", "postgresql", "libpq"),
+        Engine::Mysql => packages("mysql-client", "mysql", "mysql-client"),
+        Engine::Mariadb => packages("mariadb-client", "mariadb", "mariadb"),
+    };
+
+    if cfg!(target_os = "macos") && on_path("brew") {
+        return Some(Offer {
+            manager: "Homebrew",
+            command: vec!["brew".to_owned(), "install".to_owned(), brew],
+        });
+    }
+    if on_path("apt-get") {
+        return Some(Offer {
+            manager: "apt",
+            command: vec![
+                "sudo".to_owned(),
+                "apt-get".to_owned(),
+                "install".to_owned(),
+                "-y".to_owned(),
+                apt,
+            ],
+        });
+    }
+    if on_path("dnf") {
+        return Some(Offer {
+            manager: "dnf",
+            command: vec![
+                "sudo".to_owned(),
+                "dnf".to_owned(),
+                "install".to_owned(),
+                "-y".to_owned(),
+                dnf,
+            ],
+        });
+    }
+
+    None
+}
+
+fn on_path(program: &str) -> bool {
+    let names = if cfg!(windows) {
+        vec![format!("{program}.exe")]
+    } else {
+        vec![program.to_owned()]
+    };
+
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path)
+            .any(|directory| names.iter().any(|name| directory.join(name).is_file()))
+    })
+}
+
+/// Download, prove, unpack.
+fn install_postgres_archive(release: &releases::Release, into: &Path) -> Outcome<()> {
+    let workspace = into
+        .parent()
+        .map_or_else(|| into.to_path_buf(), Path::to_path_buf)
+        .join("download");
+    std::fs::create_dir_all(&workspace).map_err(|error| {
+        Failure::new(
+            Exit::Usage,
+            format!("could not create {}: {error}", workspace.display()),
+        )
+    })?;
+
+    // The index, first and optionally. It decides nothing — see `releases` — so a machine
+    // that cannot reach postgresql.org still installs, it just installs without a comment.
+    if let Some(note) = index_note(&workspace, release) {
+        anstream::println!("  {}", style::dim(&note));
+    }
+
+    let archive = workspace.join(release.file_name());
+    anstream::println!("  {} {}", style::label("Downloading"), release.url());
+    download(&release.url(), &archive)?;
+
+    verify(&archive, release).inspect_err(|_| {
+        // Nothing that failed its check is left lying about to be picked up by a later run
+        // that might be less careful.
+        let _ = std::fs::remove_file(&archive);
+    })?;
+    anstream::println!("  {} SHA-256 matches", style::label("Verified"));
+
+    std::fs::create_dir_all(into).map_err(|error| {
+        Failure::new(
+            Exit::Usage,
+            format!("could not create {}: {error}", into.display()),
+        )
+    })?;
+    extract(&archive, into)?;
+
+    // A third of a gigabyte is not worth keeping for the 51 MB that came out of it.
+    let _ = std::fs::remove_file(&archive);
+    let _ = std::fs::remove_dir(&workspace);
+
+    anstream::println!("  {} {}", style::label("Installed into"), into.display());
+    Ok(())
+}
+
+/// Ask postgresql.org what it has, and turn that into one sentence or none.
+fn index_note(workspace: &Path, release: &releases::Release) -> Option<String> {
+    let index = workspace.join("versions.json");
+    download(releases::INDEX_URL, &index).ok()?;
+    let json = std::fs::read_to_string(&index).ok()?;
+    let _ = std::fs::remove_file(&index);
+    releases::what_the_index_adds(&releases::read_index(&json), release)
+}
+
+/// Fetch a URL to a file, using whatever this machine already has.
+///
+/// In order of preference, and every one of them is a program that was already installed:
+/// `curl`, then PowerShell's `Invoke-WebRequest`, then `wget`. There is no fourth option and
+/// there is deliberately no HTTP client in this binary to fall back on.
+fn download(url: &str, to: &Path) -> Outcome<()> {
+    let mut attempts: Vec<(&str, Vec<String>)> = Vec::new();
+
+    if on_path("curl") {
+        attempts.push((
+            "curl",
+            vec![
+                "--fail".to_owned(),
+                "--location".to_owned(),
+                // https and nothing else, at both ends of a redirect chain.
+                "--proto".to_owned(),
+                "=https".to_owned(),
+                "--proto-redir".to_owned(),
+                "=https".to_owned(),
+                "--tlsv1.2".to_owned(),
+                "--max-time".to_owned(),
+                DOWNLOAD_TIMEOUT_SECONDS.to_string(),
+                "--output".to_owned(),
+                to.display().to_string(),
+                url.to_owned(),
+            ],
+        ));
+    }
+
+    if cfg!(windows) {
+        attempts.push((
+            "powershell",
+            vec![
+                "-NoProfile".to_owned(),
+                "-NonInteractive".to_owned(),
+                "-Command".to_owned(),
+                format!(
+                    "$ProgressPreference='SilentlyContinue'; \
+                     Invoke-WebRequest -Uri '{url}' -OutFile '{}' -UseBasicParsing",
+                    to.display()
+                ),
+            ],
+        ));
+    }
+
+    if on_path("wget") {
+        attempts.push((
+            "wget",
+            vec![
+                "--https-only".to_owned(),
+                "--timeout".to_owned(),
+                "60".to_owned(),
+                "-O".to_owned(),
+                to.display().to_string(),
+                url.to_owned(),
+            ],
+        ));
+    }
+
+    if attempts.is_empty() {
+        return Err(Failure::new(
+            Exit::Usage,
+            "this machine has no curl, no wget and no PowerShell, so there is nothing here \
+             that can download anything",
+        )
+        .hint(format!("fetch {url} by hand and see `sloop doctor`")));
+    }
+
+    let mut last = String::new();
+    for (program, arguments) in attempts {
+        // Progress goes to the terminal. A third of a gigabyte with no sign of life is
+        // indistinguishable from a hang, and somebody would be right to kill it.
+        let status = Command::new(program)
+            .args(&arguments)
+            .stdin(Stdio::null())
+            .status();
+
+        match status {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => last = format!("{program} exited with {status}"),
+            Err(error) => last = format!("{program} would not run: {error}"),
+        }
+        let _ = std::fs::remove_file(to);
+    }
+
+    Err(Failure::new(
+        Exit::Usage,
+        format!("could not download {url}: {last}"),
+    ))
+}
+
+/// The size and then the hash, in that order.
+///
+/// Size first because it is free and it catches the common failure: a server that answers a
+/// missing file with a courtesy page and a 200, which would otherwise be hashed in full
+/// before anybody discovered it was HTML.
+fn verify(archive: &Path, release: &releases::Release) -> Outcome<()> {
+    let size = std::fs::metadata(archive)
+        .map_err(|error| {
+            Failure::new(
+                Exit::Usage,
+                format!(
+                    "{} is not there after downloading it: {error}",
+                    archive.display()
+                ),
+            )
+        })?
+        .len();
+
+    if size != release.bytes {
+        return Err(Failure::new(
+            Exit::Usage,
+            format!(
+                "{} should be {} bytes and is {size}",
+                release.file_name(),
+                release.bytes
+            ),
+        )
+        .hint(
+            "that is what a download interrupted, or an error page served as a file, looks like",
+        ));
+    }
+
+    let found = sha256_of(archive)?;
+    if found != release.sha256 {
+        return Err(Failure::new(
+            Exit::Usage,
+            format!(
+                "{} does not match the checksum sloop holds for it",
+                release.file_name()
+            ),
+        )
+        .hint(format!("expected {}, got {found}", release.sha256)));
+    }
+
+    Ok(())
+}
+
+/// SHA-256 of a file, read a block at a time so a 300 MB archive is not held in memory.
+fn sha256_of(path: &Path) -> Outcome<String> {
+    let mut file = std::fs::File::open(path).map_err(|error| {
+        Failure::new(
+            Exit::Usage,
+            format!("could not read {}: {error}", path.display()),
+        )
+    })?;
+
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 1 << 20];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            Failure::new(
+                Exit::Usage,
+                format!("could not read {}: {error}", path.display()),
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(hasher
+        .finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        }))
+}
+
+/// Take the three programs and their libraries out of the archive, and nothing else.
+///
+/// The system's own archiver, for the same reason the download is the system's own curl:
+/// a zip reader is a dependency, and this project's headline claim is about what is not in
+/// its dependency graph. `--strip-components=2` drops the `pgsql/bin/` in front of every
+/// name, so what lands is a flat directory of programs.
+///
+/// **Not whatever `tar` is on `PATH`.** On Windows that is very often MSYS's GNU tar, which
+/// cannot read a zip at all; the one that can is the `bsdtar` Windows itself ships in
+/// System32, and it is asked for by its full path.
+fn extract(archive: &Path, into: &Path) -> Outcome<()> {
+    let archiver = system_archiver();
+
+    let status = Command::new(&archiver)
+        .current_dir(into)
+        .arg("-xf")
+        .arg(archive)
+        .arg("--strip-components=2")
+        // pgAdmin's own libraries, which are most of the archive and none of our business.
+        .arg("--exclude")
+        .arg("pgsql/bin/wx*")
+        .arg("--exclude")
+        .arg("pgsql/bin/testplug.dll")
+        // Every library beside them rather than a list of the ones today's build happens to
+        // need: the dependency set moves between releases, and a list that is one name short
+        // produces a pg_dump that will not start.
+        //
+        // Every pattern here has to match something. The archiver treats one that matches
+        // nothing as an error, which is a good property — a release that stopped shipping
+        // `pg_restore` should fail loudly — but it means this list is Windows-shaped on
+        // purpose, because this archive is the Windows one and there is no `.so` in it.
+        .arg("pgsql/bin/*.dll")
+        .arg("pgsql/bin/pg_dump*")
+        .arg("pgsql/bin/pg_restore*")
+        .arg("pgsql/bin/psql*")
+        .stdin(Stdio::null())
+        .status()
+        .map_err(|error| {
+            Failure::new(
+                Exit::Usage,
+                format!("could not run {}: {error}", archiver.display()),
+            )
+            .hint(
+                "unpacking the archive needs the system's own tar, which Windows 10 and \
+                   later include",
+            )
+        })?;
+
+    if !status.success() {
+        return Err(Failure::new(
+            Exit::Usage,
+            format!("could not unpack {}", archive.display()),
+        ));
+    }
+
+    Ok(())
+}
+
+/// The archiver that can read a zip.
+fn system_archiver() -> PathBuf {
+    if cfg!(windows) {
+        let root = std::env::var_os("SystemRoot")
+            .map_or_else(|| PathBuf::from("C:/Windows"), PathBuf::from);
+        let bsdtar = root.join("System32").join("tar.exe");
+        if bsdtar.is_file() {
+            return bsdtar;
+        }
+    }
+    PathBuf::from("tar")
+}
+
+/// Ask a yes-or-no question. Anything that is not a yes is a no.
+fn asked(question: &str) -> Outcome<bool> {
+    anstream::print!("{question} [y/N] ");
+    let _ = std::io::stdout().flush();
+
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).map_err(|error| {
+        Failure::new(Exit::Usage, format!("could not read the answer: {error}"))
+    })?;
+
+    Ok(is_yes(&answer))
+}
+
+/// Anything that is not plainly a yes is a no.
+///
+/// Separated from the reading so the rule can be checked without a terminal, and written
+/// this way round on purpose: the question leads to a download, and a stray keypress or an
+/// empty line must never be the thing that starts one.
+#[must_use]
+pub fn is_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// The instructions somebody needs when sloop is not going to install anything.
+pub fn how_to_install(engine: Engine) -> String {
+    match (cfg!(windows), cfg!(target_os = "macos"), engine) {
+        (true, _, Engine::Postgres) => {
+            "install PostgreSQL's client tools, or let sloop fetch them: run `sloop doctor` \
+             in a terminal"
+                .to_owned()
+        }
+        (true, _, Engine::Mysql) => {
+            "install MySQL's client tools from dev.mysql.com and put their `bin` on PATH".to_owned()
+        }
+        (true, _, Engine::Mariadb) => {
+            "install MariaDB's client tools from mariadb.org and put their `bin` on PATH".to_owned()
+        }
+        (_, true, _) => package_manager_offer(engine).map_or_else(
+            || format!("install {engine}'s client tools with Homebrew"),
+            |offer| offer.command.join(" "),
+        ),
+        _ => package_manager_offer(engine).map_or_else(
+            || format!("install {engine}'s client tools with this system's package manager"),
+            |offer| offer.command.join(" "),
+        ),
+    }
+}
+
+fn names(missing: &[Tool]) -> String {
+    missing
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn missing_failure(engine: Engine, missing: &[Tool], why: &str) -> Failure {
+    Failure::new(
+        Exit::Usage,
+        format!("{engine} needs {}, and {why}", names(missing)),
+    )
+    .hint(how_to_install(engine))
+}
+
+fn refused_before(engine: Engine, missing: &[Tool]) -> Failure {
+    missing_failure(
+        engine,
+        missing,
+        "sloop was told once not to install them, so it has not asked again",
+    )
+}
+
+fn declined_now(engine: Engine, missing: &[Tool]) -> Failure {
+    missing_failure(engine, missing, "that was declined")
+}
+
+fn nothing_to_offer(engine: Engine, missing: &[Tool]) -> Failure {
+    missing_failure(
+        engine,
+        missing,
+        "sloop has no way to install them on this machine",
+    )
+}
+
+fn no_terminal(engine: Engine, missing: &[Tool]) -> Failure {
+    Failure::new(
+        Exit::Usage,
+        format!(
+            "{engine} needs {}, and there is no terminal to ask about installing them at",
+            names(missing)
+        ),
+    )
+    .hint(format!(
+        "run `sloop doctor` in a terminal once, or {}",
+        how_to_install(engine)
+    ))
+}

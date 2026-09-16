@@ -1,0 +1,47 @@
+# Keep the client-tool pins honest.
+#
+# `cli/src/tools/releases.rs` holds a size and a SHA-256 for every PostgreSQL archive sloop
+# will install on Windows, and refuses anything that does not match. Two things can quietly
+# make that wrong, and neither is a compiler error: the vendor can replace an archive under
+# the same name, and PostgreSQL can release a major no row covers. So they are checked here
+# instead of being remembered.
+#
+# Its own workflow rather than a job in `cli`: each row is about a third of a gigabyte, and
+# re-downloading that on every push would be both slow and rude to a server doing us a
+# favour. Weekly is often enough to catch a replaced archive, and a change to the table
+# itself is checked the moment it lands.
+
+name: pinned releases
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - cli/src/tools/releases.rs
+      - ci/pinned-releases.sh
+      - .github/workflows/pinned-releases.yml
+  pull_request:
+    paths:
+      - cli/src/tools/releases.rs
+      - ci/pinned-releases.sh
+      - .github/workflows/pinned-releases.yml
+  schedule:
+    # Monday, early. Nothing depends on the hour; it is spread off the top of the hour
+    # because everything in the world runs at midnight.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pins:
+    name: every pin still matches
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh ci/pinned-releases.sh

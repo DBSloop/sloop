@@ -44,6 +44,10 @@ toml = "1.1.6"
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
 getrandom = "0.4.3"
 rpassword = "7.5.4"
+# SHA-256, for proving a downloaded archive is the one that was pinned — and, from R9, for
+# the checksum in a backup manifest. RustCrypto, like `argon2` above, and no more than a
+# hash function: nothing in it can open a socket.
+sha2 = "0.10"
 
 [workspace.lints.rust]
 # There is no reason for this tool to contain unsafe code, and "no reason yet" is how it

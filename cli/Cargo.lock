@@ -510,6 +510,7 @@ dependencies = [
  "keyring",
  "rpassword",
  "serde",
+ "sha2",
  "terminal_size",
  "toml",
  "zeroize",

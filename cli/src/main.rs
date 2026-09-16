@@ -13,9 +13,10 @@ mod failure;
 mod registry;
 mod secret;
 mod style;
+mod tools;
 mod wordmark;
 
-use std::io::Write as _;
+use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -67,6 +68,15 @@ fn run(cli: &Cli) -> Outcome<Exit> {
             let target = init_target(cli.project.as_deref(), &global)?;
             commands::init::run(&target, &global)?;
             Ok(Exit::Success)
+        }
+
+        Some(Command::Doctor) => {
+            let global = locations.global_dir()?;
+            // Only offer to install when there is somebody there to answer. Without a
+            // terminal `doctor` is a report and nothing else, which is what a health check
+            // in a pipeline wants it to be.
+            let interactive = std::io::stdin().is_terminal();
+            Ok(commands::doctor::run(&global, interactive))
         }
 
         Some(command) if command.uses_registry() => {
