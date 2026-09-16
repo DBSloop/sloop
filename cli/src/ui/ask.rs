@@ -311,7 +311,11 @@ fn lay_out(
                     lines.push(Drawn::gap());
                 }
                 lines.push(Drawn {
-                    text: format!("{}{}", " ".repeat(paint::INSET), paint::heading(heading)),
+                    // **No inset of its own.** Every line already starts in the two
+                    // columns the arrow lives in, and `paint::option` steps an item in
+                    // from there — so a heading indented as well would sit in the same
+                    // column as the things under it, and the structure would be gone.
+                    text: paint::heading(heading),
                     picks: None,
                 });
             }
@@ -329,7 +333,8 @@ fn lay_out(
     // The way out, always last and always reachable, set apart from the list above it.
     lines.push(Drawn::gap());
     lines.push(Drawn {
-        text: format!("{}{way_out}", " ".repeat(paint::INSET)),
+        // At the headings’ column, because it belongs to no section.
+        text: way_out.to_owned(),
         picks: Some(rows.len()),
     });
     lines

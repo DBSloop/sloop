@@ -166,3 +166,44 @@ fn filtering_takes_an_emptied_heading_with_it() {
         "the way out went with it"
     );
 }
+
+/// **A heading and the things under it never start in the same column.**
+///
+/// The step in is the whole of the structure: without it the two read as one flat run and
+/// the heading looks like another item. Every line already begins in the two columns the
+/// arrow lives in, so the heading takes no inset of its own and `paint::option` gives the
+/// item its own.
+#[test]
+fn an_item_starts_further_in_than_the_heading_above_it() {
+    use super::lay_out;
+    use crate::ui::screen::{Item, Row};
+
+    let rows = vec![
+        Row::Heading("ADD ONE".to_owned()),
+        Row::Item(Item::new("Tell sloop about a database", "sloop db add"), 0),
+    ];
+    let lines = lay_out(&rows, "← Back", "", 30, Some(100));
+
+    let starts = |text: &str| {
+        let plain = anstream::adapter::strip_str(text).to_string();
+        plain.len() - plain.trim_start().len()
+    };
+
+    let heading = starts(&lines[0].text);
+    let item = starts(&lines[1].text);
+    let back = starts(&lines.last().expect("the way out is drawn").text);
+
+    assert!(
+        item > heading,
+        "a heading at {heading} and an item at {item} read as one flat run"
+    );
+    assert_eq!(
+        item - heading,
+        crate::ui::paint::UNDER,
+        "the step in is not the one the layout says it is"
+    );
+    assert_eq!(
+        back, heading,
+        "the way out belongs to no section and sits at the headings' column"
+    );
+}
