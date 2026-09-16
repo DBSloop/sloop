@@ -69,6 +69,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # is a backup nobody can read. Nothing it brings can open a socket, and
 # `ci/no-http-client.sh` still reports not one crate that speaks HTTP.
 age = { version = "0.12.1", default-features = false }
+inquire = { version = "0.9.4", default-features = false, features = ["crossterm"] }
+crossterm = "0.29.0"
 
 [workspace.lints.rust]
 # There is no reason for this tool to contain unsafe code, and "no reason yet" is how it

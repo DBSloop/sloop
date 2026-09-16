@@ -109,13 +109,43 @@ fn every_unimplemented_command_is_reachable_and_admits_it() {
     }
 }
 
+/// **`sloop` on its own is the menu, and the menu is nothing but prompts.**
+///
+/// So with nothing to draw on it refuses at the door: the frozen `2`, and a line saying
+/// what to do instead. Rule 4 — a run with no terminal must never be left waiting for an
+/// answer nobody is there to give.
 #[test]
-fn no_command_at_all_is_the_interactive_menu() {
+fn no_command_at_all_is_the_menu_and_the_menu_needs_a_terminal() {
     let sandbox = Sandbox::new("menu");
-    sandbox
-        .sloop(&[])
-        .expect_code(1)
-        .expect_said("interactive menu");
+    let run = sandbox.sloop(&[]);
+
+    run.expect_code(2)
+        .expect_said("needs a terminal")
+        .expect_said("sloop --help");
+    assert!(
+        run.stdout().is_empty(),
+        "the menu wrote to stdout; there is nothing there to pipe"
+    );
+}
+
+/// **Nothing in the scrollback.** The menu owns the alternate screen buffer, and the only
+/// thing worse than not opening it is opening it into something that is not a terminal —
+/// a pipe or a log file full of `?1049` is a pipe nobody can read.
+#[test]
+fn the_menu_never_writes_a_screen_switch_into_a_pipe() {
+    let sandbox = Sandbox::new("menu-pipe");
+    let run = sandbox.sloop(&[]);
+
+    for stream in [run.stdout(), run.stderr()] {
+        assert!(
+            !stream.contains("1049"),
+            "the alternate screen was entered with nowhere to draw: {stream:?}"
+        );
+        assert!(
+            !stream.contains('\r'),
+            "the menu wrote a carriage return into a pipe: {stream:?}"
+        );
+    }
 }
 
 #[test]

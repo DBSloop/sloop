@@ -55,14 +55,22 @@ pub struct Initialised {
 
 /// Create the registry, register the name, and say what happened.
 pub fn run(target: &Path, global: &Path) -> Outcome<()> {
-    let report = create(target, global)?;
+    announce(&create(target, global)?, global);
+    Ok(())
+}
+
+/// Say what `create` made.
+///
+/// **Apart from [`run`] because the interactive shell needs the two halves separately.**
+/// It creates the registry inside the alternate screen, where nothing printed survives, and
+/// says what happened after the terminal has been handed back. See `ui`.
+pub fn announce(report: &Initialised, global: &Path) {
     crate::report::result(serde_json::json!({
         "project": report.project.display().to_string(),
         "registry": report.registry.display().to_string(),
         "existed": report.existed,
     }));
-    print(&report, global);
-    Ok(())
+    print(report, global);
 }
 
 /// Do the work. Kept apart from the printing so the behaviour can be checked without

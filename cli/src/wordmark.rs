@@ -24,29 +24,34 @@ const ART: [&str; 8] = [
     r"                   |_|",
 ];
 
-/// The wordmark in the accent, or the plain word when the terminal is too narrow to hold
-/// the block without breaking it.
+/// The block with nothing but spaces and glyphs, or the plain word when the terminal is
+/// too narrow to hold it without breaking it.
 ///
 /// `columns` is the terminal width, or `None` when there is no terminal to measure — a
 /// pipe or a file, where the full block is right because nothing will wrap it.
+///
+/// **Uncoloured, and that is the point of it.** [`crate::report`] writes through
+/// `anstream`, which strips escapes when the destination will not take them; the
+/// interactive shell writes through `crossterm`, which does not. So the shell takes the
+/// art from here and paints it itself, and there is still only one copy of it.
 #[must_use]
-pub fn render(columns: Option<usize>) -> String {
+pub fn plain(columns: Option<usize>) -> String {
     if columns.is_some_and(|columns| columns < COLUMNS) {
-        return style::paint("sloop");
+        return "sloop".to_owned();
     }
 
     ART.iter()
-        .map(|line| style::paint(&format!("{line:<COLUMNS$}")))
+        .map(|line| format!("{line:<COLUMNS$}"))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// The block with nothing but spaces and glyphs.
-#[cfg(test)]
+/// The wordmark in the accent, for a line on its way out through [`crate::report`].
 #[must_use]
-pub fn plain() -> String {
-    ART.iter()
-        .map(|line| format!("{line:<COLUMNS$}"))
+pub fn render(columns: Option<usize>) -> String {
+    plain(columns)
+        .lines()
+        .map(style::paint)
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -54,6 +59,11 @@ pub fn plain() -> String {
 #[cfg(test)]
 mod tests {
     use super::{ART, COLUMNS, plain, render};
+
+    /// The block as the owner drew it, with no width to have to fit inside.
+    fn block() -> String {
+        plain(None)
+    }
 
     #[test]
     fn no_line_is_wider_than_the_block() {
@@ -67,7 +77,7 @@ mod tests {
 
     #[test]
     fn the_rendered_block_is_a_rectangle() {
-        for line in plain().lines() {
+        for line in block().lines() {
             assert_eq!(
                 line.chars().count(),
                 COLUMNS,
@@ -93,8 +103,8 @@ mod tests {
     #[test]
     fn it_still_spells_sloop() {
         // Read the block back the way a person does: the glyphs, ignoring the gaps.
-        let drawn: String = plain().chars().filter(|c| !c.is_whitespace()).collect();
+        let drawn: String = block().chars().filter(|c| !c.is_whitespace()).collect();
         assert!(drawn.contains("___|"), "the block lost its shape: {drawn}");
-        assert_eq!(plain().lines().count(), 8);
+        assert_eq!(block().lines().count(), 8);
     }
 }

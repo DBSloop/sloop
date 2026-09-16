@@ -1,20 +1,75 @@
-//! One accent colour, and the help styling built from it.
+//! The palette, and the help styling built from it.
 //!
-//! `#D97757` is the only colour this tool decorates with. Everything else is weight,
-//! dimming and space — a second hue would have to earn its place and none has.
+//! **Six colours, and they are the website's.** `web/src/styles/tokens.css` defines what a
+//! terminal block looks like on the landing page and says in a comment that *"the orange
+//! inside it is the orange the real CLI prints"*. That sentence is only true if the two
+//! lists are the same list, so this is that list — `--ch-brand` and the four `--ch-term-*`
+//! values, transcribed, with a 256-colour approximation beside each for terminals that
+//! cannot take twenty-four bits.
+//!
+//! **Colour means something here; it is not decoration.** Orange is the brand and the thing
+//! you are about to do, green is a thing that worked, amber is a thing to be careful about,
+//! red is a thing that did not work, grey is a label rather than the value it labels. A
+//! seventh hue would need a seventh meaning.
+//!
+//! *This replaces the single-accent rule in `CLAUDE.md`, at the owner's instruction — see
+//! "Colour, and the version under the wordmark" in `docs/OWNER-DECISIONS.md`.*
 //!
 //! The types come from `clap::builder::styling`, which re-exports `anstyle`. Taking them
 //! from clap rather than depending on `anstyle` directly means the styles here and the
 //! styles clap renders can never be two incompatible versions of the same type.
 
-use clap::builder::styling::{Ansi256Color, AnsiColor, Color, RgbColor, Style, Styles};
+use clap::builder::styling::{Ansi256Color, Color, RgbColor, Style, Styles};
 
-/// Claude Code orange, the single accent.
-const ACCENT_RGB: RgbColor = RgbColor(0xD9, 0x77, 0x57);
+/// One of the six, by what it is for rather than by what it looks like.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hue {
+    /// Claude Code orange. The mark, the highlight, and the command to type.
+    Brand,
+    /// Ordinary content.
+    Text,
+    /// A label, a help line, the phrase beside a menu item.
+    Dim,
+    /// It worked.
+    Ok,
+    /// It worked, and there is something to know about it.
+    Warn,
+    /// It did not work.
+    Bad,
+}
 
-/// xterm-256 index 173, `#D7875F` — the closest the 6×6×6 cube gets to the accent, and
-/// close enough that the two are hard to tell apart side by side.
-const ACCENT_256: Ansi256Color = Ansi256Color(173);
+impl Hue {
+    /// The exact colour, the same twenty-four bits the website uses.
+    const fn rgb(self) -> RgbColor {
+        match self {
+            // --ch-brand
+            Self::Brand => RgbColor(0xD9, 0x77, 0x57),
+            // --ch-term-text
+            Self::Text => RgbColor(0xE0, 0xDC, 0xD6),
+            // --ch-term-dim
+            Self::Dim => RgbColor(0x8C, 0x84, 0x7C),
+            // --ch-term-ok
+            Self::Ok => RgbColor(0x6F, 0xBF, 0x8A),
+            // --ch-term-warn
+            Self::Warn => RgbColor(0xE0, 0xB2, 0x56),
+            // --ch-term-bad
+            Self::Bad => RgbColor(0xE8, 0x70, 0x6A),
+        }
+    }
+
+    /// The nearest colour in the 256-colour cube. Each was picked by rounding every
+    /// channel to the cube's own steps, so none of them is a guess.
+    const fn cube(self) -> Ansi256Color {
+        match self {
+            Self::Brand => Ansi256Color(173), // #D7875F
+            Self::Text => Ansi256Color(253),  // #DADADA
+            Self::Dim => Ansi256Color(245),   // #8A8A8A
+            Self::Ok => Ansi256Color(72),     // #5FAF87
+            Self::Warn => Ansi256Color(179),  // #D7AF5F
+            Self::Bad => Ansi256Color(167),   // #D75F5F
+        }
+    }
+}
 
 /// True when the terminal has advertised 24-bit colour.
 ///
@@ -29,19 +84,55 @@ fn truecolor() -> bool {
     )
 }
 
-/// The accent, as fine as this terminal can render it.
-fn accent_color() -> Color {
+/// One colour, as fine as this terminal can render it.
+fn colour(hue: Hue) -> Color {
+    match ink(hue) {
+        Ink::True(r, g, b) => Color::Rgb(RgbColor(r, g, b)),
+        Ink::Cube(index) => Color::Ansi256(Ansi256Color(index)),
+    }
+}
+
+/// A colour as plain numbers, for a renderer that is not `anstyle`'s.
+///
+/// The interactive shell hands its colours to `inquire`, which has its own colour type, and
+/// a second `COLORTERM` check over there would be a second answer to the same question. So
+/// the decision is made once, here, and both renderers ask for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ink {
+    /// 24-bit, the colour exactly.
+    True(u8, u8, u8),
+    /// The nearest colour in the 256-colour cube.
+    Cube(u8),
+}
+
+/// Which of the two this terminal gets, for `hue`.
+#[must_use]
+pub fn ink(hue: Hue) -> Ink {
     if truecolor() {
-        Color::Rgb(ACCENT_RGB)
+        let RgbColor(r, g, b) = hue.rgb();
+        Ink::True(r, g, b)
     } else {
-        Color::Ansi256(ACCENT_256)
+        Ink::Cube(hue.cube().0)
     }
 }
 
 /// The accent as a style, for text.
 #[must_use]
 pub fn accent() -> Style {
-    Style::new().fg_color(Some(accent_color()))
+    Style::new().fg_color(Some(colour(Hue::Brand)))
+}
+
+/// Any of the six as a style.
+#[must_use]
+pub fn styled(hue: Hue) -> Style {
+    Style::new().fg_color(Some(colour(hue)))
+}
+
+/// Wrap `text` in `hue` and close it again.
+#[must_use]
+pub fn in_hue(hue: Hue, text: &str) -> String {
+    let style = styled(hue);
+    format!("{style}{text}{style:#}")
 }
 
 /// Wrap `text` in the accent and close it again.
@@ -63,13 +154,10 @@ pub fn paint(text: &str) -> String {
     format!("{style}{text}{style:#}")
 }
 
-/// The `error:` prefix, red and bold, exactly as clap sets its own. Red here is meaning
-/// rather than decoration, which is why it is the one colour allowed beside the accent.
+/// The `error:` prefix.
 #[must_use]
 pub fn error_prefix() -> String {
-    let style = Style::new()
-        .fg_color(Some(Color::Ansi(AnsiColor::Red)))
-        .bold();
+    let style = styled(Hue::Bad).bold();
     format!("{style}error:{style:#}")
 }
 
@@ -79,11 +167,15 @@ pub fn label(text: &str) -> String {
     dim(text)
 }
 
-/// Dim text, for the lines that support a heading rather than compete with it.
+/// Quieter than the text around it — labels, help, the phrase beside a menu item.
+///
+/// **A colour rather than SGR 2.** The dim attribute is the least consistently implemented
+/// thing in the whole escape vocabulary: some terminals ignore it, some render it as a
+/// different font weight, and Windows' own console did nothing with it at all. A grey that
+/// was chosen against the background is grey everywhere.
 #[must_use]
 pub fn dim(text: &str) -> String {
-    let style = Style::new().dimmed();
-    format!("{style}{text}{style:#}")
+    in_hue(Hue::Dim, text)
 }
 
 /// How clap paints `--help` and its errors.
@@ -103,7 +195,7 @@ pub fn clap_styles() -> Styles {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCENT_256, ACCENT_RGB, accent, dim, error_prefix, heading, paint};
+    use super::{Hue, accent, dim, error_prefix, heading, paint};
 
     /// Strip every SGR sequence, the way `anstream` does when the destination is a pipe
     /// or the user has said `NO_COLOR`. What is left has to be the text we asked for —
@@ -121,13 +213,57 @@ mod tests {
         plain
     }
 
+    /// **The palette is the website's, and this is the thing that keeps it so.**
+    /// `web/src/styles/tokens.css` tells every reader that the orange in a terminal block
+    /// on the landing page is the orange the real CLI prints. Change either list without
+    /// the other and that sentence becomes marketing.
     #[test]
-    fn the_accent_is_the_projects_one_colour() {
-        assert_eq!(
-            (ACCENT_RGB.0, ACCENT_RGB.1, ACCENT_RGB.2),
-            (0xD9, 0x77, 0x57)
-        );
-        assert_eq!(ACCENT_256.0, 173);
+    fn the_palette_is_the_websites_palette() {
+        for (hue, rgb) in [
+            // --ch-brand
+            (Hue::Brand, (0xD9, 0x77, 0x57)),
+            // --ch-term-text
+            (Hue::Text, (0xE0, 0xDC, 0xD6)),
+            // --ch-term-dim
+            (Hue::Dim, (0x8C, 0x84, 0x7C)),
+            // --ch-term-ok
+            (Hue::Ok, (0x6F, 0xBF, 0x8A)),
+            // --ch-term-warn
+            (Hue::Warn, (0xE0, 0xB2, 0x56)),
+            // --ch-term-bad
+            (Hue::Bad, (0xE8, 0x70, 0x6A)),
+        ] {
+            let super::RgbColor(r, g, b) = hue.rgb();
+            assert_eq!((r, g, b), rgb, "{hue:?} drifted from tokens.css");
+        }
+    }
+
+    /// Six meanings, six colours, and no two of them the same — a palette with a
+    /// duplicate in it is a palette with a meaning nobody can see.
+    #[test]
+    fn no_two_of_the_six_are_the_same_colour() {
+        let hues = [
+            Hue::Brand,
+            Hue::Text,
+            Hue::Dim,
+            Hue::Ok,
+            Hue::Warn,
+            Hue::Bad,
+        ];
+        for (index, hue) in hues.iter().enumerate() {
+            for other in &hues[index + 1..] {
+                assert_ne!(
+                    hue.rgb(),
+                    other.rgb(),
+                    "{hue:?} and {other:?} are one colour"
+                );
+                assert_ne!(
+                    hue.cube().0,
+                    other.cube().0,
+                    "{hue:?} and {other:?} share an index"
+                );
+            }
+        }
     }
 
     #[test]

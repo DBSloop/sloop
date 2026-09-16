@@ -19,6 +19,7 @@ mod report;
 mod secret;
 mod style;
 mod tools;
+mod ui;
 mod verify;
 mod wordmark;
 
@@ -101,8 +102,57 @@ fn run(cli: &Cli) -> Outcome<Exit> {
         Some(command) if command.uses_registry() => with_registry(cli, &locations, command),
 
         Some(command) => Ok(unimplemented(&format!("'{}'", command.path()), None)),
-        None => Ok(unimplemented("the interactive menu", None)),
+        None => menu(cli, &locations),
     }
+}
+
+/// `sloop` with nothing after it: the interactive menu.
+///
+/// Everything the shell needs is worked out here and handed over as plain data, so that
+/// `ui` never holds a borrow of a registry — which is what lets `init` run from inside the
+/// menu and change the registry the session is sitting in.
+fn menu(cli: &Cli, locations: &Locations) -> Outcome<Exit> {
+    let global = locations.global_dir()?;
+    let world = Disk::new(&global);
+    let cwd = working_directory()?;
+    let resolution = resolve(
+        &cwd,
+        &world,
+        cli.global,
+        cli.project.as_deref(),
+        environment_project().as_deref(),
+    )?;
+    let registries = Registries::open(resolution.clone(), &global)?;
+
+    let mut shell = ui::screen::Shell {
+        working_in: resolution
+            .registry_dir()
+            .unwrap_or_else(|| global.clone())
+            .display()
+            .to_string(),
+        found_by: resolution.why(),
+        // **A first run is nothing registered and nowhere to register it**: no `.sloop`
+        // at or above the working directory, and a global store that is still empty. Either
+        // one on its own is an ordinary session — somebody with a global registry and no
+        // project has already started, and so has somebody standing in a fresh project.
+        fresh: resolution.registry_dir().is_none() && registries.is_empty(),
+        holds: registries.len(),
+        global: global.clone(),
+        cwd,
+    };
+    drop(registries);
+
+    let (exit, kept) = ui::run(&mut shell)?;
+
+    // Out here, and only out here: the alternate screen has been handed back, so these
+    // lines land in the scrollback the user keeps rather than in the one that vanishes.
+    for keeping in &kept {
+        match keeping {
+            ui::screen::Kept::Started(report) => commands::init::announce(report, &global),
+        }
+    }
+
+    Ok(exit)
 }
 
 /// Every command that reads a registry, once the registry has been read.
