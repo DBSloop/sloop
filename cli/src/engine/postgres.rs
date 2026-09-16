@@ -322,6 +322,25 @@ impl Adapter for Postgres {
             .collect()
     }
 
+    fn estimated_row_counts(&self, target: &Target<'_>) -> Outcome<Vec<TableCount>> {
+        let rows = self.query(target, ESTIMATED_ROW_COUNTS_SQL)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                Some(TableCount {
+                    table: Table {
+                        schema: row.first()?.clone(),
+                        name: row.get(1)?.clone(),
+                    },
+                    // A table the statistics collector has never seen reports nothing
+                    // useful, and zero is the honest reading of that. It is an estimate
+                    // either way, and `verify` never fails a run on one.
+                    rows: row.get(2).and_then(|value| value.parse().ok()).unwrap_or(0),
+                })
+            })
+            .collect())
+    }
+
     fn dump(&self, target: &Target<'_>, to: &Path) -> Outcome<DumpSummary> {
         // Before anything is written: is this pg_dump even allowed to read that server?
         let server = self.probe(target)?;
@@ -573,6 +592,21 @@ UNION ALL SELECT 'pg-untrusted-extensions', e.bad > 0, (SELECT super FROM me), e
 const TABLES_SQL: &str = "\
 SELECT n.nspname, c.relname \
 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+WHERE c.relkind = 'r' AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%' \
+ORDER BY 1, 2";
+
+/// What the statistics collector thinks is in every table. Never a count.
+///
+/// `n_live_tup` is the number `CLAUDE.md` names, and it is a running tally the server keeps
+/// rather than anything it has just measured. It is zero on a table nobody has touched
+/// since the server started — which is every table in a database that has only just been
+/// restored into — and it has been seen at double the truth on a table that had been
+/// churned. The same `relkind` and schema filters as the exact query, so the two modes list
+/// the same tables and a fast run cannot appear to lose one.
+const ESTIMATED_ROW_COUNTS_SQL: &str = "\
+SELECT n.nspname, c.relname, coalesce(s.n_live_tup, 0) \
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid \
 WHERE c.relkind = 'r' AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%' \
 ORDER BY 1, 2";
 

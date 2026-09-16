@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
 use super::mysql::{Family, MysqlFamily, Tools};
-use super::{Adapter, Engine, Target};
+use super::{Adapter, Engine, TableCount, Target};
 use crate::secret::Secret;
 
 /// High enough to be out of the way, and stepped per instance so two tests never collide.
@@ -1231,6 +1231,45 @@ fn a_server_without_tls_is_still_reachable(family: Family) {
             .expect("listing tables over a plain connection")
             .is_empty()
     );
+}
+
+/// The estimate `SLOOP_VERIFY=fast` reads, on the engine whose estimate is the further out.
+///
+/// What is asserted is the property `verify` is written against rather than a number:
+/// both modes list the same tables, so a fast run cannot appear to have lost one, and the
+/// estimate itself is never checked for accuracy because `TABLE_ROWS` on `InnoDB` is
+/// sampled and is allowed to be half the truth. The exact count beside it is the one that
+/// has to be right.
+fn the_estimate_sees_the_same_tables_as_the_count(family: Family) {
+    let Some(server) = Server::start(family, "estimates") else {
+        skip(family, "no server on this machine");
+        return;
+    };
+
+    let adapter = MysqlFamily::new(family, server.tools());
+    let password = Secret::new(ALPHA_PASSWORD.to_owned());
+    let source = server.database("source_db", "alpha");
+    let target = source.target(&password);
+
+    let named = |counts: &[TableCount]| -> Vec<String> {
+        counts.iter().map(|count| count.table.to_string()).collect()
+    };
+
+    let exact = adapter.row_counts(&target).expect("counting");
+    let estimated = adapter.estimated_row_counts(&target).expect("estimating");
+
+    assert_eq!(named(&exact), named(&estimated));
+    assert!(!exact.is_empty(), "the fixture has tables in it");
+}
+
+#[test]
+fn mysql_estimates_the_same_tables_it_counts() {
+    the_estimate_sees_the_same_tables_as_the_count(Family::Mysql);
+}
+
+#[test]
+fn mariadb_estimates_the_same_tables_it_counts() {
+    the_estimate_sees_the_same_tables_as_the_count(Family::Mariadb);
 }
 
 #[test]

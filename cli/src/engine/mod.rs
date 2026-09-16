@@ -331,6 +331,19 @@ pub trait Adapter {
     /// Exact `count(*)` for every table. Never an estimate.
     fn row_counts(&self, target: &Target<'_>) -> Outcome<Vec<TableCount>>;
 
+    /// What the engine's own statistics *think* is in every table.
+    ///
+    /// **Not a count, and nothing built on it may pretend otherwise.** These numbers come
+    /// from a planner's bookkeeping: they are free, they are stale by design, and one of
+    /// them has been observed reporting double the truth on a table this project was
+    /// looking at. They exist because `SLOOP_VERIFY=fast` exists, and everything that
+    /// prints one says out loud that it is an estimate — see [`crate::verify`].
+    ///
+    /// A table nothing has collected statistics for yet reports zero rather than refusing,
+    /// which is exactly what a freshly restored database looks like. That is the reason
+    /// `verify` never turns an estimate into a failure.
+    fn estimated_row_counts(&self, target: &Target<'_>) -> Outcome<Vec<TableCount>>;
+
     /// Write a dump of `target` to `to`. Reads the source and nothing else.
     fn dump(&self, target: &Target<'_>, to: &Path) -> Outcome<DumpSummary>;
 

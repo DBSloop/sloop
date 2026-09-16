@@ -579,6 +579,25 @@ impl Adapter for MysqlFamily {
             .collect()
     }
 
+    fn estimated_row_counts(&self, target: &Target<'_>) -> Outcome<Vec<TableCount>> {
+        let rows = self.query(target, ESTIMATED_ROW_COUNTS_SQL)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                Some(TableCount {
+                    table: Table {
+                        schema: row.first()?.clone(),
+                        name: row.get(1)?.clone(),
+                    },
+                    // `TABLE_ROWS` is `NULL` for a table InnoDB has no statistics for, and
+                    // the client prints that as `NULL`. Zero is the honest reading of it —
+                    // and an estimate either way, which `verify` never fails a run on.
+                    rows: row.get(2).and_then(|value| value.parse().ok()).unwrap_or(0),
+                })
+            })
+            .collect())
+    }
+
     fn dump(&self, target: &Target<'_>, to: &Path) -> Outcome<DumpSummary> {
         // Before anything is written: is this the engine it was registered as?
         self.probe(target)?;
@@ -1250,6 +1269,17 @@ impl MysqlFamily {
 /// [`Table::schema`] and the two engines share one type.
 const TABLES_SQL: &str = "\
 SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES \
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' \
+ORDER BY 1, 2";
+
+/// What `InnoDB` thinks is in every table. Never a count.
+///
+/// `TABLE_ROWS` is sampled from a handful of index pages and extrapolated; MySQL's own
+/// manual puts it at 40 to 50 percent of the truth on an `InnoDB` table, which is the whole
+/// reason `SLOOP_VERIFY=fast` is labelled rather than trusted. Same filters as
+/// [`TABLES_SQL`], so a fast run and an exact one list the same tables.
+const ESTIMATED_ROW_COUNTS_SQL: &str = "\
+SELECT TABLE_SCHEMA, TABLE_NAME, coalesce(TABLE_ROWS, 0) FROM information_schema.TABLES \
 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' \
 ORDER BY 1, 2";
 
