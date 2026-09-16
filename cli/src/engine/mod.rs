@@ -34,6 +34,7 @@
 
 pub mod mysql;
 pub mod postgres;
+pub mod privileges;
 
 #[cfg(test)]
 #[path = "cluster_tests.rs"]
@@ -312,4 +313,25 @@ pub trait Adapter {
 
     /// Load a dump written by [`Adapter::dump`] into `target`.
     fn restore(&self, target: &Target<'_>, from: &Path) -> Outcome<()>;
+
+    /// What a role must be able to do on this engine, and what breaks without it.
+    ///
+    /// Static, and needs no connection: it is the documented minimum rather than an
+    /// answer about one server. `sloop doctor` prints it where there is nothing
+    /// registered to check, and the site publishes the same table.
+    fn required_privileges(&self) -> &'static [privileges::Requirement] {
+        privileges::for_engine(self.engine())
+    }
+
+    /// What this engine's own manual asks a backup role for that sloop does not need.
+    fn waived_privileges(&self) -> &'static [privileges::Waived] {
+        privileges::waived_by(self.engine())
+    }
+
+    /// Ask the live connection which of those this role actually holds.
+    ///
+    /// **A read, like everything else here.** It inspects catalogues and grant tables and
+    /// changes nothing — including nothing about the role's own privileges, which are an
+    /// administrator's to grant and never a backup tool's to take.
+    fn check_privileges(&self, target: &Target<'_>) -> Outcome<privileges::Report>;
 }

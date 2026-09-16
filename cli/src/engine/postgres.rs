@@ -20,6 +20,7 @@ use std::time::Instant;
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 
+use super::privileges::{self, Finding, Report, Verdict, verdict_from};
 use super::{
     Adapter, Capabilities, DumpSummary, Engine, ServerInfo, Table, TableCount, Target, Version,
 };
@@ -413,7 +414,124 @@ impl Adapter for Postgres {
 
         Ok(())
     }
+
+    fn check_privileges(&self, target: &Target<'_>) -> Outcome<Report> {
+        let server = self.probe(target)?;
+        let answers = self.query(target, PRIVILEGES_SQL)?;
+
+        // Every row is `id | applicable | held | detail`, and the id is on the row rather
+        // than implied by its position: a UNION ALL is not promised to come back in the
+        // order it was written, and matching by index would be a bug that only appears
+        // when somebody's planner decides otherwise.
+        let answer = |id: &str| {
+            answers
+                .iter()
+                .find(|row| row.first().is_some_and(|found| found == id))
+        };
+
+        let role = answer(WHOAMI)
+            .and_then(|row| row.get(3))
+            .cloned()
+            .unwrap_or_else(|| target.user.to_owned());
+
+        let findings = privileges::for_engine(Engine::Postgres)
+            .iter()
+            .map(|requirement| {
+                let verdict = match answer(requirement.id) {
+                    None => Verdict::Unknown(format!(
+                        "this server did not answer for {}",
+                        requirement.id
+                    )),
+                    Some(row) => {
+                        let yes = |column: usize| row.get(column).is_some_and(|it| it == "t");
+                        let detail = row.get(3).cloned().unwrap_or_default();
+                        verdict_from(requirement.applies, yes(1), yes(2), detail)
+                    }
+                };
+                Finding {
+                    requirement,
+                    verdict,
+                }
+            })
+            .collect();
+
+        Ok(Report {
+            role,
+            server,
+            findings,
+        })
+    }
 }
+
+/// The row of [`PRIVILEGES_SQL`] that carries the role rather than a finding.
+const WHOAMI: &str = "pg-whoami";
+
+/// What this role can and cannot do, in one round trip.
+///
+/// Every branch asks the server the *effect* rather than the route: not "does this role
+/// hold `pg_read_all_data`" but "is there a table it cannot read". A database whose owner
+/// granted `SELECT` table by table passes, and so does one on PostgreSQL 13, which has no
+/// such predefined role to hold.
+///
+/// Read-only throughout — catalogue lookups and `has_*_privilege` functions, which is
+/// what lets `doctor` run this against a production source without a second thought.
+const PRIVILEGES_SQL: &str = "\
+WITH me AS (
+  SELECT current_setting('is_superuser') = 'on' AS super,
+         coalesce((SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user), false) AS bypass
+), rel AS (
+  SELECT c.oid, n.nspname, c.relname, c.relrowsecurity, c.relforcerowsecurity, c.relowner
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE c.relkind IN ('r','p','v','m','S')
+     AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'
+), sch AS (
+  SELECT n.nspname FROM pg_namespace n
+   WHERE n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'
+     AND (n.nspname = 'public' OR EXISTS (SELECT 1 FROM rel r WHERE r.nspname = n.nspname))
+), unread AS (
+  SELECT count(*) AS bad, (SELECT count(*) FROM rel) AS total,
+         coalesce(string_agg(nspname||'.'||relname, ', ' ORDER BY nspname, relname), '') AS names
+    FROM rel
+   WHERE NOT (has_schema_privilege(nspname,'USAGE') AND has_table_privilege(oid,'SELECT'))
+), rls AS (
+  SELECT count(*) AS total,
+         count(*) FILTER (WHERE NOT ((SELECT bypass FROM me) OR (SELECT super FROM me)
+              OR (pg_has_role(current_user, relowner, 'USAGE') AND NOT relforcerowsecurity))) AS bad,
+         coalesce(string_agg(nspname||'.'||relname, ', ' ORDER BY nspname, relname), '') AS names
+    FROM rel WHERE relrowsecurity
+), lo AS (
+  SELECT count(*) AS total,
+         count(*) FILTER (WHERE NOT ((SELECT super FROM me)
+              OR pg_has_role(current_user, m.lomowner, 'USAGE')
+              OR (m.lomacl IS NOT NULL AND EXISTS (SELECT 1 FROM aclexplode(m.lomacl) a
+                    WHERE a.privilege_type = 'SELECT'
+                      AND (a.grantee = 0 OR pg_has_role(current_user, a.grantee, 'USAGE')))))) AS bad
+    FROM pg_largeobject_metadata m
+), nocreate AS (
+  -- USAGE as well as CREATE. A role with only CREATE builds the tables and then fails on
+  -- the first ALTER TABLE against one, because naming an object needs USAGE on its schema.
+  SELECT count(*) AS bad,
+         coalesce(string_agg(nspname, ', ' ORDER BY nspname), '') AS names
+    FROM sch
+   WHERE NOT (has_schema_privilege(nspname,'USAGE') AND has_schema_privilege(nspname,'CREATE'))
+), ext AS (
+  SELECT count(*) AS bad, coalesce(string_agg(e.extname, ', ' ORDER BY e.extname), '') AS names
+    FROM pg_extension e
+   WHERE e.extname <> 'plpgsql'
+     AND NOT coalesce((SELECT v.trusted FROM pg_available_extension_versions v
+                        WHERE v.name = e.extname AND v.version = e.extversion), false)
+)
+          SELECT 'pg-whoami', true, true, quote_ident(current_user)
+UNION ALL SELECT 'pg-connect', true, has_database_privilege(current_database(),'CONNECT'), ''
+UNION ALL SELECT 'pg-read-everything', true, u.bad = 0,
+                 u.bad||' of '||u.total||' cannot be read: '||u.names FROM unread u
+UNION ALL SELECT 'pg-bypass-row-security', r.total > 0, r.bad = 0,
+                 r.bad||' with row-level security: '||r.names FROM rls r
+UNION ALL SELECT 'pg-read-large-objects', l.total > 0, l.bad = 0,
+                 l.bad||' of '||l.total||' cannot be opened' FROM lo l
+UNION ALL SELECT 'pg-create-in-database', true, has_database_privilege(current_database(),'CREATE'), ''
+UNION ALL SELECT 'pg-create-in-schemas', true, c.bad = 0, 'cannot enter or create in: '||c.names FROM nocreate c
+UNION ALL SELECT 'pg-untrusted-extensions', e.bad > 0, (SELECT super FROM me), e.names FROM ext e";
 
 /// Base tables, in every schema that is not the server's own.
 const TABLES_SQL: &str = "\

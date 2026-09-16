@@ -31,6 +31,17 @@ pub enum Exit {
     Mismatch = 6,
     /// Another run holds the lock on this database.
     Locked = 7,
+    /// `doctor` ran, and found something that will break a backup.
+    ///
+    /// Added by R6a, which is what rule 7 allows: adding a code is a feature, changing
+    /// one is a breaking release. It exists because the alternative was `doctor` exiting
+    /// `0` on a machine whose backups are quietly incomplete, and a health check that
+    /// reports healthy in exactly the case it was built to catch is worse than none.
+    ///
+    /// Distinct from `2`, which stays what it always was: the command was called wrongly.
+    /// A role short of a grant is not bad usage, and a monitoring system that cannot tell
+    /// those two apart alerts the wrong person.
+    Unhealthy = 8,
 }
 
 impl Exit {
@@ -62,5 +73,6 @@ mod tests {
         assert_eq!(Exit::Restore.code(), 5);
         assert_eq!(Exit::Mismatch.code(), 6);
         assert_eq!(Exit::Locked.code(), 7);
+        assert_eq!(Exit::Unhealthy.code(), 8);
     }
 }

@@ -58,8 +58,13 @@ pub enum Command {
     /// Start a project registry in this directory, or in the one `-C` names.
     Init,
 
-    /// Report which client tools are present, missing or too old.
-    Doctor,
+    /// Report which client tools are present, and what each registered role may do.
+    Doctor {
+        /// Do not connect to anything. Reports the client tools and the documented
+        /// privilege minimums, and asks no server about its grants.
+        #[arg(long)]
+        offline: bool,
+    },
 
     /// Register and manage database connections.
     Db {
@@ -137,13 +142,18 @@ impl Command {
     ///
     /// The ones that do resolve which registry before they do anything else, so `-C` at a
     /// project that does not exist fails as usage rather than halfway through the work.
-    /// `doctor` inspects the machine, `uninstall` removes the binary and `init` creates
-    /// the thing the others read, so none of the three needs one.
+    /// `uninstall` removes the binary and `init` creates the thing the others read, so
+    /// neither needs one.
+    ///
+    /// `doctor` is in the list and did not used to be: R6a gave it a second half that
+    /// checks each registered role's privileges against the live connection, and it can
+    /// only do that by reading the same registry every other command reads.
     #[must_use]
     pub const fn uses_registry(&self) -> bool {
         matches!(
             self,
-            Self::Db { .. }
+            Self::Doctor { .. }
+                | Self::Db { .. }
                 | Self::Backup
                 | Self::Backups { .. }
                 | Self::Restore
@@ -158,7 +168,7 @@ impl Command {
     pub fn path(&self) -> &'static str {
         match self {
             Self::Init => "init",
-            Self::Doctor => "doctor",
+            Self::Doctor { .. } => "doctor",
             Self::Db { command } => command.path(),
             Self::Backup => "backup",
             Self::Backups { command } => command.path(),
@@ -224,7 +234,8 @@ fn after_long_help() -> String {
            that exist only in the destination are kept.
 
 {codes}
-  0 success   2 usage   3 connect   4 dump   5 restore   6 mismatch   7 locked
+  0 success   2 usage      3 connect   4 dump   5 restore
+              6 mismatch   7 locked    8 doctor found a problem
 
 {guarantee}
   cargo tree --manifest-path cli/Cargo.toml | grep -Ei 'reqwest|hyper|ureq|curl'

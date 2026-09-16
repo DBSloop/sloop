@@ -1,0 +1,461 @@
+[
+  {
+    "engine": "postgres",
+    "requires": [
+      {
+        "id": "pg-connect",
+        "title": "reach the database",
+        "privileges": [
+          "CONNECT"
+        ],
+        "consequence": "nothing can connect at all",
+        "phase": "dump",
+        "applies": {
+          "kind": "always"
+        },
+        "grant": "GRANT CONNECT ON DATABASE {database} TO {role};"
+      },
+      {
+        "id": "pg-read-everything",
+        "title": "read every table, view and sequence",
+        "privileges": [
+          "USAGE on each schema",
+          "SELECT on each table and sequence"
+        ],
+        "consequence": "pg_dump stops on the first table it cannot lock, and the dump is not written",
+        "phase": "dump",
+        "applies": {
+          "kind": "always"
+        },
+        "grant": "GRANT pg_read_all_data TO {role};"
+      },
+      {
+        "id": "pg-bypass-row-security",
+        "title": "see every row of a table with row-level security",
+        "privileges": [
+          "BYPASSRLS"
+        ],
+        "consequence": "pg_dump sets row_security to off so that it dumps whole tables, and a role that cannot bypass the policy fails rather than silently dumping a subset",
+        "phase": "dump",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a table that has row-level security enabled"
+        },
+        "grant": "ALTER ROLE {role} BYPASSRLS;"
+      },
+      {
+        "id": "pg-read-large-objects",
+        "title": "read the large objects",
+        "privileges": [
+          "SELECT on each large object"
+        ],
+        "consequence": "pg_dump carries large objects by default and stops on the first one it cannot open",
+        "phase": "dump",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a large object"
+        },
+        "grant": "-- per object: GRANT SELECT ON LARGE OBJECT <oid> TO {role};"
+      },
+      {
+        "id": "pg-create-in-database",
+        "title": "create a schema",
+        "privileges": [
+          "CREATE on the database"
+        ],
+        "consequence": "a restore stops at the first CREATE SCHEMA in the dump",
+        "phase": "restore",
+        "applies": {
+          "kind": "always"
+        },
+        "grant": "GRANT CREATE ON DATABASE {database} TO {role};"
+      },
+      {
+        "id": "pg-create-in-schemas",
+        "title": "enter and create in every schema",
+        "privileges": [
+          "USAGE on each schema",
+          "CREATE on each schema"
+        ],
+        "consequence": "a restore stops partway with `permission denied for schema` — on PostgreSQL 15 and newer this bites on `public`, which no longer grants CREATE to everybody",
+        "phase": "restore",
+        "applies": {
+          "kind": "always"
+        },
+        "grant": "GRANT USAGE, CREATE ON SCHEMA public TO {role};"
+      },
+      {
+        "id": "pg-untrusted-extensions",
+        "title": "create the extensions this database uses",
+        "privileges": [
+          "superuser"
+        ],
+        "consequence": "a dump of this database carries CREATE EXTENSION for an extension PostgreSQL does not mark trusted, and only a superuser can run that — restoring elsewhere needs the extension installed first",
+        "phase": "restore",
+        "applies": {
+          "kind": "only_with",
+          "subject": "an extension that is not trusted"
+        },
+        "grant": "-- a superuser runs: CREATE EXTENSION <name>; on the destination first"
+      }
+    ],
+    "waives": []
+  },
+  {
+    "engine": "mysql",
+    "requires": [
+      {
+        "id": "my-select",
+        "title": "read every table",
+        "privileges": [
+          "SELECT"
+        ],
+        "consequence": "the dump program cannot read the rows, and fails before writing anything",
+        "phase": "dump",
+        "applies": {
+          "kind": "always"
+        },
+        "grant": "GRANT SELECT ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-show-view",
+        "title": "read the view definitions",
+        "privileges": [
+          "SHOW VIEW"
+        ],
+        "consequence": "the dump program stops on the first view with `SHOW VIEW command denied`",
+        "phase": "dump",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a view"
+        },
+        "grant": "GRANT SHOW VIEW ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-trigger-dump",
+        "title": "read the trigger definitions",
+        "privileges": [
+          "TRIGGER"
+        ],
+        "consequence": "the dump program exits 0 and the dump carries no triggers. Nothing in the output says so",
+        "phase": "dump",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a trigger"
+        },
+        "grant": "GRANT TRIGGER ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-event-dump",
+        "title": "read the event definitions",
+        "privileges": [
+          "EVENT"
+        ],
+        "consequence": "the dump program stops on `show events` with `Access denied`",
+        "phase": "dump",
+        "applies": {
+          "kind": "only_with",
+          "subject": "an event"
+        },
+        "grant": "GRANT EVENT ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-show-routine",
+        "title": "read a stored routine it did not define",
+        "privileges": [
+          "SHOW_ROUTINE, granted globally"
+        ],
+        "consequence": "the dump program exits 0 and writes a dump with every stored routine missing from it. Nothing in the output says so: a backup that looks fine has quietly lost every function and procedure",
+        "phase": "dump",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a stored routine defined by another account"
+        },
+        "grant": "GRANT SHOW_ROUTINE ON *.* TO {role};"
+      },
+      {
+        "id": "my-load",
+        "title": "create the tables and load the rows",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "CREATE",
+          "DROP",
+          "ALTER",
+          "REFERENCES",
+          "LOCK TABLES"
+        ],
+        "consequence": "the restore stops partway, leaving the destination half built",
+        "phase": "restore",
+        "applies": {
+          "kind": "always"
+        },
+        "grant": "GRANT SELECT, INSERT, CREATE, DROP, ALTER, REFERENCES, LOCK TABLES ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-create-view",
+        "title": "create the views",
+        "privileges": [
+          "CREATE VIEW"
+        ],
+        "consequence": "the restore stops at the first view",
+        "phase": "restore",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a view"
+        },
+        "grant": "GRANT CREATE VIEW ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-trigger-restore",
+        "title": "create the triggers",
+        "privileges": [
+          "TRIGGER"
+        ],
+        "consequence": "the restore stops at the first trigger",
+        "phase": "restore",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a trigger"
+        },
+        "grant": "GRANT TRIGGER ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-routine-restore",
+        "title": "create the stored routines",
+        "privileges": [
+          "CREATE ROUTINE",
+          "ALTER ROUTINE"
+        ],
+        "consequence": "the restore stops at the first routine",
+        "phase": "restore",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a stored routine"
+        },
+        "grant": "GRANT CREATE ROUTINE, ALTER ROUTINE ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-event-restore",
+        "title": "create the events",
+        "privileges": [
+          "EVENT"
+        ],
+        "consequence": "the restore stops at the first event",
+        "phase": "restore",
+        "applies": {
+          "kind": "only_with",
+          "subject": "an event"
+        },
+        "grant": "GRANT EVENT ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-function-binlog",
+        "title": "create a stored function while binary logging is on",
+        "privileges": [
+          "SUPER, granted globally"
+        ],
+        "consequence": "the restore stops with `You do not have the SUPER privilege and binary logging is enabled`. The alternative is for a DBA to set log_bin_trust_function_creators on the destination server",
+        "phase": "restore",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a stored function, while the server has binary logging on and log_bin_trust_function_creators off"
+        },
+        "grant": "GRANT SUPER ON *.* TO {role};"
+      }
+    ],
+    "waives": [
+      {
+        "privilege": "LOCK TABLES",
+        "because": "sloop dumps with --single-transaction, which takes no locks on the source"
+      },
+      {
+        "privilege": "PROCESS",
+        "because": "sloop dumps with --no-tablespaces, so nothing reads INFORMATION_SCHEMA.FILES"
+      },
+      {
+        "privilege": "RELOAD or FLUSH_TABLES",
+        "because": "sloop dumps with --set-gtid-purged=OFF, so a GTID-enabled server needs neither"
+      }
+    ]
+  },
+  {
+    "engine": "mariadb",
+    "requires": [
+      {
+        "id": "my-select",
+        "title": "read every table",
+        "privileges": [
+          "SELECT"
+        ],
+        "consequence": "the dump program cannot read the rows, and fails before writing anything",
+        "phase": "dump",
+        "applies": {
+          "kind": "always"
+        },
+        "grant": "GRANT SELECT ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-show-view",
+        "title": "read the view definitions",
+        "privileges": [
+          "SHOW VIEW"
+        ],
+        "consequence": "the dump program stops on the first view with `SHOW VIEW command denied`",
+        "phase": "dump",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a view"
+        },
+        "grant": "GRANT SHOW VIEW ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-trigger-dump",
+        "title": "read the trigger definitions",
+        "privileges": [
+          "TRIGGER"
+        ],
+        "consequence": "the dump program exits 0 and the dump carries no triggers. Nothing in the output says so",
+        "phase": "dump",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a trigger"
+        },
+        "grant": "GRANT TRIGGER ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-event-dump",
+        "title": "read the event definitions",
+        "privileges": [
+          "EVENT"
+        ],
+        "consequence": "the dump program stops on `show events` with `Access denied`",
+        "phase": "dump",
+        "applies": {
+          "kind": "only_with",
+          "subject": "an event"
+        },
+        "grant": "GRANT EVENT ON {database}.* TO {role};"
+      },
+      {
+        "id": "maria-show-create-routine",
+        "title": "read a stored routine it did not define",
+        "privileges": [
+          "SHOW CREATE ROUTINE (MariaDB 11.3 and newer)",
+          "or SELECT on mysql.proc"
+        ],
+        "consequence": "the dump program exits 0 and writes a dump with every stored routine missing from it. Nothing in the output says so: a backup that looks fine has quietly lost every function and procedure",
+        "phase": "dump",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a stored routine defined by another account"
+        },
+        "grant": "GRANT SHOW CREATE ROUTINE ON *.* TO {role};  -- before 11.3: GRANT SELECT ON mysql.proc TO {role};"
+      },
+      {
+        "id": "my-load",
+        "title": "create the tables and load the rows",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "CREATE",
+          "DROP",
+          "ALTER",
+          "REFERENCES",
+          "LOCK TABLES"
+        ],
+        "consequence": "the restore stops partway, leaving the destination half built",
+        "phase": "restore",
+        "applies": {
+          "kind": "always"
+        },
+        "grant": "GRANT SELECT, INSERT, CREATE, DROP, ALTER, REFERENCES, LOCK TABLES ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-create-view",
+        "title": "create the views",
+        "privileges": [
+          "CREATE VIEW"
+        ],
+        "consequence": "the restore stops at the first view",
+        "phase": "restore",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a view"
+        },
+        "grant": "GRANT CREATE VIEW ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-trigger-restore",
+        "title": "create the triggers",
+        "privileges": [
+          "TRIGGER"
+        ],
+        "consequence": "the restore stops at the first trigger",
+        "phase": "restore",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a trigger"
+        },
+        "grant": "GRANT TRIGGER ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-routine-restore",
+        "title": "create the stored routines",
+        "privileges": [
+          "CREATE ROUTINE",
+          "ALTER ROUTINE"
+        ],
+        "consequence": "the restore stops at the first routine",
+        "phase": "restore",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a stored routine"
+        },
+        "grant": "GRANT CREATE ROUTINE, ALTER ROUTINE ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-event-restore",
+        "title": "create the events",
+        "privileges": [
+          "EVENT"
+        ],
+        "consequence": "the restore stops at the first event",
+        "phase": "restore",
+        "applies": {
+          "kind": "only_with",
+          "subject": "an event"
+        },
+        "grant": "GRANT EVENT ON {database}.* TO {role};"
+      },
+      {
+        "id": "my-function-binlog",
+        "title": "create a stored function while binary logging is on",
+        "privileges": [
+          "SUPER, granted globally"
+        ],
+        "consequence": "the restore stops with `You do not have the SUPER privilege and binary logging is enabled`. The alternative is for a DBA to set log_bin_trust_function_creators on the destination server",
+        "phase": "restore",
+        "applies": {
+          "kind": "only_with",
+          "subject": "a stored function, while the server has binary logging on and log_bin_trust_function_creators off"
+        },
+        "grant": "GRANT SUPER ON *.* TO {role};"
+      }
+    ],
+    "waives": [
+      {
+        "privilege": "LOCK TABLES",
+        "because": "sloop dumps with --single-transaction, which takes no locks on the source"
+      },
+      {
+        "privilege": "PROCESS",
+        "because": "sloop dumps with --no-tablespaces, so nothing reads INFORMATION_SCHEMA.FILES"
+      },
+      {
+        "privilege": "RELOAD or FLUSH_TABLES",
+        "because": "sloop dumps with --set-gtid-purged=OFF, so a GTID-enabled server needs neither"
+      }
+    ]
+  }
+]

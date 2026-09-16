@@ -36,6 +36,7 @@ use std::time::Instant;
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 
+use super::privileges::{self, Finding, Report, Verdict, verdict_from};
 use super::{
     Adapter, Capabilities, DumpSummary, Engine, ServerInfo, Table, TableCount, Target, Version,
 };
@@ -673,6 +674,394 @@ impl Adapter for MysqlFamily {
 
         Ok(())
     }
+
+    fn check_privileges(&self, target: &Target<'_>) -> Outcome<Report> {
+        let server = self.probe(target)?;
+        let held = self.grants(target)?;
+        let contents = self.contents(target)?;
+        // For the table-by-table case below. A dump reads every base table there is, so
+        // "granted on each of these" and "granted on the database" come to the same thing.
+        let tables: Vec<String> = self
+            .tables(target)?
+            .into_iter()
+            .map(|table| table.name)
+            .collect();
+
+        let findings = privileges::for_engine(self.engine())
+            .iter()
+            .map(|requirement| {
+                let satisfied = needs_of(self.family, requirement.id).iter().any(|all| {
+                    all.iter()
+                        .all(|need| held.has(need, target.database, &tables))
+                });
+
+                let verdict = if satisfied {
+                    Verdict::Held
+                } else {
+                    let (applicable, detail) = contents.applicability(requirement);
+                    verdict_from(requirement.applies, applicable, false, detail)
+                };
+
+                Finding {
+                    requirement,
+                    verdict,
+                }
+            })
+            .collect();
+
+        Ok(Report {
+            role: held.role,
+            server,
+            findings,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Privileges
+// ---------------------------------------------------------------------------------------
+
+/// A privilege, and where it has to be held for a requirement to count as met.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Need {
+    /// Granted globally, or on the database being checked. The ordinary case.
+    Here(&'static str),
+    /// Granted globally and nowhere narrower. MySQL's dynamic privileges are global-only:
+    /// `GRANT SHOW_ROUTINE ON db.*` is refused with `Illegal privilege level specified`.
+    Globally(&'static str),
+    /// Granted on one named table, wherever that table lives. MariaDB's older route to a
+    /// routine definition is read access to `mysql.proc`.
+    OnTable(&'static str, &'static str, &'static str),
+}
+
+/// Which grants satisfy each requirement.
+///
+/// The outer slice is alternatives — any one of them is enough — and the inner slice is a
+/// set that has to be held in full. Separate from [`privileges::Requirement`] on purpose:
+/// that table is prose for a human and for the site, this one is what the grant table is
+/// searched for, and conflating them would make one of the two worse.
+type Needs = &'static [&'static [Need]];
+
+/// MySQL's mapping.
+const MYSQL_NEEDS: &[(&str, Needs)] = &[
+    ("my-select", &[&[Need::Here("SELECT")]]),
+    ("my-show-view", &[&[Need::Here("SHOW VIEW")]]),
+    ("my-trigger-dump", &[&[Need::Here("TRIGGER")]]),
+    ("my-event-dump", &[&[Need::Here("EVENT")]]),
+    (
+        "my-show-routine",
+        // Either the narrow privilege MySQL 8.0.20 added, or the broad one it replaced.
+        &[
+            &[Need::Globally("SHOW_ROUTINE")],
+            &[Need::Globally("SELECT")],
+        ],
+    ),
+    (
+        "my-load",
+        &[&[
+            Need::Here("SELECT"),
+            Need::Here("INSERT"),
+            Need::Here("CREATE"),
+            Need::Here("DROP"),
+            Need::Here("ALTER"),
+            Need::Here("REFERENCES"),
+            Need::Here("LOCK TABLES"),
+        ]],
+    ),
+    ("my-create-view", &[&[Need::Here("CREATE VIEW")]]),
+    ("my-trigger-restore", &[&[Need::Here("TRIGGER")]]),
+    (
+        "my-routine-restore",
+        &[&[Need::Here("CREATE ROUTINE"), Need::Here("ALTER ROUTINE")]],
+    ),
+    ("my-event-restore", &[&[Need::Here("EVENT")]]),
+    ("my-function-binlog", &[&[Need::Globally("SUPER")]]),
+];
+
+/// MariaDB's, which differs only in how a routine definition is reached.
+const MARIADB_ROUTINE_NEEDS: Needs = &[
+    // MariaDB 11.3 and newer, and unlike MySQL's it can be granted per database.
+    &[Need::Here("SHOW CREATE ROUTINE")],
+    // Older servers: read access to the table routines actually live in.
+    &[Need::OnTable("SELECT", "mysql", "proc")],
+    &[Need::Globally("SELECT")],
+];
+
+/// What satisfies one requirement on this family.
+fn needs_of(family: Family, id: &str) -> Needs {
+    if matches!(family, Family::Mariadb) && id == "maria-show-create-routine" {
+        return MARIADB_ROUTINE_NEEDS;
+    }
+    MYSQL_NEEDS
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map_or(&[], |(_, needs)| *needs)
+}
+
+/// One `GRANT ... ON ... TO ...` line, understood.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Grant {
+    /// Privileges held on everything.
+    Global(Vec<String>),
+    /// Privileges held on one database.
+    Database(String, Vec<String>),
+    /// Privileges held on one table.
+    Table(String, String, Vec<String>),
+    /// A role this account holds, to be expanded in turn.
+    Role(String),
+}
+
+/// Everything an account can do, as the grant table tells it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Held {
+    /// What the server calls this account — `bk@%`, not the `bk` the registry named.
+    role: String,
+    grants: Vec<Grant>,
+}
+
+impl Held {
+    /// Does this account satisfy one need, for this database?
+    fn has(&self, need: &Need, database: &str, tables: &[String]) -> bool {
+        let directly = self.grants.iter().any(|grant| match (need, grant) {
+            (Need::Here(want) | Need::Globally(want), Grant::Global(held)) => carries(held, want),
+            (Need::Here(want), Grant::Database(on, held)) => {
+                on.eq_ignore_ascii_case(database) && carries(held, want)
+            }
+            (Need::OnTable(want, schema, table), Grant::Table(on, named, held)) => {
+                on.eq_ignore_ascii_case(schema)
+                    && named.eq_ignore_ascii_case(table)
+                    && carries(held, want)
+            }
+            _ => false,
+        });
+
+        if directly {
+            return true;
+        }
+
+        // Table by table. Unusual for a backup account, but reporting `SELECT` as missing
+        // from a role that plainly holds it on every table would be the health check
+        // crying wolf — and a report people learn to skip is a report that saves nobody.
+        // It is only ever a *widening*: a privilege that is not table-scoped, or a
+        // database with no tables, falls through to the answer above.
+        match need {
+            Need::Here(want) if !tables.is_empty() => tables.iter().all(|table| {
+                self.grants.iter().any(|grant| match grant {
+                    Grant::Table(on, named, held) => {
+                        on.eq_ignore_ascii_case(database)
+                            && named.eq_ignore_ascii_case(table)
+                            && carries(held, want)
+                    }
+                    _ => false,
+                })
+            }),
+            _ => false,
+        }
+    }
+}
+
+/// Is this privilege in a granted set — either named, or covered by `ALL PRIVILEGES`?
+fn carries(held: &[String], want: &str) -> bool {
+    held.iter()
+        .any(|have| have == "ALL PRIVILEGES" || have == want)
+}
+
+/// What the database holds, as far as this role is allowed to see.
+///
+/// **The gaps in it are the point.** A role without `TRIGGER` sees no triggers in
+/// `information_schema`, one without `EVENT` sees no events, and one without
+/// `SHOW_ROUTINE` sees no routines — the server reports a function it may not read as
+/// not existing. So "I found none" and "I am not allowed to know" are the same answer,
+/// and only a role that already holds the privilege can be told it does not need it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Contents {
+    views: u64,
+}
+
+impl Contents {
+    /// Does this requirement apply to this database, and what is worth saying about it?
+    fn applicability(self, requirement: &privileges::Requirement) -> (bool, String) {
+        match requirement.applies {
+            privileges::Applies::Always => (true, String::new()),
+            privileges::Applies::OnlyWith(_) => match requirement.id {
+                // The one object type a role can count honestly: a view is listed in
+                // `information_schema.tables` with nothing more than SELECT on the
+                // database, so finding none here really does mean there are none.
+                "my-show-view" | "my-create-view" => (self.views > 0, String::new()),
+                _ => (true, UNKNOWABLE.to_owned()),
+            },
+        }
+    }
+}
+
+/// Said wherever a role cannot see whether it needs a privilege.
+///
+/// Deliberately says only the thing that is true in both phases. What it leaves out is the
+/// requirement's own `consequence`, printed directly underneath — which is a different
+/// sentence for a dump than for a restore, and would be wrong here half the time.
+const UNKNOWABLE: &str = "and this role cannot see whether the database has any: short of \
+                          the privilege the server reports none, so sloop cannot rule it out";
+
+impl MysqlFamily {
+    /// Everything the grant table says this account can do, roles expanded.
+    ///
+    /// `SHOW GRANTS` lists a granted role as a grant of the role rather than of what the
+    /// role carries, so a backup account set up the modern way would otherwise look as
+    /// though it held nothing at all.
+    fn grants(&self, target: &Target<'_>) -> Outcome<Held> {
+        let role = self
+            .query(target, "SELECT CURRENT_USER()")?
+            .first()
+            .and_then(|row| row.first())
+            .map_or_else(|| quote_account(target.user), |said| quote_account(said));
+
+        let mut held = Held {
+            role,
+            grants: Vec::new(),
+        };
+
+        // Breadth-first over the roles this account holds, with a visited set: MySQL lets
+        // roles be granted to roles, and a cycle is a thing an administrator can create.
+        let mut asked = std::collections::BTreeSet::new();
+        let mut ask = vec!["CURRENT_USER()".to_owned()];
+
+        while let Some(account) = ask.pop() {
+            if !asked.insert(account.clone()) {
+                continue;
+            }
+            // A role that has since been dropped, or one this account may not read, is not
+            // a reason to fail a health check: it contributes nothing and the report is
+            // still worth printing.
+            let Ok(rows) = self.query(target, &format!("SHOW GRANTS FOR {account}")) else {
+                continue;
+            };
+
+            for line in rows.iter().filter_map(|row| row.first()) {
+                match parse_grant(line) {
+                    Some(Grant::Role(name)) => ask.push(name),
+                    Some(grant) => held.grants.push(grant),
+                    None => {}
+                }
+            }
+        }
+
+        Ok(held)
+    }
+
+    /// What this role can see in the database.
+    fn contents(&self, target: &Target<'_>) -> Outcome<Contents> {
+        let rows = self.query(
+            target,
+            "SELECT COUNT(*) FROM information_schema.tables \
+             WHERE table_schema = DATABASE() AND table_type = 'VIEW'",
+        )?;
+
+        Ok(Contents {
+            views: rows
+                .first()
+                .and_then(|row| row.first())
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0),
+        })
+    }
+}
+
+/// Read one line of `SHOW GRANTS`.
+///
+/// The shapes, all of which both engines produce:
+///
+/// ```text
+/// GRANT USAGE ON *.* TO `bk`@`%`
+/// GRANT SELECT, SHOW VIEW ON `shop`.* TO `bk`@`%` WITH GRANT OPTION
+/// GRANT SELECT ON `mysql`.`proc` TO `bk`@`%`
+/// GRANT `reader`@`%` TO `bk`@`%`
+/// GRANT USAGE ON *.* TO `bk`@`%` IDENTIFIED BY PASSWORD '*F801A6...'
+/// ```
+///
+/// The last of those is why this reads a prefix rather than the whole line: MariaDB puts
+/// the password hash on the end, and nothing after the scope is ever wanted.
+fn parse_grant(line: &str) -> Option<Grant> {
+    let rest = line.trim().strip_prefix("GRANT ")?;
+
+    // No ` ON ` at all means a role grant: `GRANT `reader`@`%` TO `bk`@`%``.
+    //
+    // Kept exactly as the server wrote it, backticks and all, because the only thing done
+    // with it is asking `SHOW GRANTS FOR` it — and an account taken apart here would have
+    // to be put back together identically to be asked about. Unquoting `` `reader`@`%` ``
+    // yields `` reader`@`% ``, which is a syntax error on the way back in.
+    let Some((privileges, after)) = rest.split_once(" ON ") else {
+        let (role, _) = rest.split_once(" TO ")?;
+        return Some(Grant::Role(role.trim().to_owned()));
+    };
+
+    let scope = after.split_once(" TO ").map_or(after, |(scope, _)| scope);
+    let names = split_privileges(privileges);
+
+    let (schema, object) = scope.trim().rsplit_once('.')?;
+    let schema = unquote(schema);
+
+    Some(match (schema, unquote(object)) {
+        ("*", _) => Grant::Global(names),
+        (schema, "*") => Grant::Database(schema.to_owned(), names),
+        (schema, table) => Grant::Table(schema.to_owned(), table.to_owned(), names),
+    })
+}
+
+/// Split a granted privilege list, keeping a column list out of it.
+///
+/// `GRANT SELECT (id, name), UPDATE ON ...` is legal, and splitting on every comma would
+/// turn one privilege into three. A column-scoped grant is narrower than the table-level
+/// one a dump needs, so the columns are dropped rather than recorded.
+fn split_privileges(list: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut depth = 0_usize;
+    let mut current = String::new();
+
+    for character in list.chars() {
+        match character {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => names.push(std::mem::take(&mut current)),
+            _ if depth == 0 => current.push(character),
+            _ => {}
+        }
+    }
+    names.push(current);
+
+    names
+        .into_iter()
+        .map(|name| name.trim().to_ascii_uppercase())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+/// Write an account the way a `GRANT` statement has to have it.
+///
+/// `CURRENT_USER()` answers `bk@%`, and `GRANT SELECT ON shop.* TO bk@%` is a syntax error
+/// — `%` is not an identifier. Every statement this report prints is meant to be pasted,
+/// so it comes out as ``  `bk`@`%`  ``, which is also how `SHOW GRANTS` writes it back.
+///
+/// Split on the **last** `@`: a host name cannot contain one and a user name can.
+fn quote_account(said: &str) -> String {
+    let quote = |part: &str| format!("`{}`", part.replace('`', "``"));
+
+    said.rsplit_once('@').map_or_else(
+        || quote(said),
+        |(user, host)| format!("{}@{}", quote(user), quote(host)),
+    )
+}
+
+/// Take the backticks off an identifier.
+///
+/// A backtick *inside* a name is doubled, and is left as it is: names are only ever
+/// compared with `eq_ignore_ascii_case` against a name that came out of the same server,
+/// so both sides carry the doubling or neither does.
+fn unquote(value: &str) -> &str {
+    value
+        .trim()
+        .strip_prefix('`')
+        .and_then(|rest| rest.strip_suffix('`'))
+        .unwrap_or(value.trim())
 }
 
 impl MysqlFamily {
@@ -975,4 +1364,171 @@ fn looks_like_a_connection_problem(stderr: &str) -> bool {
 fn mentions_a_definer(stderr: &str) -> bool {
     let said = stderr.to_ascii_lowercase();
     said.contains("super") && said.contains("privilege") || said.contains("set_user_id")
+}
+
+#[cfg(test)]
+mod privilege_tests {
+    use super::{Family, Grant, Held, Need, needs_of, parse_grant, quote_account};
+    use crate::engine::Engine;
+    use crate::engine::privileges::for_engine;
+
+    /// Real lines, copied out of two real servers. Both quote with backticks, MariaDB adds
+    /// a password hash to the end of the account line, and both list a granted role as a
+    /// grant *of the role* rather than of anything it carries.
+    #[test]
+    fn a_show_grants_line_is_read_the_way_both_engines_write_it() {
+        let cases: [(&str, Option<Grant>); 8] = [
+            (
+                "GRANT USAGE ON *.* TO `bk`@`%`",
+                Some(Grant::Global(vec!["USAGE".into()])),
+            ),
+            (
+                "GRANT SHOW_ROUTINE ON *.* TO `bk`@`%`",
+                Some(Grant::Global(vec!["SHOW_ROUTINE".into()])),
+            ),
+            (
+                "GRANT SELECT, SHOW VIEW, EVENT, TRIGGER ON `shop`.* TO `bk`@`%`",
+                Some(Grant::Database(
+                    "shop".into(),
+                    vec![
+                        "SELECT".into(),
+                        "SHOW VIEW".into(),
+                        "EVENT".into(),
+                        "TRIGGER".into(),
+                    ],
+                )),
+            ),
+            (
+                "GRANT SELECT ON `mysql`.`proc` TO `bk`@`%`",
+                Some(Grant::Table(
+                    "mysql".into(),
+                    "proc".into(),
+                    vec!["SELECT".into()],
+                )),
+            ),
+            // MariaDB's, hash and all. Nothing after the scope is ever wanted.
+            (
+                "GRANT SELECT ON `shop`.* TO `bk`@`%` IDENTIFIED BY PASSWORD '*F801A670'",
+                Some(Grant::Database("shop".into(), vec!["SELECT".into()])),
+            ),
+            (
+                "GRANT ALL PRIVILEGES ON `shop`.* TO `bk`@`%` WITH GRANT OPTION",
+                Some(Grant::Database(
+                    "shop".into(),
+                    vec!["ALL PRIVILEGES".into()],
+                )),
+            ),
+            // Kept quoted: this string goes straight back to the server in a
+            // `SHOW GRANTS FOR` and has to be valid syntax when it gets there.
+            (
+                "GRANT `reader`@`%` TO `bk`@`%`",
+                Some(Grant::Role("`reader`@`%`".into())),
+            ),
+            ("this is not a grant", None),
+        ];
+
+        for (line, want) in cases {
+            assert_eq!(parse_grant(line), want, "{line}");
+        }
+    }
+
+    /// A comma inside a column list is not a separator. Splitting on every comma would
+    /// turn `SELECT (id, name)` into three privileges, one of them called `name)`.
+    #[test]
+    fn a_column_list_does_not_become_three_privileges() {
+        let grant =
+            parse_grant("GRANT SELECT (id, name), UPDATE (name) ON `shop`.`widget` TO `x`@`%`");
+        assert_eq!(
+            grant,
+            Some(Grant::Table(
+                "shop".into(),
+                "widget".into(),
+                vec!["SELECT".into(), "UPDATE".into()],
+            ))
+        );
+    }
+
+    /// A global grant satisfies a database-scoped need; a database grant does not satisfy
+    /// one that has to be global, which is the rule MySQL enforces for `SHOW_ROUTINE`.
+    #[test]
+    fn scope_decides_what_a_grant_satisfies() {
+        let global = Held {
+            role: "`bk`@`%`".into(),
+            grants: vec![Grant::Global(vec!["SELECT".into()])],
+        };
+        let on_database = Held {
+            role: "`bk`@`%`".into(),
+            grants: vec![Grant::Database("shop".into(), vec!["SELECT".into()])],
+        };
+
+        assert!(global.has(&Need::Here("SELECT"), "shop", &[]));
+        assert!(global.has(&Need::Globally("SELECT"), "shop", &[]));
+        assert!(on_database.has(&Need::Here("SELECT"), "shop", &[]));
+        assert!(!on_database.has(&Need::Globally("SELECT"), "shop", &[]));
+        assert!(!on_database.has(&Need::Here("SELECT"), "other", &[]));
+    }
+
+    /// `ALL PRIVILEGES` covers whatever was asked for. A report that told somebody holding
+    /// it that they were missing `SHOW VIEW` would be a report nobody believed again.
+    #[test]
+    fn all_privileges_covers_everything_named() {
+        let held = Held {
+            role: "`bk`@`%`".into(),
+            grants: vec![Grant::Database(
+                "shop".into(),
+                vec!["ALL PRIVILEGES".into()],
+            )],
+        };
+        for want in ["SELECT", "SHOW VIEW", "TRIGGER", "LOCK TABLES"] {
+            assert!(held.has(&Need::Here(want), "shop", &[]), "{want}");
+        }
+    }
+
+    /// Granted table by table, and covering every table there is, counts. Miss one and it
+    /// does not — which is the honest answer, because the dump reads all of them.
+    #[test]
+    fn a_table_by_table_grant_counts_only_when_it_covers_every_table() {
+        let tables = vec!["widget".to_owned(), "sale".to_owned()];
+        let per_table = |named: &[&str]| Held {
+            role: "`bk`@`%`".into(),
+            grants: named
+                .iter()
+                .map(|name| Grant::Table("shop".into(), (*name).into(), vec!["SELECT".into()]))
+                .collect(),
+        };
+
+        assert!(per_table(&["widget", "sale"]).has(&Need::Here("SELECT"), "shop", &tables));
+        assert!(!per_table(&["widget"]).has(&Need::Here("SELECT"), "shop", &tables));
+        // And an empty table list never turns "no grants at all" into a pass.
+        assert!(!per_table(&[]).has(&Need::Here("SELECT"), "shop", &[]));
+    }
+
+    /// What `CURRENT_USER()` answers is not what `GRANT` will accept: `%` is not an
+    /// identifier, so every statement this prints would be a syntax error unquoted.
+    #[test]
+    fn an_account_is_quoted_the_way_a_grant_statement_needs_it() {
+        assert_eq!(quote_account("bk@%"), "`bk`@`%`");
+        assert_eq!(quote_account("app_ro@10.0.0.%"), "`app_ro`@`10.0.0.%`");
+        // A user name may contain `@`; a host name may not, so the split is on the last.
+        assert_eq!(quote_account("a@b@localhost"), "`a@b`@`localhost`");
+        assert_eq!(quote_account("weird`name@%"), "`weird``name`@`%`");
+    }
+
+    /// Every requirement in the printed table has something that satisfies it. A row with
+    /// no mapping would silently read as "missing" on every server there is.
+    #[test]
+    fn every_requirement_has_a_grant_that_satisfies_it() {
+        for (engine, family) in [
+            (Engine::Mysql, Family::Mysql),
+            (Engine::Mariadb, Family::Mariadb),
+        ] {
+            for requirement in for_engine(engine) {
+                assert!(
+                    !needs_of(family, requirement.id).is_empty(),
+                    "{engine} lists {} and nothing satisfies it",
+                    requirement.id
+                );
+            }
+        }
+    }
 }

@@ -70,15 +70,6 @@ fn run(cli: &Cli) -> Outcome<Exit> {
             Ok(Exit::Success)
         }
 
-        Some(Command::Doctor) => {
-            let global = locations.global_dir()?;
-            // Only offer to install when there is somebody there to answer. Without a
-            // terminal `doctor` is a report and nothing else, which is what a health check
-            // in a pipeline wants it to be.
-            let interactive = std::io::stdin().is_terminal();
-            Ok(commands::doctor::run(&global, interactive))
-        }
-
         Some(command) if command.uses_registry() => {
             let global = locations.global_dir()?;
             let world = Disk::new(&global);
@@ -96,6 +87,24 @@ fn run(cli: &Cli) -> Outcome<Exit> {
             // someone in the middle of a backup.
             let registry_dir = resolution.registry_dir().unwrap_or_else(|| global.clone());
             let registry = Registry::load(&registry_dir.join(file::FILE))?;
+
+            if let Some(Command::Doctor { offline }) = &cli.command {
+                // Only offer to install when there is somebody there to answer. Without a
+                // terminal `doctor` is a report and nothing else, which is what a health
+                // check in a pipeline wants it to be.
+                let interactive = std::io::stdin().is_terminal();
+                return Ok(commands::doctor::run(
+                    &global,
+                    interactive,
+                    &commands::doctor::Registered {
+                        registry: &registry,
+                        from: resolution.describe(&global),
+                        sealed_file: &registry_dir.join(file::SEALED_FILE),
+                        password_command: cli.password_command.as_deref(),
+                        offline: *offline,
+                    },
+                ));
+            }
 
             Ok(unimplemented(
                 &format!("'{}'", command.path()),

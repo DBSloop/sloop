@@ -658,3 +658,135 @@ fn a_missing_client_tool_is_a_sentence_and_not_a_panic() {
         "it has to say why sloop does not have one"
     );
 }
+
+/// The privilege check, closed as a loop: a role that cannot dump, the report that names
+/// why, and the same report's own remedy making the dump work.
+///
+/// **The point is that the advice is executed rather than inspected.** A test that asserted
+/// "the report mentions `pg_read_all_data`" would pass just as happily on advice that does
+/// not work. This one grants exactly what `sloop doctor` prints and then proves the dump
+/// it enables is the same dump a superuser gets — which is the claim `R6a` actually makes.
+///
+/// CI runs this against every PostgreSQL major in the matrix, so the day one of them
+/// changes what a backup role needs, a build goes red instead of somebody's backup going
+/// quietly short.
+#[test]
+fn the_reported_minimum_is_exactly_what_a_dump_needs() {
+    use super::privileges::{Phase, Verdict};
+
+    let Some(cluster) = Cluster::start("privileges") else {
+        skip("initdb is not on this machine");
+        return;
+    };
+
+    // Two things `pg_read_all_data` does not cover, both of which stop a dump dead. They
+    // live here rather than in `seed` so that the shared fixture — and the counts the
+    // round-trip test asserts on — stay exactly as R4 left them.
+    let extras = cluster.psql(
+        "source_db",
+        "CREATE TABLE public.tenanted (id int PRIMARY KEY, tenant text, body text); \
+         INSERT INTO public.tenanted VALUES (1, 't1', 'a'), (2, 't2', 'b'); \
+         ALTER TABLE public.tenanted ENABLE ROW LEVEL SECURITY; \
+         CREATE POLICY only_mine ON public.tenanted USING (tenant = current_user); \
+         SELECT lo_from_bytea(0, '\x0102030405'::bytea); \
+         REVOKE ALL ON DATABASE source_db FROM PUBLIC; \
+         CREATE ROLE gamma LOGIN PASSWORD 'gamma-pw'; \
+         GRANT CONNECT ON DATABASE source_db TO gamma;",
+    );
+    if let Err(why) = extras {
+        skip(&format!("this server would not take the fixture: {why}"));
+        return;
+    }
+
+    let adapter = Postgres::new(cluster.tools());
+    let password = Secret::new("gamma-pw".to_owned());
+    let source = cluster.database("source_db", "gamma");
+    let target = source.target(&password);
+
+    // --- before: the dump fails, and the report says why ----------------------------
+    let dump = cluster.root.join("gamma-before.dump");
+    assert!(
+        adapter.dump(&target, &dump).is_err(),
+        "a role with only CONNECT dumped a database it cannot read"
+    );
+
+    let report = adapter
+        .check_privileges(&target)
+        .expect("the check itself connects and answers");
+    assert_eq!(report.role, "gamma");
+    assert!(!report.can_dump(), "the report called this role ready");
+
+    let named: Vec<&str> = report
+        .gaps_in(Phase::Dump)
+        .map(|finding| finding.requirement.id)
+        .collect();
+    assert_eq!(
+        named,
+        [
+            "pg-read-everything",
+            "pg-bypass-row-security",
+            "pg-read-large-objects"
+        ],
+        "the three things a bare role is short of, in the order pg_dump meets them"
+    );
+
+    // Every gap says what it costs and how much of the database it affects.
+    for finding in report.gaps_in(Phase::Dump) {
+        let Verdict::Missing(detail) = &finding.verdict else {
+            unreachable!("gaps_in yields only missing findings")
+        };
+        assert!(
+            !detail.is_empty(),
+            "{} is missing and says nothing about this database",
+            finding.requirement.id
+        );
+    }
+
+    // --- apply the report's own remedy, and nothing else -----------------------------
+    let remedy = report.remedy_for(Phase::Dump, "source_db");
+    let (statements, notes): (Vec<_>, Vec<_>) = remedy
+        .iter()
+        .partition(|line| !line.trim_start().starts_with("--"));
+
+    for statement in &statements {
+        cluster
+            .psql("source_db", statement)
+            .unwrap_or_else(|why| panic!("the report printed `{statement}`, which failed: {why}"));
+    }
+
+    // The one line that is a note rather than a statement, because PostgreSQL has no
+    // `GRANT ... ON ALL LARGE OBJECTS` to print. Doing by hand what it describes.
+    assert_eq!(notes.len(), 1, "unexpected notes: {notes:?}");
+    assert!(notes[0].contains("LARGE OBJECT"), "{}", notes[0]);
+    cluster
+        .psql(
+            "source_db",
+            "DO $$ DECLARE o oid; BEGIN \
+             FOR o IN SELECT oid FROM pg_largeobject_metadata LOOP \
+             EXECUTE format('GRANT SELECT ON LARGE OBJECT %s TO gamma', o); \
+             END LOOP; END $$;",
+        )
+        .expect("granting the large objects the note names");
+
+    // --- after: the report agrees, and so does pg_dump -------------------------------
+    let after = adapter
+        .check_privileges(&target)
+        .expect("checking again after the grants");
+    assert!(
+        after.can_dump(),
+        "the remedy was applied and the report still says no: {:?}",
+        after.gaps_in(Phase::Dump).collect::<Vec<_>>()
+    );
+
+    let summary = adapter
+        .dump(&target, &dump)
+        .expect("the reported minimum did not actually let the role dump");
+    assert!(summary.bytes > 0, "the dump is empty");
+
+    // And the role still cannot write, which is the other half of a *backup* role: the
+    // grants above widened what it can read and nothing else.
+    assert!(
+        after.gaps_in(Phase::Restore).next().is_some(),
+        "a read-only remedy handed out write privileges"
+    );
+}
