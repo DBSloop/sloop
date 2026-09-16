@@ -34,7 +34,16 @@ const KEY_LEN: usize = 32;
 const HEADER_LEN: usize = MAGIC.len() + 1 + 4 + 4 + 4 + SALT_LEN + NONCE_LEN;
 
 /// The variable that supplies the passphrase when there is no terminal to ask at.
-const PASSPHRASE_VAR: &str = "SLOOP_PASSPHRASE";
+pub const PASSPHRASE_VAR: &str = "SLOOP_PASSPHRASE";
+
+/// Has this machine been told to keep secrets in the encrypted file?
+///
+/// The variable exists for this file and nothing else, so its presence is an answer rather
+/// than a hint — `crypt::keep_somewhere` reads it to decide where a new backup key goes.
+#[must_use]
+pub fn is_the_machines_choice() -> bool {
+    std::env::var_os(PASSPHRASE_VAR).is_some_and(|value| !value.is_empty())
+}
 
 /// Argon2id cost. These are the crate's own defaults — 19 MiB and two passes — which is
 /// the OWASP recommendation, and they are written into every file so raising them later

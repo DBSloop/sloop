@@ -44,11 +44,27 @@ struct RawDatabase {
     password: String,
 }
 
+/// The backup keypair, exactly as the file holds it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct RawEncryption {
+    public_key: String,
+    private_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key_kept: Option<String>,
+}
+
 /// The file, exactly as TOML sees it.
+///
+/// Field order is the order TOML writes: the version, then the keypair, then the databases.
+/// A table has to come after every scalar that belongs to the same parent, and `databases`
+/// is a table of tables, so this is the one order that round-trips.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFile {
     version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    encryption: Option<RawEncryption>,
     #[serde(default, rename = "databases")]
     databases: BTreeMap<String, RawDatabase>,
 }
@@ -110,9 +126,56 @@ impl Database {
     }
 }
 
+/// Whether the private key exists anywhere but this machine.
+///
+/// **The one piece of state that stops a backup.** An encrypted backup whose key lives only
+/// in this machine's keyring dies with the machine, so the first one refuses until somebody
+/// has either taken a copy of the key or said, in as many words, that they will not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyKept {
+    /// `sloop key export` has printed it at least once.
+    Exported,
+    /// Somebody was told what it costs and chose to carry on anyway.
+    Declined,
+}
+
+impl KeyKept {
+    /// How it is written in the file.
+    #[must_use]
+    pub const fn as_field(self) -> &'static str {
+        match self {
+            Self::Exported => "exported",
+            Self::Declined => "declined",
+        }
+    }
+
+    fn parse(field: &str) -> Outcome<Self> {
+        match field.trim() {
+            "exported" => Ok(Self::Exported),
+            "declined" => Ok(Self::Declined),
+            other => Err(
+                Failure::usage(format!("{other} is not something key-kept can say"))
+                    .hint("`exported` once the key has been written out, or `declined`"),
+            ),
+        }
+    }
+}
+
+/// The backup keypair this registry encrypts to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Encryption {
+    /// The public half. This is all an unattended backup needs.
+    pub public_key: crate::crypt::PublicKey,
+    /// Where the private half is kept: the keyring, or the encrypted file.
+    pub private_key: Route,
+    /// Whether a copy of the private key exists off this machine. See [`KeyKept`].
+    pub key_kept: Option<KeyKept>,
+}
+
 /// A registry file's contents.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Registry {
+    encryption: Option<Encryption>,
     databases: BTreeMap<String, Database>,
 }
 
@@ -133,6 +196,21 @@ impl Registry {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.databases.is_empty()
+    }
+
+    /// The keypair this registry's backups are encrypted to, if it has one.
+    #[must_use]
+    pub const fn encryption(&self) -> Option<&Encryption> {
+        self.encryption.as_ref()
+    }
+
+    /// Set, or replace, the keypair.
+    ///
+    /// Replacing one is how `key import` moves a registry onto a different key, and it is
+    /// deliberately not something that happens quietly: whatever refuses to overwrite a key
+    /// does so before calling this.
+    pub fn set_encryption(&mut self, encryption: Encryption) {
+        self.encryption = Some(encryption);
     }
 
     /// Every database, by name, in order.
@@ -236,6 +314,24 @@ impl Registry {
             .hint("a newer sloop wrote it"));
         }
 
+        // Parsed here, when the file is read, so a key somebody mistyped is a complaint
+        // about the registry rather than a surprise at the end of a two-hour dump.
+        let encryption = match raw.encryption {
+            None => None,
+            Some(block) => Some(Encryption {
+                public_key: crate::crypt::PublicKey::parse(&block.public_key)
+                    .map_err(|failure| failure.prefixed("encryption"))?,
+                private_key: Route::parse(block.private_key.trim_end())
+                    .map_err(|failure| failure.prefixed("encryption"))?,
+                key_kept: block
+                    .key_kept
+                    .as_deref()
+                    .map(KeyKept::parse)
+                    .transpose()
+                    .map_err(|failure| failure.prefixed("encryption"))?,
+            }),
+        };
+
         let mut databases = BTreeMap::new();
         for (name, entry) in raw.databases {
             // The route is parsed here, when the file is read, so a bad one is a complaint
@@ -256,13 +352,21 @@ impl Registry {
             );
         }
 
-        Ok(Self { databases })
+        Ok(Self {
+            encryption,
+            databases,
+        })
     }
 
     /// Write a registry back out.
     pub fn to_toml(&self) -> Outcome<String> {
         let raw = RawFile {
             version: VERSION,
+            encryption: self.encryption.as_ref().map(|encryption| RawEncryption {
+                public_key: encryption.public_key.to_string(),
+                private_key: encryption.private_key.as_field(),
+                key_kept: encryption.key_kept.map(|kept| kept.as_field().to_owned()),
+            }),
             databases: self
                 .databases
                 .iter()

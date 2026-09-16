@@ -31,7 +31,10 @@ use file::Registry;
 use locations::PROJECT_DIR;
 
 /// One of the two registries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Ordered, because a command that works over both keeps a map keyed by scope — and the
+/// order is the search order: the project first, the global store second.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Scope {
     /// The `.sloop` beside the code.
     Project,

@@ -60,6 +60,15 @@ serde_json = "1.0"
 # whole graph it brings is `num-traits` plus the platform's own timezone lookup. No socket
 # anywhere in it.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# The `age` keypair that encrypts a backup, and the reference implementation of it rather
+# than the format composed by hand. `dump.age` has to be a file the standard `age` tool can
+# open in ten years without sloop — that is the reason the format was chosen — and the only
+# way to have that with certainty is to write it with the implementation everybody else
+# validates against. It is the longest edge in this graph by a distance, and the trade is
+# deliberate: the alternative was hand-writing the one thing here whose silent failure mode
+# is a backup nobody can read. Nothing it brings can open a socket, and
+# `ci/no-http-client.sh` still reports not one crate that speaks HTTP.
+age = { version = "0.12.1", default-features = false }
 
 [workspace.lints.rust]
 # There is no reason for this tool to contain unsafe code, and "no reason yet" is how it

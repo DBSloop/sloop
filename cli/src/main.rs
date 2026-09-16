@@ -8,6 +8,7 @@
 mod backup;
 mod cli;
 mod commands;
+mod crypt;
 mod engine;
 mod exit;
 mod failure;
