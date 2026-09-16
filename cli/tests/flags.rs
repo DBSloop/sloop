@@ -335,3 +335,56 @@ fn json_and_quiet_are_not_both() {
         .expect_code(2)
         .expect_said("cannot be used with");
 }
+
+/// **`doctor --json` carries the whole report, not just a verdict.** A script watching a
+/// fleet needs to know *which* engine is short of a tool and *which* role cannot dump, not
+/// that something somewhere is wrong.
+#[test]
+fn doctor_reports_its_whole_findings_as_json() {
+    let sandbox = with_one("json-doctor");
+
+    let document = parsed(
+        &sandbox.sloop(&["--json", "doctor", "--offline"]).stdout(),
+        "doctor",
+    );
+    let result = &document["result"];
+
+    // Every engine sloop knows, each with the three facts the printed report leads with.
+    let engines = result["tools"]["engines"]
+        .as_array()
+        .expect("an engine per adapter");
+    assert_eq!(engines.len(), 3, "{result}");
+    for engine in engines {
+        assert!(engine["engine"].is_string(), "{engine}");
+        assert!(engine["ready"].is_boolean(), "{engine}");
+        assert!(engine["missing"].is_array(), "{engine}");
+        assert!(engine["using"].is_array(), "{engine}");
+    }
+
+    assert!(result["tools"]["fetched_into"].is_string(), "{result}");
+    assert!(result["every_engine_ready"].is_boolean(), "{result}");
+    assert!(result["every_role_can_dump"].is_boolean(), "{result}");
+    // `--offline` asks no server, so there is nothing checked to report.
+    assert_eq!(
+        result["roles"].as_array().map(Vec::len),
+        Some(0),
+        "{result}"
+    );
+}
+
+/// A role that could not be checked is in the document too, saying so — a run that silently
+/// left it out would read as a clean bill of health.
+#[test]
+fn a_role_that_cannot_be_reached_is_reported_rather_than_dropped() {
+    let sandbox = with_one("json-doctor-unreachable");
+
+    let document = parsed(&sandbox.sloop(&["--json", "doctor"]).stdout(), "doctor");
+    let roles = document["result"]["roles"]
+        .as_array()
+        .expect("one registered database");
+
+    assert_eq!(roles.len(), 1, "{document}");
+    assert_eq!(roles[0]["name"], "orders");
+    assert_eq!(roles[0]["checked"], false);
+    assert!(roles[0]["error"].is_string(), "{document}");
+}

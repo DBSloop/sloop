@@ -102,9 +102,88 @@ pub fn run(global: &Path, may_install: bool, registered: &Registered<'_>) -> Exi
     // fetched, and a section that said "no tools" above an install that just finished
     // would be answering a question nobody still has.
     crate::say!();
-    let roles_can_dump = print_privileges(registered, &inventory);
+    let (roles_can_dump, roles) = print_privileges(registered, &inventory);
 
-    verdict(&inventory, roles_can_dump)
+    let exit = verdict(&inventory, roles_can_dump);
+    crate::report::result(serde_json::json!({
+        "tools": tools_as_json(&inventory, &fetched),
+        "roles": roles,
+        // The two things `verdict` acts on, said out loud rather than left to be inferred
+        // from the exit code — a script that has to work out *which* of them was wrong from
+        // an 8 is a script that guesses.
+        "every_engine_ready": Engine::ALL
+            .into_iter()
+            .all(|engine| inventory.has_everything_for(engine)),
+        "every_role_can_dump": roles_can_dump,
+    }));
+    exit
+}
+
+/// What was found of every engine's tools, for a `--json` run.
+///
+/// **The same three facts the printed report leads with**, per engine: whether it is usable
+/// at all, what is missing, and which copy of each program sloop would actually run. A
+/// machine that cannot back up is a machine where one of these is wrong, and a script
+/// watching a fleet wants to know which.
+fn tools_as_json(inventory: &Inventory, fetched: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "fetched_into": fetched.display().to_string(),
+        "engines": Engine::ALL
+            .into_iter()
+            .map(|engine| serde_json::json!({
+                "engine": engine.to_string(),
+                "ready": inventory.has_everything_for(engine),
+                "missing": inventory
+                    .missing_for(engine)
+                    .iter()
+                    .map(|tool| tool.program())
+                    .collect::<Vec<_>>(),
+                "using": Tool::needed_by(engine)
+                    .iter()
+                    .filter_map(|&tool| {
+                        let found = inventory.best(tool)?;
+                        Some(serde_json::json!({
+                            "tool": tool.program(),
+                            "path": found.path.display().to_string(),
+                            "version": found.version.map(|version| version.to_string()),
+                        }))
+                    })
+                    .collect::<Vec<_>>(),
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// One checked connection, for a `--json` run.
+fn role_as_json(name: &str, database: &Database, report: &Report) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "connection": database.credential_key(),
+        "role": report.role,
+        "engine": report.server.engine.to_string(),
+        "version": report.server.version.to_string(),
+        "can_dump": report.can_dump(),
+        "checked": true,
+        "findings": report
+            .findings
+            .iter()
+            .map(|finding| serde_json::json!({
+                "id": finding.requirement.id,
+                "title": finding.requirement.title,
+                "phase": match finding.requirement.phase {
+                    Phase::Dump => "dump",
+                    Phase::Restore => "restore",
+                },
+                "verdict": match finding.verdict {
+                    Verdict::Held => "held",
+                    Verdict::Missing(_) => "missing",
+                    Verdict::NotNeeded(_) => "not_needed",
+                    Verdict::Unknown(_) => "unknown",
+                },
+                "consequence": finding.requirement.consequence,
+            }))
+            .collect::<Vec<_>>(),
+    })
 }
 
 /// What automation reads.
@@ -220,7 +299,10 @@ fn describe(tool: Tool, candidate: &Candidate) -> String {
 /// Returns whether every role that was checked can take a complete dump — which is the
 /// half of this that reaches the exit code. A database that could not be reached is not
 /// counted against it; see the module comment for why.
-fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool {
+fn print_privileges(
+    registered: &Registered<'_>,
+    inventory: &Inventory,
+) -> (bool, Vec<serde_json::Value>) {
     crate::say!("{}", style::heading("Privileges"));
     crate::say!(
         "{}",
@@ -245,7 +327,7 @@ fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool 
         print_the_documented_minimum(inventory);
         // Nothing was asked, so nothing was found wanting. A machine with no databases
         // registered yet is not an unhealthy one.
-        return true;
+        return (true, Vec::new());
     }
 
     if registered.offline {
@@ -255,16 +337,18 @@ fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool 
             style::dim("  --offline, so nothing was asked. What each engine needs:")
         );
         print_the_documented_minimum(inventory);
-        return true;
+        return (true, Vec::new());
     }
 
     let mut every_role_can_dump = true;
+    let mut checked: Vec<serde_json::Value> = Vec::new();
 
     for (scope, name, database) in registered.registries.all() {
         crate::say!();
         match check(database, registered, scope, inventory) {
             Ok(report) => {
                 every_role_can_dump &= report.can_dump();
+                checked.push(role_as_json(name, database, &report));
                 print_one(name, database, &report);
             }
             // A server that is down, a keyring that is locked, a password command that is
@@ -277,12 +361,18 @@ fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool 
                     style::dim(&database.credential_key())
                 );
                 crate::say!("    {}", style::dim("could not be checked"));
+                checked.push(serde_json::json!({
+                    "name": name,
+                    "connection": database.credential_key(),
+                    "checked": false,
+                    "error": failure.message(),
+                }));
                 failure.mention();
             }
         }
     }
 
-    every_role_can_dump
+    (every_role_can_dump, checked)
 }
 
 /// Open the connection and ask it.

@@ -131,7 +131,16 @@ pub fn export(context: &mut Context<'_>) -> Outcome<Exit> {
         })?;
 
     remember(&mut context.registries, scope, KeyKept::Exported)?;
-    crate::report::result(serde_json::json!({ "exported": true, "registry": scope.label() }));
+    crate::report::result(serde_json::json!({
+        "exported": true,
+        "registry": scope.label(),
+        // **The public half, and never the private one.** It is the identifier a backup's
+        // manifest records, so a script can check that two machines hold the same key —
+        // and it is public, which is the whole reason the keypair is asymmetric.
+        "public_key": encryption.public_key.to_string(),
+        "kept_in": encryption.private_key.describe(),
+        "generated_now": fresh,
+    }));
     Ok(Exit::Success)
 }
 
@@ -203,7 +212,12 @@ pub fn import(context: &mut Context<'_>) -> Outcome<Exit> {
                 .display()
         ))
     );
-    crate::report::result(serde_json::json!({ "imported": true, "registry": scope.label() }));
+    crate::report::result(serde_json::json!({
+        "imported": true,
+        "registry": scope.label(),
+        "public_key": public.to_string(),
+        "kept_in": route.describe(),
+    }));
     Ok(Exit::Success)
 }
 
