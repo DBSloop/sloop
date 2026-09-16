@@ -1,12 +1,19 @@
 import { Routes } from '@angular/router';
 
 import { Foundation } from './foundation/foundation';
+import { Landing } from './landing/landing';
 
 export const routes: Routes = [
-  // A4 takes this path for the landing page. The specimen keeps its own route
-  // from that point — it is the thing to open when a colour looks wrong.
   {
     path: '',
+    component: Landing,
+    title: 'sloop — back up, restore, mirror and sync your databases',
+  },
+
+  // The token specimen A1 built. It keeps earning its place: it is the thing to
+  // open when a colour looks wrong in one theme and right in the other.
+  {
+    path: 'foundation',
     component: Foundation,
     title: 'Foundation — sloop',
   },

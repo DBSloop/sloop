@@ -24,7 +24,9 @@
     "@angular/router": "^21.2.0",
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@types/three": "^0.186.0",
     "rxjs": "~7.8.0",
+    "three": "^0.186.0",
     "tslib": "^2.3.0"
   },
   "devDependencies": {
