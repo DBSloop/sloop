@@ -141,7 +141,7 @@ pub fn dump_file(directory: &Path) -> PathBuf {
 /// a colon and stray whitespace — and a `/` in one would otherwise put the backup in a
 /// directory nobody goes looking in. Replaced rather than refused, because a name that
 /// works everywhere else in the tool should not stop working here.
-fn sanitise(label: &str) -> String {
+pub fn sanitise(label: &str) -> String {
     let swapped: String = label
         .chars()
         .map(|letter| {

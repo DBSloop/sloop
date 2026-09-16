@@ -122,6 +122,17 @@ impl Taken {
     }
 }
 
+/// Take this database's lock, from whichever store its registry lives in.
+fn locked(context: &Context<'_>, scope: Scope, name: &str) -> Outcome<crate::lock::Held> {
+    let store = context.registries.root_in(scope).ok_or_else(|| {
+        Failure::new(
+            Exit::Usage,
+            format!("there is no {} store to lock against", scope.label()),
+        )
+    })?;
+    crate::lock::take(&store, name, "backup")
+}
+
 /// Back up one database, or every one of them.
 pub fn run(context: &mut Context<'_>, name: Option<&str>, all: bool, mode: Mode) -> Outcome<Exit> {
     match (name, all) {
@@ -130,6 +141,13 @@ pub fn run(context: &mut Context<'_>, name: Option<&str>, all: bool, mode: Mode)
                 let (scope, database) = context.registries.find(name)?;
                 (scope, database.engine)
             };
+
+            // **The lock first, before the key.** `sealing_for` *creates* a keypair on a
+            // registry that has none, and a run that is about to be refused has no business
+            // creating one — nor contacting anything. The lock is the cheapest question
+            // there is, so it is the first one asked.
+            let _held = locked(context, scope, name)?;
+
             // Before anything is dumped: is there a key, and is there a copy of it?
             let sealing = sealing_for(context, scope)?;
             let inventory = Inventory::for_engine(engine, &fetched(context));
@@ -207,6 +225,20 @@ fn every(context: &mut Context<'_>, mode: Mode) -> Outcome<Exit> {
             crate::say!();
         }
         let sealed_to = sealing.get(scope).and_then(Option::as_ref);
+
+        // **A locked database is reported and stepped over, not a reason to stop.** `--all`
+        // never abandons the rest of the run over one database, and a backup that is already
+        // running is the least alarming thing that can go wrong with one.
+        let _held = match locked(context, *scope, name) {
+            Ok(held) => held,
+            Err(failure) => {
+                let failure = failure.prefixed(*name);
+                failure.mention();
+                failures.push(((*name).to_owned(), failure));
+                continue;
+            }
+        };
+
         match one(context, &inventory, sealed_to, *scope, name, database, mode) {
             Ok(Some(taken)) => {
                 done += 1;

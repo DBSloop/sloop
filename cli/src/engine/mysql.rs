@@ -2045,10 +2045,10 @@ ORDER BY 1, 2";
 pub fn version_of_a_client_tool(said: &str) -> Option<Version> {
     let mut words = said.split_whitespace().peekable();
     while let Some(word) = words.next() {
-        if matches!(word, "Distrib" | "from") {
-            if let Some(version) = words.peek().and_then(|next| Version::from_number(next)) {
-                return Some(version);
-            }
+        if matches!(word, "Distrib" | "from")
+            && let Some(version) = words.peek().and_then(|next| Version::from_number(next))
+        {
+            return Some(version);
         }
     }
 

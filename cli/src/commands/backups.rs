@@ -193,6 +193,20 @@ pub fn prune(context: &Context<'_>, asked: &Pruning<'_>) -> Outcome<Exit> {
         return Ok(Exit::Success);
     }
 
+    // **Every label's lock, taken together and before the first directory goes.** A prune
+    // that deleted half a label's backups and then found the other half locked would leave a
+    // retention rule half applied, which is worse than not applying it. Held for the whole
+    // removal; released when this function returns.
+    let mut held = Vec::new();
+    for (scope, plan) in &plans {
+        let Some(store) = context.registries.root_in(*scope) else {
+            continue;
+        };
+        for label in plan.labels() {
+            held.push(crate::lock::take(&store, &label, "backups prune")?);
+        }
+    }
+
     if crate::report::would("remove the backups listed above") {
         return Ok(Exit::Success);
     }

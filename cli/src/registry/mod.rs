@@ -422,13 +422,13 @@ fn named(cwd: &Path, world: &dyn World, argument: &str, reason: Reason) -> Outco
     };
 
     let as_path = normalize(&cwd.join(argument));
-    if world.is_directory(&as_path) {
-        if let Some(project) = walk_up(&as_path, world) {
-            return Ok(Resolution {
-                project: Some(project),
-                reason,
-            });
-        }
+    if world.is_directory(&as_path)
+        && let Some(project) = walk_up(&as_path, world)
+    {
+        return Ok(Resolution {
+            project: Some(project),
+            reason,
+        });
     }
 
     if let Some(project) = world.project_named(argument) {

@@ -138,6 +138,15 @@ fn into_a_registered_database(
     };
     context.consent.checked_early(&destroying)?;
 
+    // The destination, for the reason `mirror` gives: that is what this writes.
+    let store = context.registries.root_in(into_scope).ok_or_else(|| {
+        Failure::usage(format!(
+            "there is no {} store to lock against",
+            into_scope.label()
+        ))
+    })?;
+    let _held = crate::lock::take(&store, destination, "sync")?;
+
     let secret = |scope, record: &_| {
         mirror::secret_for(&context.registries, context.password_command, scope, record)
     };
@@ -275,11 +284,11 @@ fn merge(
     let waiting = Shaped::of(adapter.as_ref(), destination_target, &plan)?;
     waiting.announce();
 
-    if let Some(destroying) = destroying {
-        if !context.consent.typed(destroying)?.granted() {
-            crate::say!("{}", style::dim("left alone."));
-            return Ok(Exit::Success);
-        }
+    if let Some(destroying) = destroying
+        && !context.consent.typed(destroying)?.granted()
+    {
+        crate::say!("{}", style::dim("left alone."));
+        return Ok(Exit::Success);
     }
 
     if crate::report::would(&format!("merge into {}", destination_target.describe())) {

@@ -345,6 +345,23 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Every label this plan would remove something from, once each.
+    ///
+    /// **What a prune has to hold a lock on.** Deleting a backup of `orders` while a backup
+    /// *of* `orders` is being written is the race `R17` exists to stop, and a plan that spans
+    /// six labels has six of them to take.
+    #[must_use]
+    pub fn labels(&self) -> Vec<String> {
+        let mut named: Vec<String> = self
+            .remove
+            .iter()
+            .map(|stored| stored.label.clone())
+            .collect();
+        named.sort();
+        named.dedup();
+        named
+    }
+
     /// The bytes a prune would free.
     #[must_use]
     pub fn bytes(&self) -> u64 {

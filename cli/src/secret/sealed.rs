@@ -352,10 +352,10 @@ fn random(buffer: &mut [u8]) -> Outcome<()> {
 /// is a terminal to prompt at. Without one it exits 2 naming the variable, because a
 /// scheduled run that stops to ask a question is the worst thing this tool can do.
 fn passphrase(confirm: bool) -> Outcome<Zeroizing<String>> {
-    if let Ok(value) = std::env::var(PASSPHRASE_VAR) {
-        if !value.is_empty() {
-            return Ok(Zeroizing::new(value));
-        }
+    if let Ok(value) = std::env::var(PASSPHRASE_VAR)
+        && !value.is_empty()
+    {
+        return Ok(Zeroizing::new(value));
     }
 
     if !std::io::stdin().is_terminal() {

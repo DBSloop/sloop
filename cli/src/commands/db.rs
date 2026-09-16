@@ -1457,16 +1457,16 @@ fn write(
     // Only once the new record is safely on disk. A password nothing references any more
     // is clutter at best, and clearing it before the write would have been clutter plus a
     // lost password if the write then failed.
-    if let Some(old) = retire {
-        if let Err(failure) = forget(&old.route, &old.key, registries, scope) {
-            crate::note!(
-                "{}",
-                style::dim(&format!(
-                    "the password under the old key could not be removed: {}",
-                    failure.message()
-                ))
-            );
-        }
+    if let Some(old) = retire
+        && let Err(failure) = forget(&old.route, &old.key, registries, scope)
+    {
+        crate::note!(
+            "{}",
+            style::dim(&format!(
+                "the password under the old key could not be removed: {}",
+                failure.message()
+            ))
+        );
     }
 
     Ok(())
@@ -1589,21 +1589,21 @@ pub fn remove(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
         .registries
         .update(scope, move |registry| Ok(registry.remove(&stored)))?;
 
-    if record.password.is_stored() {
-        if let Err(failure) = forget(
+    if record.password.is_stored()
+        && let Err(failure) = forget(
             &record.password,
             &record.credential_key(),
             &context.registries,
             scope,
-        ) {
-            crate::note!(
-                "{}",
-                style::dim(&format!(
-                    "the record is gone; its password could not be removed: {}",
-                    failure.message()
-                ))
-            );
-        }
+        )
+    {
+        crate::note!(
+            "{}",
+            style::dim(&format!(
+                "the record is gone; its password could not be removed: {}",
+                failure.message()
+            ))
+        );
     }
 
     crate::report::result(serde_json::json!({ "name": name, "forgotten": true }));
@@ -1704,6 +1704,14 @@ pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
         crate::say!("{}", style::dim("left alone."));
         return Ok(Exit::Success);
     }
+
+    let store = context.registries.root_in(scope).ok_or_else(|| {
+        Failure::usage(format!(
+            "there is no {} store to lock against",
+            scope.label()
+        ))
+    })?;
+    let _held = crate::lock::take(&store, name, "db drop")?;
 
     if crate::report::would(&format!("drop {}", target.describe())) {
         return Ok(Exit::Success);

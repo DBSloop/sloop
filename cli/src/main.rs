@@ -13,6 +13,7 @@ mod crypt;
 mod engine;
 mod exit;
 mod failure;
+mod lock;
 mod registry;
 mod report;
 mod secret;

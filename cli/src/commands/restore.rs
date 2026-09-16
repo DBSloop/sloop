@@ -72,6 +72,10 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
     };
     context.consent.checked_early(&destroying)?;
 
+    // **One run at a time per database.** A restore racing the backup that is still writing
+    // the copy it is reading would be the worst possible pair of runs to allow.
+    let _held = locked(context, scope, name, "restore")?;
+
     let root = context.registries.root_in(scope).ok_or_else(|| {
         Failure::usage("there is nowhere to look for backups")
             .hint("run this against a project registry, or the global store")
@@ -184,6 +188,22 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
 
 /// Which backup this run is putting back.
 ///
+/// Take this database's lock, from whichever store its registry lives in.
+fn locked(
+    context: &Context<'_>,
+    scope: Scope,
+    name: &str,
+    doing: &str,
+) -> Outcome<crate::lock::Held> {
+    let store = context.registries.root_in(scope).ok_or_else(|| {
+        Failure::new(
+            Exit::Usage,
+            format!("there is no {} store to lock against", scope.label()),
+        )
+    })?;
+    crate::lock::take(&store, name, doing)
+}
+
 /// `--from` takes the directory's own name — `20260916T031500Z`, or `latest` for the copy
 /// `--replace` keeps — because that is what a listing shows and what a person can copy out
 /// of it. Left out, it is the newest complete backup, which is what somebody in a hurry

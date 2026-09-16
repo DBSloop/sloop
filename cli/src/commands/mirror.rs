@@ -285,6 +285,16 @@ fn into_a_registered_database(
     };
     context.consent.checked_early(&destroying)?;
 
+    // **The destination, because that is what this writes.** The source is only read, and two
+    // runs reading one database at once is fine — see `lock`.
+    let store = context.registries.root_in(into_scope).ok_or_else(|| {
+        Failure::usage(format!(
+            "there is no {} store to lock against",
+            into_scope.label()
+        ))
+    })?;
+    let _held = crate::lock::take(&store, destination, "mirror")?;
+
     let reading = secret_for(
         &context.registries,
         context.password_command,
@@ -529,11 +539,11 @@ fn copy(
         &scope,
     )?;
 
-    if let Some(destroying) = destroying {
-        if !context.consent.typed(destroying)?.granted() {
-            crate::say!("{}", style::dim("left alone."));
-            return Ok(Exit::Success);
-        }
+    if let Some(destroying) = destroying
+        && !context.consent.typed(destroying)?.granted()
+    {
+        crate::say!("{}", style::dim("left alone."));
+        return Ok(Exit::Success);
     }
 
     if crate::report::would(&format!(

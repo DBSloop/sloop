@@ -323,14 +323,14 @@ impl Server {
         let deadline = Instant::now() + READY_TIMEOUT;
 
         while Instant::now() < deadline {
-            if let Some(process) = self.process.as_mut() {
-                if let Ok(Some(status)) = process.try_wait() {
-                    self.process = None;
-                    return Err(format!(
-                        "the server exited with {status} before it was ready: {}",
-                        self.read_log()
-                    ));
-                }
+            if let Some(process) = self.process.as_mut()
+                && let Ok(Some(status)) = process.try_wait()
+            {
+                self.process = None;
+                return Err(format!(
+                    "the server exited with {status} before it was ready: {}",
+                    self.read_log()
+                ));
             }
 
             // As the account the init file made, so this waits for the bootstrap and not
