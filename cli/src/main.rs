@@ -15,6 +15,7 @@ mod registry;
 mod secret;
 mod style;
 mod tools;
+mod verify;
 mod wordmark;
 
 use std::io::{IsTerminal as _, Write as _};

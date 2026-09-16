@@ -21,9 +21,9 @@ static NEXT_PORT: AtomicU16 = AtomicU16::new(55_431);
 
 /// Deliberately awful, and different for each role — the point of two roles is that a dump
 /// and a restore each use their own credentials.
-const SUPERUSER_PASSWORD: &str = r#"sup3r\pass >w #1 "q" ;x"#;
-const ALPHA_PASSWORD: &str = r#"alpha\pw $HOME #2 'q' "d" |p"#;
-const BETA_PASSWORD: &str = r#"beta\pw >out #3 "q" &b"#;
+pub(crate) const SUPERUSER_PASSWORD: &str = r#"sup3r\pass >w #1 "q" ;x"#;
+pub(crate) const ALPHA_PASSWORD: &str = r#"alpha\pw $HOME #2 'q' "d" |p"#;
+pub(crate) const BETA_PASSWORD: &str = r#"beta\pw >out #3 "q" &b"#;
 
 /// A throwaway cluster.
 ///
@@ -86,7 +86,7 @@ impl Cluster {
     /// than a machine without the tools. And the version matrix is pointless otherwise: it
     /// would exercise whatever `pg_dump` is on `PATH` against each server in turn, instead of
     /// version N's client against version N's server, which is the whole question.
-    fn tools(&self) -> Tools {
+    pub(crate) fn tools(&self) -> Tools {
         Tools {
             dump: self.tool("pg_dump"),
             restore: self.tool("pg_restore"),
@@ -269,7 +269,7 @@ impl Cluster {
         self.psql("target_db", "ALTER SCHEMA public OWNER TO beta;")
     }
 
-    fn database(&self, name: &str, user: &str) -> Connection {
+    pub(crate) fn database(&self, name: &str, user: &str) -> Connection {
         Connection {
             host: "127.0.0.1".to_owned(),
             port: self.port,
@@ -301,7 +301,7 @@ impl Drop for Cluster {
 }
 
 /// The parts of a connection the adapter needs, owned so a `Target` can borrow them.
-struct Connection {
+pub(crate) struct Connection {
     host: String,
     port: u16,
     database: String,
@@ -309,7 +309,7 @@ struct Connection {
 }
 
 impl Connection {
-    fn target<'a>(&'a self, password: &'a Secret) -> Target<'a> {
+    pub(crate) fn target<'a>(&'a self, password: &'a Secret) -> Target<'a> {
         Target {
             engine: Engine::Postgres,
             host: &self.host,
