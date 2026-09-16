@@ -19,8 +19,6 @@ const STUBS: &[&[&str]] = &[
     &["restore"],
     &["mirror"],
     &["sync"],
-    &["key", "export"],
-    &["key", "import"],
     &["uninstall"],
 ];
 
@@ -40,6 +38,8 @@ const IMPLEMENTED: &[&[&str]] = &[
     &["db", "remove"],
     &["db", "drop"],
     &["backup"],
+    &["key", "export"],
+    &["key", "import"],
 ];
 
 /// The commands that only hold other commands.

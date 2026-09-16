@@ -28,6 +28,16 @@ fn backups_dir(sandbox: &Sandbox) -> std::path::PathBuf {
     sandbox.global_dir().join("backups")
 }
 
+/// Take the backup key out once.
+///
+/// **The first encrypted backup refuses until this has happened**, which is R11 working
+/// rather than something in the way: a key that exists only on the machine being backed up
+/// is a key that dies with it. Every test below that is about something else gets it out of
+/// the way first, exactly as a person would.
+fn keyed(sandbox: &Sandbox) {
+    sandbox.sloop(&["key", "export"]).expect_code(0);
+}
+
 /// Rule 4 has nothing to catch here — `backup` asks no questions — but a command with no
 /// database named still has to say which of the two things it wanted.
 #[test]
@@ -80,6 +90,8 @@ fn an_unreachable_server_is_code_three_and_leaves_no_directory() {
     let sandbox = Sandbox::new("backup-dead");
     registered(&sandbox, "orders", "postgres://app@127.0.0.1:1/orders");
 
+    keyed(&sandbox);
+
     sandbox
         .command(sandbox.work(), &["backup", "orders"])
         .env("PW", "whatever")
@@ -102,6 +114,7 @@ fn all_runs_to_the_end_and_names_every_database_that_failed() {
     registered(&sandbox, "alpha", "postgres://app@127.0.0.1:1/alpha");
     registered(&sandbox, "beta", "postgres://app@127.0.0.1:1/beta");
     registered(&sandbox, "gamma", "postgres://app@127.0.0.1:1/gamma");
+    keyed(&sandbox);
 
     let run = sandbox
         .command(sandbox.work(), &["backup", "--all"])
@@ -144,6 +157,7 @@ fn all_exits_one_when_the_failures_do_not_agree() {
             "NOTHING_SETS_THIS",
         ])
         .expect_code(0);
+    keyed(&sandbox);
 
     sandbox
         .command(sandbox.work(), &["backup", "--all"])

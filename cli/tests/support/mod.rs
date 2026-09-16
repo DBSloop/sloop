@@ -125,6 +125,12 @@ impl Sandbox {
             .env("HOME", &self.home)
             .env("APPDATA", &self.home)
             .env("XDG_CONFIG_HOME", &self.home)
+            // **The backup key goes in the sandbox too.** A registry with no keypair gets
+            // one the first time `backup` or `key export` runs, and without this it would
+            // land in the machine's own Credential Manager or Keychain — which no sandbox
+            // can reach in to clean up. `SLOOP_PASSPHRASE` tells sloop this machine keeps
+            // secrets in the Argon2id file, and that file is inside the sandbox.
+            .env("SLOOP_PASSPHRASE", "a test passphrase")
             // Anything the developer's shell happens to export must not reach a test.
             .env_remove("SLOOP_PROJECT")
             .env_remove("CLICOLOR_FORCE")

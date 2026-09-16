@@ -35,25 +35,32 @@ mod cluster_tests;
 #[path = "backup_tests.rs"]
 mod tests;
 
+use std::collections::BTreeMap;
+use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::backup::manifest::{self, Described, Manifest};
 use crate::backup::stamp::Stamp;
 use crate::backup::{directory_for, dump_file};
+use crate::crypt::{self, PublicKey};
 use crate::engine::{Adapter, ServerInfo, TableCount, Target};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
-use crate::registry::file::Database;
+use crate::registry::file::{Database, KeyKept, SEALED_FILE};
 use crate::registry::{Registries, Scope};
 use crate::secret::{Lookup, resolve};
 use crate::style;
 use crate::tools::{Inventory, acquire};
 
 /// Everything `backup` needs from the outside.
+///
+/// The registries are owned rather than borrowed because a backup can have to *write* one:
+/// the first run against a registry with no backup key creates the keypair and records it.
+/// That happens once, before any dumping starts — see [`sealing_for`].
 pub struct Context<'a> {
     /// Both registries, already open.
-    pub registries: &'a Registries,
+    pub registries: Registries,
     /// The global store, which is where sloop's own copy of the client tools lives.
     pub global: &'a Path,
     /// `--password-command`, which outranks whatever route a record names.
@@ -94,12 +101,19 @@ impl Taken {
 }
 
 /// Back up one database, or every one of them.
-pub fn run(context: &Context<'_>, name: Option<&str>, all: bool) -> Outcome<Exit> {
+pub fn run(context: &mut Context<'_>, name: Option<&str>, all: bool) -> Outcome<Exit> {
     match (name, all) {
         (Some(name), false) => {
-            let (scope, database) = context.registries.find(name)?;
-            let inventory = Inventory::for_engine(database.engine, &fetched(context));
-            let taken = one(context, &inventory, scope, name, database)?;
+            let (scope, engine) = {
+                let (scope, database) = context.registries.find(name)?;
+                (scope, database.engine)
+            };
+            // Before anything is dumped: is there a key, and is there a copy of it?
+            let sealing = sealing_for(context, scope)?;
+            let inventory = Inventory::for_engine(engine, &fetched(context));
+
+            let (_, database) = context.registries.find(name)?;
+            let taken = one(context, &inventory, sealing.as_ref(), scope, name, database)?;
             for line in taken.describe() {
                 anstream::println!("  {}", style::dim(&line));
             }
@@ -118,18 +132,36 @@ pub fn run(context: &Context<'_>, name: Option<&str>, all: bool) -> Outcome<Exit
 }
 
 /// Every registered database, whatever happens to any one of them.
-fn every(context: &Context<'_>) -> Outcome<Exit> {
-    // Collected first, so the loop below is not iterating a borrow it also has to read
-    // the registry through — and so "0 of 7" is a number that exists before the work does.
-    let jobs: Vec<(Scope, &str, &Database)> = context.registries.all().collect();
-
-    if jobs.is_empty() {
+fn every(context: &mut Context<'_>) -> Outcome<Exit> {
+    let registered = context.registries.len();
+    if registered == 0 {
         return Err(Failure::usage(format!(
             "nothing is registered in {}, so --all has nothing to back up",
             context.registries.resolution().describe(context.global)
         ))
         .hint("`sloop db add <name> --url postgres://user@host/database` registers one"));
     }
+
+    // **Every key, before the first dump.** A project entry and a global one are encrypted
+    // to their own registry's key, so both may need setting up — and the question "is there
+    // a copy of this key" is asked once, at the start, rather than thirty databases in.
+    let scopes: Vec<Scope> = {
+        let mut seen: Vec<Scope> = Vec::new();
+        for (scope, _, _) in context.registries.all() {
+            if !seen.contains(&scope) {
+                seen.push(scope);
+            }
+        }
+        seen
+    };
+    let mut sealing: BTreeMap<Scope, Option<PublicKey>> = BTreeMap::new();
+    for scope in scopes {
+        sealing.insert(scope, sealing_for(context, scope)?);
+    }
+
+    // Collected after that, so the loop below is not iterating a borrow it also has to read
+    // the registry through — and so "0 of 7" is a number that exists before the work does.
+    let jobs: Vec<(Scope, &str, &Database)> = context.registries.all().collect();
 
     let inventory = Inventory::everything(&fetched(context));
     let mut failures: Vec<(String, Failure)> = Vec::new();
@@ -139,7 +171,8 @@ fn every(context: &Context<'_>) -> Outcome<Exit> {
         if index > 0 {
             anstream::println!();
         }
-        match one(context, &inventory, *scope, name, database) {
+        let sealed_to = sealing.get(scope).and_then(Option::as_ref);
+        match one(context, &inventory, sealed_to, *scope, name, database) {
             Ok(taken) => {
                 done += 1;
                 for line in taken.describe() {
@@ -199,6 +232,7 @@ fn verdict(failures: &[(String, Failure)]) -> Exit {
 fn one(
     context: &Context<'_>,
     inventory: &Inventory,
+    sealed_to: Option<&PublicKey>,
     scope: Scope,
     name: &str,
     database: &Database,
@@ -271,6 +305,7 @@ fn one(
             started,
             server: &server,
             counts: &counts,
+            sealed_to,
         },
     );
 
@@ -330,6 +365,8 @@ struct Writing<'a> {
     server: &'a ServerInfo,
     /// The source's exact row counts, taken before the dump.
     counts: &'a [TableCount],
+    /// The key to encrypt to, when this registry has one.
+    sealed_to: Option<&'a PublicKey>,
 }
 
 /// Dump, hash, describe — the half that has to be undone if any of it fails.
@@ -338,8 +375,39 @@ fn write_everything(
     target: &Target<'_>,
     writing: &Writing<'_>,
 ) -> Outcome<Manifest> {
-    let file = dump_file(writing.directory);
-    let dump = adapter.dump(target, &file)?;
+    let plain = dump_file(writing.directory);
+    let dumping = Instant::now();
+
+    // **Encrypted on the way out, not afterwards.** The dump program's output goes through
+    // the age writer and lands as ciphertext; there is no moment where the plaintext exists
+    // on disk, and no second pass over a file that may be a hundred gigabytes.
+    let file = match writing.sealed_to {
+        Some(recipient) => {
+            let sealed = crypt::sealed_name(&plain);
+            crypt::sealed_to(&sealed, recipient, |sink| adapter.dump_into(target, sink))?;
+            sealed
+        }
+        None => plain,
+    };
+    let dump_took = dumping.elapsed();
+
+    let bytes = std::fs::metadata(&file)
+        .map(|meta| meta.len())
+        .map_err(|error| {
+            Failure::new(
+                Exit::Dump,
+                format!("the dump is not at {}: {error}", file.display()),
+            )
+        })?;
+    if bytes == 0 {
+        return Err(Failure::new(
+            Exit::Dump,
+            format!("the dump wrote nothing to {}", file.display()),
+        ));
+    }
+
+    // The checksum is of what is actually on the disk, encrypted or not, so `backups list`
+    // can tell an intact backup from a corrupted one without needing the key.
     let sha256 = manifest::checksum(&file)?;
     let written = file.file_name().unwrap_or_default().to_string_lossy();
 
@@ -350,15 +418,129 @@ fn write_everything(
         server: writing.server,
         taken: writing.taken,
         took: writing.started.elapsed(),
-        dump_took: dump.took,
+        dump_took,
         dump_file: &written,
-        bytes: dump.bytes,
+        bytes,
         sha256,
+        sealed_to: writing.sealed_to,
         counts: writing.counts,
     });
 
     manifest.write(writing.directory)?;
     Ok(manifest)
+}
+
+/// The key this scope's backups are encrypted to, setting one up if there is none.
+///
+/// **Encryption is the default, and this is where it starts.** The first backup against a
+/// registry with no keypair creates one: the public half goes in the registry so that every
+/// run after this needs no secret at all, and the private half goes in the keyring.
+///
+/// **A machine that cannot keep a private key gets an unencrypted backup and is told so.**
+/// A headless Linux box with no keyring and no `SLOOP_PASSPHRASE` has nowhere to put one,
+/// and refusing to back it up would be this tool failing at its job in order to protect a
+/// feature. The backup happens; the sentence explaining why it is not encrypted happens too.
+fn sealing_for(context: &mut Context<'_>, scope: Scope) -> Outcome<Option<PublicKey>> {
+    let existing = context
+        .registries
+        .in_scope(scope)
+        .and_then(|registry| registry.encryption())
+        .cloned();
+
+    let encryption = if let Some(encryption) = existing {
+        encryption
+    } else {
+        let sealed = context
+            .registries
+            .sealed_in(scope)
+            .unwrap_or_else(|| context.global.join(SEALED_FILE));
+
+        match crate::commands::key::create(&mut context.registries, scope, &sealed) {
+            Ok(encryption) => encryption,
+            Err(failure) => {
+                anstream::eprintln!(
+                    "{} {}",
+                    style::dim("note: this backup is not encrypted —"),
+                    style::dim(failure.message())
+                );
+                anstream::eprintln!(
+                    "  {}",
+                    style::dim(
+                        "a machine with no keyring can keep a key in the Argon2id file \
+                         instead: set SLOOP_PASSPHRASE and run `sloop key export`"
+                    )
+                );
+                return Ok(None);
+            }
+        }
+    };
+
+    if encryption.key_kept.is_none() {
+        keep_a_copy_first(context, scope, &encryption.public_key)?;
+    }
+
+    Ok(Some(encryption.public_key))
+}
+
+/// Said once, hard: an encrypted backup is worth nothing without the key.
+///
+/// The one place this tool stops to make somebody read something. It is not a hardening
+/// preference — it is the difference between an archive and a pile of noise, and the moment
+/// to find out is now rather than the day the machine it was taken on is gone.
+///
+/// **Typed, not clicked**, because rule 5 applies to anything this irreversible. Without a
+/// terminal it exits `2` naming the command that answers, because a scheduled run must never
+/// hang on a question nobody is there to read.
+fn keep_a_copy_first(context: &mut Context<'_>, scope: Scope, public: &PublicKey) -> Outcome<()> {
+    anstream::eprintln!();
+    anstream::eprintln!("{}", style::paint("this registry has a new backup key"));
+    anstream::eprintln!("  {}", style::dim(&public.to_string()));
+    anstream::eprintln!(
+        "  {}",
+        style::dim(
+            "backups from here on are encrypted to it. The private half is on this machine \
+             and nowhere else, so if this machine is lost, every one of those backups is \
+             unreadable — there is no recovery, no reset and nobody to ask."
+        )
+    );
+    anstream::eprintln!(
+        "  {}",
+        style::dim("`sloop key export > backup-key.txt` writes it out. Keep that somewhere else.")
+    );
+
+    if !std::io::stdin().is_terminal() {
+        return Err(Failure::new(
+            Exit::Usage,
+            "the backup key has not been copied anywhere yet, and there is no terminal to ask at",
+        )
+        .hint("run `sloop key export` once, then this run will go through"));
+    }
+
+    anstream::eprint!(
+        "{} {} ",
+        style::paint("?"),
+        style::dim(
+            "type `decline` to take encrypted backups with no copy of the key, or \
+                    anything else to stop:"
+        )
+    );
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .map_err(|error| Failure::usage(format!("could not read the answer: {error}")))?;
+
+    if answer.trim() != "decline" {
+        return Err(Failure::new(
+            Exit::Usage,
+            "the backup key has not been copied anywhere yet",
+        )
+        .hint("run `sloop key export` once, then this run will go through"));
+    }
+
+    // Remembered, so nobody is asked twice.
+    crate::commands::key::remember(&mut context.registries, scope, KeyKept::Declined)
 }
 
 /// Where sloop keeps the client tools it fetched itself.

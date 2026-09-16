@@ -999,7 +999,15 @@ pub fn drop(
             Failure::usage("there is nowhere to put the safety backup")
                 .hint("run this against a project registry, or the global store")
         })?;
-        let kept = safety_backup(adapter.as_ref(), &target, &root, name)?;
+        // Encrypted when this registry has a key, plain when it does not. **No gate here:**
+        // the first-backup warning belongs to `backup`, and stopping a `db drop` halfway to
+        // lecture somebody about key custody would be the wrong moment for that conversation.
+        let sealed_to = context
+            .registries
+            .in_scope(scope)
+            .and_then(|registry| registry.encryption())
+            .map(|encryption| encryption.public_key.clone());
+        let kept = safety_backup(adapter.as_ref(), &target, &root, name, sealed_to.as_ref())?;
         anstream::println!("  {} {}", style::paint("backed up to"), kept.display());
     }
 
@@ -1033,24 +1041,43 @@ fn safety_backup(
     target: &Target<'_>,
     root: &Path,
     label: &str,
+    sealed_to: Option<&crate::crypt::PublicKey>,
 ) -> Outcome<std::path::PathBuf> {
     let taken = crate::backup::stamp::Stamp::now();
     let directory = crate::backup::directory_for(root, target.engine, label, taken);
-    let file = crate::backup::dump_file(&directory);
+    let plain = crate::backup::dump_file(&directory);
+    let file = match sealed_to {
+        Some(_) => crate::crypt::sealed_name(&plain),
+        None => plain,
+    };
 
     anstream::println!(
         "  {}",
         style::dim(&format!("dumping first, to {}", file.display()))
     );
 
-    let summary = adapter.dump(target, &file)?;
+    let started = std::time::Instant::now();
+    match sealed_to {
+        Some(recipient) => {
+            crate::crypt::sealed_to(&file, recipient, |sink| adapter.dump_into(target, sink))?;
+        }
+        None => {
+            adapter.dump(target, &file)?;
+        }
+    }
+    let bytes = std::fs::metadata(&file).map_or(0, |meta| meta.len());
+
     anstream::println!(
         "  {}",
         style::dim(&format!(
-            "{} bytes in {:.1}s, taken {}",
-            summary.bytes,
-            summary.took.as_secs_f64(),
-            taken.readable_utc()
+            "{bytes} bytes in {:.1}s, taken {}{}",
+            started.elapsed().as_secs_f64(),
+            taken.readable_utc(),
+            if sealed_to.is_some() {
+                ", encrypted"
+            } else {
+                ""
+            }
         ))
     );
 

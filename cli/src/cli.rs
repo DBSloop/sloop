@@ -236,7 +236,8 @@ const BACKUP_NOTES: &str = "\
 Where it goes, under the registry that holds the database:
 
   backups/<engine>/<label>/<utc-timestamp>/
-      dump            what pg_dump or mysqldump wrote
+      dump.age        what pg_dump or mysqldump wrote, encrypted to this registry's
+                      backup key — `dump`, with no extension, where there is no key
       manifest.json   the server's version, the size, the SHA-256, how long it took,
                       every table's exact row count, and when — in UTC, in local
                       time, and with the offset between them
@@ -341,10 +342,36 @@ pub enum BackupsCommand {
 #[derive(Debug, Subcommand)]
 pub enum KeyCommand {
     /// Write the private key out, so losing this machine is not losing the backups.
+    #[command(after_long_help = KEY_EXPORT_NOTES)]
     Export,
     /// Take a private key exported from another machine.
+    #[command(after_long_help = KEY_IMPORT_NOTES)]
     Import,
 }
+
+/// What `key export --help` says under the flags.
+const KEY_EXPORT_NOTES: &str =
+    "The key goes to standard output, on one line, and nothing else goes there:
+
+  sloop key export > backup-key.txt
+
+Everything else — the public key, and what losing this one costs — goes to standard
+error, so a redirect gets a file that `age` itself would accept.
+
+Keep it somewhere sloop cannot reach. Every encrypted backup this registry takes needs
+it, there is no second copy, and no reset. If this registry has no key yet, this creates
+one.";
+
+/// What `key import --help` says under the flags.
+const KEY_IMPORT_NOTES: &str = "The key is read from standard input:
+
+  sloop key import < backup-key.txt
+
+With a terminal it is asked for instead, and not echoed.
+
+A registry holds one key. Importing the key it already has is fine — that is what moving
+to a new machine looks like — but a *different* key is refused, because every backup
+already taken can only be read with the one it was written for.";
 
 impl Command {
     /// Does this command read a registry?

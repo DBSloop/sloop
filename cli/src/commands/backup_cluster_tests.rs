@@ -17,10 +17,11 @@ use std::path::{Path, PathBuf};
 
 use super::{Context, Taken, refuse_to_overwrite, run};
 use crate::backup::manifest::{self, Manifest};
+use crate::crypt::PrivateKey;
 use crate::engine::Engine;
 use crate::engine::cluster_tests::{Cluster, skip};
 use crate::exit::Exit;
-use crate::registry::file::{Database, Registry};
+use crate::registry::file::{Database, Encryption, KeyKept, Registry};
 use crate::registry::{Registries, Resolution, World, file, resolve};
 use crate::secret::Route;
 
@@ -48,6 +49,23 @@ impl World for Nowhere {
 /// `--global`, so the store is the one directory below and nothing walks up out of it.
 fn global_only() -> Resolution {
     resolve(Path::new("."), &Nowhere, true, None, None).expect("--global resolves to itself")
+}
+
+/// A keypair the test holds, written into the registry as `key export` would have left it.
+///
+/// **Nothing is stored anywhere.** Encrypting needs only the public half, so the registry
+/// gets that and the test keeps the private one in a variable — which is what lets these
+/// tests run without writing a key into the developer's own Credential Manager. Whether a
+/// key can be *kept* is a question for `tests/key.rs`, where a sandbox contains the answer.
+fn seeded_key(registry: &mut Registry) -> PrivateKey {
+    let private = PrivateKey::generate();
+    registry.set_encryption(Encryption {
+        public_key: private.public(),
+        private_key: Route::EncryptedFile,
+        // Already copied, so the first backup does not stop to say what losing it costs.
+        key_kept: Some(KeyKept::Exported),
+    });
+    private
 }
 
 /// One entry, as `db add` would have written it.
@@ -78,7 +96,7 @@ fn stored(store: &Path, label: &str) -> Vec<PathBuf> {
 /// Separate from the assertions about *this* fixture's rows, because these are true of
 /// every backup sloop takes and the ones in the test are true of this one cluster.
 fn describes_what_is_beside_it(directory: &Path, label: &str) -> Manifest {
-    let dump = directory.join("dump");
+    let dump = directory.join("dump.age");
     assert!(dump.is_file(), "no dump at {}", dump.display());
     assert!(
         manifest::completed(directory),
@@ -104,9 +122,10 @@ fn describes_what_is_beside_it(directory: &Path, label: &str) -> Manifest {
         manifest.server.version
     );
 
-    // The size and the checksum describe the file actually sitting beside it.
+    // The size and the checksum describe the file actually sitting beside it — which is
+    // the encrypted one, so `backups list` can check it without holding the key.
     let on_disk = std::fs::metadata(&dump).expect("the dump is there").len();
-    assert_eq!(manifest.dump.file, "dump");
+    assert_eq!(manifest.dump.file, "dump.age");
     assert_eq!(manifest.dump.bytes, on_disk);
     assert!(on_disk > 0, "the dump is empty");
     assert_eq!(
@@ -136,6 +155,61 @@ fn describes_what_is_beside_it(directory: &Path, label: &str) -> Manifest {
     manifest
 }
 
+/// R11's "Done when", against a backup that was really taken.
+///
+/// The private key was never stored on this machine at all — the test is holding it — and
+/// what comes out of the file is the archive `pg_restore` would have read if nothing had
+/// been encrypted. A key that is not this one is refused with a sentence.
+fn only_the_key_opens_it(directory: &Path, manifest: &Manifest, private: &PrivateKey) {
+    // archive `pg_restore` would have read if nothing had been encrypted.
+    let sealed = directory.join("dump.age");
+    let head = std::fs::read(&sealed).expect("reading the encrypted dump");
+    assert!(
+        head.starts_with(
+            b"age-encryption.org/v1
+"
+        ),
+        "the dump is not an age file"
+    );
+    assert!(
+        !head.starts_with(b"PGDMP"),
+        "the dump is sitting there in the clear"
+    );
+    assert_eq!(
+        manifest
+            .dump
+            .encryption
+            .as_ref()
+            .map(|sealed| (sealed.format.clone(), sealed.recipient.clone())),
+        Some(("age".to_owned(), private.public().to_string())),
+        "the manifest does not say which key opens this"
+    );
+
+    let mut plain = Vec::new();
+    std::io::Read::read_to_end(
+        &mut crate::crypt::opened(&sealed, private).expect("opening it with the key"),
+        &mut plain,
+    )
+    .expect("reading the plaintext");
+    assert!(
+        plain.starts_with(b"PGDMP"),
+        "what came out is not a PostgreSQL archive"
+    );
+    assert!(plain.len() > 1000, "only {} bytes came out", plain.len());
+
+    // And a key that is not this one is refused with a sentence rather than a panic — the
+    // other half of R11's "Done when".
+    let stranger = PrivateKey::generate();
+    let refused = crate::crypt::opened(&sealed, &stranger);
+    let refused = refused.err().expect("a stranger's key opened the backup");
+    assert_eq!(refused.exit().code(), 5, "{refused:?}");
+    assert!(
+        refused
+            .message()
+            .contains("no key on this machine can open it"),
+        "{refused:?}"
+    );
+}
 /// The whole of R9's "Done when", in order, against one cluster.
 ///
 /// Three databases, one of them deliberately unreachable and first in the alphabet so that
@@ -161,6 +235,7 @@ fn every_database_is_backed_up_and_a_broken_one_does_not_stop_the_rest() {
 
     let store = cluster.root.join("store");
     let mut registry = Registry::default();
+    let private = seeded_key(&mut registry);
     // Alphabetical, because that is the order `--all` walks them in: the unreachable one
     // is met first and the other two prove the run did not stop there.
     registry.insert("broken".to_owned(), entry(1, "source_db", "alpha", ALPHA));
@@ -177,14 +252,14 @@ fn every_database_is_backed_up_and_a_broken_one_does_not_stop_the_rest() {
         .expect("writing the registry");
 
     let registries = Registries::open(global_only(), &store).expect("reading it back");
-    let context = Context {
-        registries: &registries,
+    let mut context = Context {
+        registries,
         global: &store,
         password_command: None,
     };
 
     // --- --all, with one of the three unreachable ------------------------------------
-    let exit = run(&context, None, true).expect("--all reports rather than stops");
+    let exit = run(&mut context, None, true).expect("--all reports rather than stops");
     assert_eq!(
         exit,
         Exit::Connect,
@@ -206,32 +281,10 @@ fn every_database_is_backed_up_and_a_broken_one_does_not_stop_the_rest() {
     // --- the layout, and the manifest inside it ---------------------------------------
     let directory = &orders[0];
     let manifest = describes_what_is_beside_it(directory, "orders");
+    describes_the_source(&manifest, cluster.port);
 
-    assert_eq!(manifest.database, "source_db");
-    assert_eq!(
-        manifest.source,
-        format!("postgres://alpha@127.0.0.1:{}/source_db", cluster.port),
-        "the source is the connection a server's own log would show"
-    );
-    assert!(
-        !manifest.source.contains(ALPHA),
-        "the password reached the manifest"
-    );
-
-    // Exact counts, and the fixture's own numbers — not an estimate and not a total that
-    // happens to add up.
-    assert_eq!(
-        manifest
-            .tables
-            .iter()
-            .map(|table| (format!("{}.{}", table.schema, table.name), table.rows))
-            .collect::<Vec<_>>(),
-        vec![
-            ("app.widgets".to_owned(), 500),
-            ("public.notes".to_owned(), 7),
-        ],
-    );
-    assert_eq!(manifest.rows, 507);
+    // --- the encrypted dump is a real dump, and the key is what opens it --------------
+    only_the_key_opens_it(directory, &manifest, &private);
 
     // --- an empty database is a backup, not a failure ---------------------------------
     let nothing = describes_what_is_beside_it(&empty[0], "empty");
@@ -243,7 +296,7 @@ fn every_database_is_backed_up_and_a_broken_one_does_not_stop_the_rest() {
     // Whether it *is* the same second depends on how fast this machine is, so both answers
     // are accepted; what is not accepted is the first backup being replaced. One database
     // by name is exercised end to end by the test below.
-    let again = run(&context, Some("orders"), false);
+    let again = run(&mut context, Some("orders"), false);
     let after = stored(&store, "orders");
     match again {
         Ok(exit) => {
@@ -266,9 +319,39 @@ fn every_database_is_backed_up_and_a_broken_one_does_not_stop_the_rest() {
     );
 
     // --- an unknown name is usage, and nothing is written ------------------------------
-    let unknown = run(&context, Some("nope"), false).expect_err("nothing is registered as nope");
+    let unknown =
+        run(&mut context, Some("nope"), false).expect_err("nothing is registered as nope");
     assert_eq!(unknown.exit(), Exit::Usage);
     assert!(stored(&store, "nope").is_empty());
+}
+
+/// What the manifest says about where the backup came from.
+fn describes_the_source(manifest: &Manifest, port: u16) {
+    assert_eq!(manifest.database, "source_db");
+    assert_eq!(
+        manifest.source,
+        format!("postgres://alpha@127.0.0.1:{port}/source_db"),
+        "the source is the connection a server's own log would show"
+    );
+    assert!(
+        !manifest.source.contains(ALPHA),
+        "the password reached the manifest"
+    );
+
+    // Exact counts, and the fixture's own numbers — not an estimate and not a total that
+    // happens to add up.
+    assert_eq!(
+        manifest
+            .tables
+            .iter()
+            .map(|table| (format!("{}.{}", table.schema, table.name), table.rows))
+            .collect::<Vec<_>>(),
+        vec![
+            ("app.widgets".to_owned(), 500),
+            ("public.notes".to_owned(), 7),
+        ],
+    );
+    assert_eq!(manifest.rows, 507);
 }
 
 /// What a person is shown after a backup, which is local time and never UTC dressed up as
@@ -288,6 +371,7 @@ fn what_it_prints_is_in_local_time_and_names_where_the_backup_went() {
 
     let store = cluster.root.join("store");
     let mut registry = Registry::default();
+    let _private = seeded_key(&mut registry);
     registry.insert(
         "orders".to_owned(),
         entry(cluster.port, "source_db", "alpha", ALPHA),
@@ -297,14 +381,14 @@ fn what_it_prints_is_in_local_time_and_names_where_the_backup_went() {
         .expect("writing the registry");
 
     let registries = Registries::open(global_only(), &store).expect("reading it back");
-    let context = Context {
-        registries: &registries,
+    let mut context = Context {
+        registries,
         global: &store,
         password_command: None,
     };
 
     assert_eq!(
-        run(&context, Some("orders"), false).expect("backing it up"),
+        run(&mut context, Some("orders"), false).expect("backing it up"),
         Exit::Success
     );
 

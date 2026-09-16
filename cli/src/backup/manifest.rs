@@ -111,10 +111,27 @@ pub struct Dump {
     /// Its name in this directory. A name rather than a path, so moving the directory
     /// somewhere else does not turn the manifest into a set of broken references.
     pub file: String,
-    /// Its size.
+    /// Its size, as it sits on the disk — the encrypted size, when it is encrypted.
     pub bytes: u64,
-    /// Lowercase hex SHA-256, which is what proves the file is still the one described.
+    /// Lowercase hex SHA-256 of the file as stored, so an intact backup can be told from a
+    /// corrupted one without holding the key.
     pub sha256: String,
+    /// How it is encrypted, when it is. Absent means the dump is plaintext.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<Encrypted>,
+}
+
+/// What a restore has to be able to undo.
+///
+/// The recipient is recorded because it is the only thing that can tell somebody *which*
+/// key they need, on a machine that has several or none. It is a public key: writing it down
+/// gives nothing away.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Encrypted {
+    /// `age`, and there is no second format planned.
+    pub format: String,
+    /// The public key it was encrypted to.
+    pub recipient: String,
 }
 
 /// One table, and exactly how many rows were in it.
@@ -157,6 +174,10 @@ impl Manifest {
                 file: described.dump_file.to_owned(),
                 bytes: described.bytes,
                 sha256: described.sha256,
+                encryption: described.sealed_to.map(|recipient| Encrypted {
+                    format: crate::crypt::SUFFIX.to_owned(),
+                    recipient: recipient.to_string(),
+                }),
             },
             rows: described.counts.iter().map(|count| count.rows).sum(),
             tables: described
@@ -274,6 +295,8 @@ pub struct Described<'a> {
     pub bytes: u64,
     /// Its checksum.
     pub sha256: String,
+    /// The key it was encrypted to, when it was.
+    pub sealed_to: Option<&'a crate::crypt::PublicKey>,
     /// The source's exact row counts.
     pub counts: &'a [TableCount],
 }

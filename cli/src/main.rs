@@ -25,7 +25,7 @@ use std::process::ExitCode;
 
 use clap::Parser as _;
 
-use crate::cli::{Cli, Command, DbCommand};
+use crate::cli::{Cli, Command, DbCommand, KeyCommand};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::locations::Locations;
@@ -108,15 +108,23 @@ fn run(cli: &Cli) -> Outcome<Exit> {
             }
 
             if let Some(Command::Backup { name, all }) = &cli.command {
-                return commands::backup::run(
-                    &commands::backup::Context {
-                        registries: &registries,
-                        global: &global,
-                        password_command: cli.password_command.as_deref(),
-                    },
-                    name.as_deref(),
-                    *all,
-                );
+                let mut context = commands::backup::Context {
+                    registries,
+                    global: &global,
+                    password_command: cli.password_command.as_deref(),
+                };
+                return commands::backup::run(&mut context, name.as_deref(), *all);
+            }
+
+            if let Some(Command::Key { command }) = &cli.command {
+                let mut context = commands::key::Context {
+                    registries,
+                    global: &global,
+                };
+                return match command {
+                    KeyCommand::Export => commands::key::export(&mut context),
+                    KeyCommand::Import => commands::key::import(&mut context),
+                };
             }
 
             if let Some(Command::Db { command }) = &cli.command {
