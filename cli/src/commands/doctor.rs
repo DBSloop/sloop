@@ -37,8 +37,8 @@
 
 use std::path::Path;
 
+use crate::engine::Engine;
 use crate::engine::privileges::{self, Phase, Report, Verdict};
-use crate::engine::{Engine, adapter_for};
 use crate::exit::Exit;
 use crate::failure::Failure;
 use crate::registry::file::Database;
@@ -262,7 +262,7 @@ fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool 
 
     for (scope, name, database) in registered.registries.all() {
         anstream::println!();
-        match check(database, registered, scope) {
+        match check(database, registered, scope, inventory) {
             Ok(report) => {
                 every_role_can_dump &= report.can_dump();
                 print_one(name, database, &report);
@@ -290,6 +290,7 @@ fn check(
     database: &Database,
     registered: &Registered<'_>,
     scope: Scope,
+    inventory: &Inventory,
 ) -> Result<Report, Failure> {
     let key = database.credential_key();
     let route = database.password.overridden_by(registered.password_command);
@@ -308,7 +309,12 @@ fn check(
         anstream::println!("    {}", style::dim(note));
     }
 
-    adapter_for(database.engine).check_privileges(&database.target(&resolved.secret))
+    // The inventory this command has already built and already printed, rather than
+    // whatever `PATH` happens to hold: a report that says a tool was found and then cannot
+    // find it is a report nobody can act on.
+    inventory
+        .adapter_for(database.engine)
+        .check_privileges(&database.target(&resolved.secret))
 }
 
 /// One database's findings.

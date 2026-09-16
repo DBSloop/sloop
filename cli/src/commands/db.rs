@@ -25,7 +25,7 @@ use std::io::{IsTerminal as _, Read as _};
 use std::path::Path;
 
 use crate::cli::{Fields, PasswordSource};
-use crate::engine::{Engine, Target, adapter_for};
+use crate::engine::{Engine, Target};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::file::{Database, check_name};
@@ -666,7 +666,7 @@ fn connect(
         anstream::println!("  {}", style::dim(note));
     }
 
-    adapter_for(database.engine).probe(&database.target(&resolved.secret))
+    super::adapter_for(database.engine, context.global).probe(&database.target(&resolved.secret))
 }
 
 /// Connect with a password that is in hand rather than stored, for `--test` on a record
@@ -686,7 +686,7 @@ fn probe(
                 user: &database.user,
                 password: secret,
             };
-            adapter_for(database.engine).probe(&target)
+            super::adapter_for(database.engine, context.global).probe(&target)
         }
         // A `${VAR}` or `command:` route: nothing was kept, so go and ask for it the same
         // way every later run will.
@@ -948,7 +948,7 @@ pub fn drop(
         },
     )?;
     let target = record.target(&resolved.secret);
-    let adapter = adapter_for(record.engine);
+    let adapter = super::adapter_for(record.engine, context.global);
     let server = adapter.probe(&target)?;
 
     anstream::println!(
