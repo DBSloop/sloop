@@ -21,7 +21,7 @@
 //! has no way to ask for one exits `2` naming `--password-stdin`, because a scheduled run
 //! that hangs on an invisible question is the worst failure this tool can have.
 
-use std::io::{IsTerminal as _, Read as _};
+use std::io::{IsTerminal as _, Read as _, Write as _};
 use std::path::Path;
 
 use crate::cli::{Fields, PasswordSource};
@@ -236,8 +236,7 @@ pub fn build(
 
     let engine = asked.engine;
     let port = asked.port.unwrap_or_else(|| engine.default_port());
-    let database = asked.database.unwrap_or(asked.name).to_owned();
-    let role = asked.role.unwrap_or(&database).to_owned();
+    let Naming { database, role } = name_it(asked.name, asked.database, asked.role)?;
     let superuser = asked
         .superuser
         .map_or_else(|| usual_superuser(engine).to_owned(), str::to_owned);
@@ -344,6 +343,108 @@ pub fn build(
         record,
         secret: role_password,
     })
+}
+
+/// What the database and its owner are going to be called on the server.
+pub struct Naming {
+    /// The database's own name there.
+    pub database: String,
+    /// The role that will own it and connect as.
+    pub role: String,
+}
+
+/// Settle both names, **asking for whichever was not given**.
+///
+/// **The label is what sloop files it under; these two are what exist on the server, and a
+/// user who is never asked never finds that out.** `sloop db create --engine postgres orders`
+/// used to make a database called `orders` owned by a role called `orders` without a word
+/// about either — the owner's words: *"it must ask db user name, currently i see that it is
+/// creating a role/user exactly same as db name"*. So it asks, with the old behaviour as the
+/// default: pressing Enter twice is what the command used to do on its own, and now it is a
+/// choice somebody made.
+///
+/// **Nothing is asked when there is no terminal.** Rule 4, and it is why the defaults stay
+/// exactly what they were: a cron line that never named a role still gets one, and `--role`
+/// is there for the one that wants to.
+pub fn name_it(label: &str, database: Option<&str>, role: Option<&str>) -> Outcome<Naming> {
+    let asking = std::io::stdin().is_terminal();
+
+    let database = match database {
+        Some(given) => given.to_owned(),
+        None if asking => ask_for("Name the database itself", label)?,
+        None => label.to_owned(),
+    };
+    let role = match role {
+        Some(given) => given.to_owned(),
+        None if asking => ask_for("Name the user that will own it", &database)?,
+        None => database.clone(),
+    };
+
+    Ok(Naming { database, role })
+}
+
+/// Ask for one name, showing what will be used if nobody types one.
+///
+/// **The default is printed, not hidden.** A prompt that silently accepts something the user
+/// cannot see is the defect this exists to fix, so the answer is either what they typed or
+/// what they could read while deciding not to type anything.
+fn ask_for(question: &str, default: &str) -> Outcome<String> {
+    anstream::print!(
+        "{} {question} {} ",
+        style::paint("?"),
+        style::dim(&format!("[{default}]"))
+    );
+    let _ = std::io::stdout().flush();
+
+    let mut given = String::new();
+    std::io::stdin()
+        .read_line(&mut given)
+        .map_err(|error| Failure::usage(format!("could not read the answer: {error}")))?;
+
+    answer_or_default(&given, default)
+}
+
+/// What a typed line means: the name in it, or the default when there is nothing in it.
+///
+/// **Split from the prompt so it can be tested.** The half that reads a terminal needs a
+/// terminal; the half that decides what the line meant is where being wrong would be
+/// expensive — an answer of two spaces silently becoming a database named two spaces, say.
+fn answer_or_default(given: &str, default: &str) -> Outcome<String> {
+    let given = given.trim();
+    if given.is_empty() {
+        return Ok(default.to_owned());
+    }
+    check_server_name(given).map(str::to_owned)
+}
+
+/// Check a name that is going to exist on a server rather than in the registry.
+///
+/// **Looser than [`check_name`] and for a different reason.** A label has to be typed back at
+/// a command line, so it may not carry a colon; a database's own name only has to be quotable
+/// — every engine here takes an identifier with almost anything in it, and refusing one
+/// because sloop found it unusual would be sloop deciding what somebody may call their
+/// database. What is refused is what would be invisible: nothing at all, or a name padded
+/// with spaces that no listing would ever show.
+fn check_server_name(name: &str) -> Outcome<&str> {
+    let refuse = |why: &str| {
+        Failure::usage(format!("{name} cannot be a name on the server: {why}"))
+            .hint("letters, digits and the usual punctuation, with no stray spaces")
+    };
+
+    if name.is_empty() {
+        return Err(refuse("it is empty"));
+    }
+    if name.trim() != name {
+        return Err(refuse("it starts or ends with whitespace"));
+    }
+    if let Some(bad) = name.chars().find(|letter| letter.is_control()) {
+        return Err(refuse(&format!(
+            "{} is not something you could type back",
+            bad.escape_debug()
+        )));
+    }
+
+    Ok(name)
 }
 
 /// Show a generated password, once.

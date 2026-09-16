@@ -304,10 +304,13 @@ fn into_a_new_database(
 ) -> Outcome<Exit> {
     check_name(label)?;
 
-    // The engine and the server are the source's, so the connection this *will* be is known
-    // before anything is asked to make it — which is what lets the guard fire on a database
-    // that does not exist yet.
-    let proposed = proposed(from, label, &asked.new);
+    // **The names are settled before the guard, because the guard compares one of them.**
+    // At a terminal this is where somebody is asked what the database and its owner should
+    // be called; with no terminal the flags answer, or the defaults do. Either way the
+    // connection this *will* be is known before anything is asked to make it, which is what
+    // lets the guard fire on a database that does not exist yet.
+    let naming = db::name_it(label, asked.new.database, asked.new.role)?;
+    let proposed = proposed(from, &naming, &asked.new);
     refuse_the_same_connection(
         asked.source,
         from,
@@ -382,10 +385,13 @@ struct Proposed {
 /// database is the case this exists for, and a default that made somebody type `--host` every
 /// time would be a default chosen for symmetry rather than for use.
 ///
+/// The two *names* arrive already settled — see [`db::name_it`], which asks for them at a
+/// terminal — so what is left here is only the machine they go on.
+///
 /// **The port follows the host.** The source's when it is the source's machine; the engine's
 /// own default when it is somebody else's — a source listening on 5433 says nothing about
 /// what any other machine listens on.
-fn proposed(from: &Database, label: &str, new: &New<'_>) -> Proposed {
+fn proposed(from: &Database, naming: &db::Naming, new: &New<'_>) -> Proposed {
     let host = new.host.unwrap_or(&from.host).to_owned();
     let port = new.port.unwrap_or_else(|| {
         if same_host(&host, &from.host) {
@@ -394,14 +400,12 @@ fn proposed(from: &Database, label: &str, new: &New<'_>) -> Proposed {
             from.engine.default_port()
         }
     });
-    let database = new.database.unwrap_or(label).to_owned();
-    let role = new.role.unwrap_or(&database).to_owned();
 
     Proposed {
         host,
         port,
-        database,
-        role,
+        database: naming.database.clone(),
+        role: naming.role.clone(),
     }
 }
 

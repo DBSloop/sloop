@@ -6,11 +6,20 @@
 //! works right up until the dump fails halfway. Everything else about a mirror needs two
 //! live servers and is exercised against a real cluster.
 
-use super::{New, proposed, refuse_a_self_mirror, same_host};
+use super::{New, db, proposed, refuse_a_self_mirror, same_host};
 use crate::engine::Engine;
 use crate::exit::Exit;
 use crate::registry::file::Database;
 use crate::secret::Route;
+
+/// The names settled, as [`db::name_it`] returns them.
+///
+/// **No terminal here**, which is the state these tests need: `name_it` asks only when there
+/// is somebody to ask, so under a test harness it fills the defaults in exactly as an
+/// unattended run does.
+fn named(label: &str, database: Option<&str>, role: Option<&str>) -> db::Naming {
+    db::name_it(label, database, role).expect("nothing is asked for without a terminal")
+}
 
 /// A record, as a registry would hold it.
 fn record(host: &str, port: u16, database: &str) -> Database {
@@ -124,7 +133,7 @@ fn database_names_are_compared_exactly() {
 fn a_new_destination_lands_beside_its_source_by_default() {
     let from = record("db.internal", 5433, "orders");
 
-    let made = proposed(&from, "staging", &New::default());
+    let made = proposed(&from, &named("staging", None, None), &New::default());
 
     assert_eq!(made.host, "db.internal");
     assert_eq!(
@@ -144,7 +153,7 @@ fn another_host_gets_the_engines_default_port_rather_than_the_sources() {
 
     let elsewhere = proposed(
         &from,
-        "staging",
+        &named("staging", None, None),
         &New {
             host: Some("db2.internal"),
             ..New::default()
@@ -156,7 +165,7 @@ fn another_host_gets_the_engines_default_port_rather_than_the_sources() {
     // Spelled differently, still the same machine — so still the source's port.
     let here = proposed(
         &record("localhost", 5433, "orders"),
-        "staging",
+        &named("staging", None, None),
         &New {
             host: Some("127.0.0.1"),
             ..New::default()
@@ -167,7 +176,7 @@ fn another_host_gets_the_engines_default_port_rather_than_the_sources() {
     // And an explicit --port outranks both.
     let told = proposed(
         &from,
-        "staging",
+        &named("staging", None, None),
         &New {
             host: Some("db2.internal"),
             port: Some(6000),
@@ -184,11 +193,8 @@ fn what_was_named_is_what_gets_made() {
 
     let made = proposed(
         &from,
-        "staging",
-        &New {
-            database: Some("orders_staging"),
-            ..New::default()
-        },
+        &named("staging", Some("orders_staging"), None),
+        &New::default(),
     );
     assert_eq!(made.database, "orders_staging");
     assert_eq!(
@@ -198,12 +204,8 @@ fn what_was_named_is_what_gets_made() {
 
     let owned = proposed(
         &from,
-        "staging",
-        &New {
-            database: Some("orders_staging"),
-            role: Some("staging_app"),
-            ..New::default()
-        },
+        &named("staging", Some("orders_staging"), Some("staging_app")),
+        &New::default(),
     );
     assert_eq!(owned.role, "staging_app");
 }
@@ -217,10 +219,9 @@ fn creating_the_source_over_again_is_refused_before_anything_is_made() {
     // `--create orders --database orders` on the same server is the source.
     let made = proposed(
         &from,
-        "copy",
+        &named("copy", Some("orders"), None),
         &New {
             host: Some("127.0.0.1"),
-            database: Some("orders"),
             ..New::default()
         },
     );
@@ -243,7 +244,7 @@ fn creating_the_source_over_again_is_refused_before_anything_is_made() {
     );
 
     // A different name on the same server is a real copy, and goes through.
-    let beside = proposed(&from, "staging", &New::default());
+    let beside = proposed(&from, &named("staging", None, None), &New::default());
     super::refuse_the_same_connection(
         "live",
         &from,

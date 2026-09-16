@@ -723,3 +723,35 @@ fn create_help_says_which_password_is_kept() {
         .expect_said("never put in a command line")
         .expect_said("keyring");
 }
+
+/// **The two names on the server are asked for, and with no terminal the flags are the only
+/// way to give them.** Reopened under rule 0b: `db create` used to make a user with the
+/// database's name without a word about it — *"it must ask db user name"*.
+///
+/// What can be checked here is the half that has to keep working unattended, and the help
+/// that tells somebody the questions exist at all. The prompts themselves need a console.
+#[test]
+fn creating_a_database_says_it_asks_what_the_database_and_its_user_are_called() {
+    let sandbox = Sandbox::new("create-names");
+
+    sandbox
+        .sloop(&["help", "db", "create"])
+        .expect_code(0)
+        .expect_said("sloop asks for both")
+        .expect_said("which user owns it")
+        .expect_said("--database and --role say them up front");
+
+    sandbox
+        .sloop(&["db", "create", "--help"])
+        .expect_code(0)
+        .expect_said("Asked for when left out")
+        .expect_said("--role <USER>");
+
+    // With no terminal there is nothing to ask at, so the run gets as far as the flags it
+    // is missing and stops there — the same sentence it gave before the prompts arrived.
+    sandbox
+        .sloop(&["db", "create", "orders", "--engine", "postgres"])
+        .expect_code(2)
+        .expect_said("--role-password-stdin")
+        .expect_said("--superuser-password-command");
+}

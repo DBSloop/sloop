@@ -251,15 +251,15 @@ pub enum DbCommand {
         #[arg(long, value_name = "COMMAND")]
         superuser_password_command: Option<String>,
 
-        /// The database's own name on the server. The label when left out.
+        /// The database's own name on the server. Asked for when left out.
         #[arg(long, value_name = "NAME")]
         database: Option<String>,
 
-        /// The role to create and hand it to. The database's name when left out.
-        #[arg(long, value_name = "ROLE")]
+        /// The user to create and hand it to. Asked for when left out.
+        #[arg(long, value_name = "USER")]
         role: Option<String>,
 
-        /// Read the new role's password from standard input instead of generating one.
+        /// Read the new user's password from standard input instead of generating one.
         #[arg(long, conflicts_with = "superuser_password_stdin")]
         role_password_stdin: bool,
     },
@@ -338,11 +338,21 @@ A generated password is only ever printed at a terminal. With no terminal there 
 nowhere safe to print it — a scheduled run would put it in a log — so that run has to
 supply one with --role-password-stdin.
 
-  sloop db create orders --engine postgres
-      Creates role `orders` and database `orders` on 127.0.0.1, hands the database to
-      the role, grants what makes it usable, and registers it as `orders`.
+Two names exist on the server and sloop asks for both: what the database itself is
+called, and which user owns it. The label you typed is offered as the default for the
+first and that name for the second, so pressing Enter twice gives you the obvious thing —
+but you are shown it rather than given it. --database and --role say them up front, and
+with no terminal those flags are the only way to say them.
 
-An existing role is reused and keeps the password it has. An existing database is
+  sloop db create orders --engine postgres
+      Asks what the database and its user should be called, offering `orders` for both.
+      Then creates them on 127.0.0.1, hands the database to the user, grants what makes
+      it usable, and registers it as `orders`.
+
+  sloop db create orders --engine postgres --database orders_live --role orders_app
+      The same, with both names given and nothing asked.
+
+An existing user is reused and keeps the password it has. An existing database is
 refused — `sloop db add` is how you register one that is already there.";
 
 /// What `db drop --help` says under the flags, because a flag list does not convey this.
@@ -489,7 +499,7 @@ pub struct NewDestination {
     )]
     pub superuser_password_command: Option<String>,
 
-    /// The new database's own name on the server. The label when left out.
+    /// The new database's own name on the server. Asked for when left out.
     #[arg(
         long,
         value_name = "NAME",
@@ -499,10 +509,10 @@ pub struct NewDestination {
     )]
     pub database: Option<String>,
 
-    /// The role to create and hand it to. The database's name when left out.
+    /// The user to create and hand it to. Asked for when left out.
     #[arg(
         long,
-        value_name = "ROLE",
+        value_name = "USER",
         requires = "create",
         conflicts_with = "to",
         help_heading = "Making the destination"
@@ -819,7 +829,11 @@ The engine is not asked for: it is the source's, because a copy is of something.
   sloop mirror live --create staging
   sloop mirror live --create staging --host db2.internal --role staging_app
 
-The account that creates it is used for one connection and kept nowhere. The new role's
+It asks the same two questions `sloop db create` asks — what the database itself is
+called and which user owns it — with the name after --create offered for both. --database
+and --role say them up front instead.
+
+The account that creates it is used for one connection and kept nowhere. The new user's
 password is generated and filed where this machine keeps secrets, exactly as
 `sloop db create` does it — and the new database is registered, so the next command is
 `sloop backup staging`.

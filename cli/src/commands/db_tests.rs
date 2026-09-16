@@ -478,3 +478,70 @@ fn each_engine_has_its_usual_superuser() {
         "root"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// the two names on the server
+// ---------------------------------------------------------------------------------------
+
+/// **With no terminal, the defaults hold and nothing is asked.** Rule 4: a scheduled run
+/// cannot answer a question, so the behaviour it had before the prompt arrived is the
+/// behaviour it keeps.
+#[test]
+fn unattended_the_label_names_the_database_and_the_database_names_its_user() {
+    let named = super::name_it("orders", None, None).expect("nothing is asked without a terminal");
+
+    assert_eq!(named.database, "orders");
+    assert_eq!(named.role, "orders");
+}
+
+/// A flag is an answer, and an answered question is not asked.
+#[test]
+fn what_was_given_is_what_is_used() {
+    let both =
+        super::name_it("orders", Some("orders_live"), Some("orders_app")).expect("both were given");
+    assert_eq!(both.database, "orders_live");
+    assert_eq!(both.role, "orders_app");
+
+    // The user follows the database's name, not the label — which is the whole reason the
+    // two are settled in this order.
+    let half = super::name_it("orders", Some("orders_live"), None).expect("one was given");
+    assert_eq!(half.database, "orders_live");
+    assert_eq!(half.role, "orders_live");
+}
+
+/// **A name on the server is checked, not just quoted.** Quoting makes anything legal SQL;
+/// what is refused here is what would be invisible afterwards.
+#[test]
+fn a_name_that_could_not_be_typed_back_is_refused() {
+    for bad in ["", " orders", "orders ", "or\nders"] {
+        let failure =
+            super::check_server_name(bad).expect_err("that is not a name anyone could read back");
+        assert_eq!(failure.exit(), Exit::Usage);
+    }
+
+    // A colon is fine here and not in a label: this one never has to be typed at a command
+    // line, where `global:` is the qualifier.
+    super::check_server_name("odd:name").expect("a server may call a database that");
+    super::check_server_name("orders_live").expect("the ordinary case");
+}
+
+/// **What a typed line means.** The prompt needs a terminal; this is the part where being
+/// wrong would be expensive, so it is tested on its own.
+#[test]
+fn an_empty_answer_takes_the_default_and_a_typed_one_replaces_it() {
+    let answered = |given: &str| super::answer_or_default(given, "orders");
+
+    // Enter, and Enter after a stray space or two, both mean "the one you showed me".
+    assert_eq!(answered("\n").unwrap(), "orders");
+    assert_eq!(answered("\r\n").unwrap(), "orders");
+    assert_eq!(answered("   \n").unwrap(), "orders");
+    assert_eq!(answered("").unwrap(), "orders");
+
+    // A name is taken, and the line ending and any padding around it are not part of it.
+    assert_eq!(answered("orders_live\n").unwrap(), "orders_live");
+    assert_eq!(answered("  orders_live  \r\n").unwrap(), "orders_live");
+
+    // And a name that could not be read back is refused rather than quoted into existence.
+    let failure = answered("or\u{7}ders\n").expect_err("a bell is not a database name");
+    assert_eq!(failure.exit(), Exit::Usage);
+}
