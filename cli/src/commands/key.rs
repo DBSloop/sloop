@@ -131,6 +131,7 @@ pub fn export(context: &mut Context<'_>) -> Outcome<Exit> {
         })?;
 
     remember(&mut context.registries, scope, KeyKept::Exported)?;
+    crate::report::result(serde_json::json!({ "exported": true, "registry": scope.label() }));
     Ok(Exit::Success)
 }
 
@@ -150,7 +151,7 @@ pub fn import(context: &mut Context<'_>) -> Outcome<Exit> {
                 sealed_file: &sealed,
             }
             .keep(&private)?;
-            anstream::println!(
+            crate::say!(
                 "{} {}",
                 style::paint("already the key here"),
                 style::dim(&public.to_string())
@@ -185,12 +186,12 @@ pub fn import(context: &mut Context<'_>) -> Outcome<Exit> {
         },
     )?;
 
-    anstream::println!(
+    crate::say!(
         "{} {}",
         style::paint("imported"),
         style::dim(&public.to_string())
     );
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "kept in {}, and backups under {} are encrypted to it from now on",
@@ -202,6 +203,7 @@ pub fn import(context: &mut Context<'_>) -> Outcome<Exit> {
                 .display()
         ))
     );
+    crate::report::result(serde_json::json!({ "imported": true, "registry": scope.label() }));
     Ok(Exit::Success)
 }
 

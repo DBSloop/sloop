@@ -88,13 +88,13 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
         )
     })?;
 
-    anstream::println!(
+    crate::say!(
         "{} {}",
         style::paint("restoring"),
         style::dim(&chosen.directory.display().to_string())
     );
     for line in describe(&manifest) {
-        anstream::println!("  {}", style::dim(&line));
+        crate::say!("  {}", style::dim(&line));
     }
 
     // The engine the backup came from has to be the engine it is going into. A PostgreSQL
@@ -119,7 +119,7 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
         },
     )?;
     for note in &resolved.notes {
-        anstream::println!("  {}", style::dim(note));
+        crate::say!("  {}", style::dim(note));
     }
 
     let target = record.target(&resolved.secret);
@@ -132,7 +132,15 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
     let opening = key_for(context, scope, &manifest)?;
 
     if !context.consent.typed(&destroying)?.granted() {
-        anstream::println!("{}", style::dim("left alone."));
+        crate::say!("{}", style::dim("left alone."));
+        return Ok(Exit::Success);
+    }
+
+    if crate::report::would(&format!(
+        "replace the contents of {} from {}",
+        target.describe(),
+        chosen.directory.display()
+    )) {
         return Ok(Exit::Success);
     }
 
@@ -149,7 +157,7 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
     )?;
 
     // **Against the manifest**, whose counts came from the source at the moment of the dump.
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim("checking it against the counts the manifest recorded")
     );
@@ -160,9 +168,17 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
         &Side::counted(adapter.as_ref(), &target, mode)?,
     );
     for line in comparison.describe() {
-        anstream::println!("  {}", style::dim(&line));
+        crate::say!("  {}", style::dim(&line));
     }
 
+    crate::report::result(serde_json::json!({
+        "name": name,
+        "destination": target.describe(),
+        "from": chosen.directory.display().to_string(),
+        "taken": manifest.taken.utc,
+        "verified": comparison.landed(),
+        "tables": comparison.as_json(),
+    }));
     Ok(comparison.exit())
 }
 
@@ -217,7 +233,7 @@ fn choose(root: &Path, label: &str, from: Option<&str>, forced: bool) -> Outcome
     match &chosen.state {
         State::Complete => Ok(chosen),
         _ if forced => {
-            anstream::eprintln!(
+            crate::note!(
                 "{} {}",
                 style::dim("--force: restoring a backup that did not check out —"),
                 style::dim(chosen.problem().unwrap_or("it is not a finished backup"))
@@ -225,7 +241,7 @@ fn choose(root: &Path, label: &str, from: Option<&str>, forced: bool) -> Outcome
             // Said before the question, because it is the thing worth changing your mind
             // over: the destination is emptied before the dump is loaded, so a dump that
             // will not load leaves nothing behind it.
-            anstream::eprintln!(
+            crate::note!(
                 "  {}",
                 style::dim(
                     "if it will not load, the destination will be left empty — the clearing \
@@ -358,7 +374,7 @@ fn count(of: usize) -> u64 {
 /// that turns out not to be empty is exactly the thing worth finding out one line earlier.
 fn announce_destination(adapter: &dyn Adapter, target: &Target<'_>, database: &str) -> Outcome<()> {
     let server = adapter.probe(target)?;
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "into {database} — {} {}{}",
@@ -373,12 +389,12 @@ fn announce_destination(adapter: &dyn Adapter, target: &Target<'_>, database: &s
     // wrong way round.
     let existing = adapter.row_counts(target).unwrap_or_default();
     if existing.is_empty() {
-        anstream::println!("  {}", style::dim("it is empty"));
+        crate::say!("  {}", style::dim("it is empty"));
         return Ok(());
     }
 
     let rows: u64 = existing.iter().map(|count| count.rows).sum();
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "replacing what is there now — {}, {}",
@@ -413,7 +429,7 @@ struct Loading<'a> {
 fn replace(adapter: &dyn Adapter, target: &Target<'_>, loading: &Loading<'_>) -> Outcome<()> {
     let cleared = adapter.clear_contents(target)?;
     if cleared > 0 {
-        anstream::println!(
+        crate::say!(
             "  {}",
             style::dim(&format!("cleared {}", plural(cleared, "table")))
         );
@@ -427,14 +443,14 @@ fn replace(adapter: &dyn Adapter, target: &Target<'_>, loading: &Loading<'_>) ->
         loading.manifest,
         loading.private,
     ) {
-        anstream::eprintln!(
+        crate::note!(
             "{}",
             style::paint(&format!(
                 "{} was cleared and the restore did not finish — it is empty now",
                 loading.database
             ))
         );
-        anstream::eprintln!(
+        crate::note!(
             "  {}",
             style::dim(&format!(
                 "`sloop backups list {}` shows the other backups there are",
@@ -444,7 +460,7 @@ fn replace(adapter: &dyn Adapter, target: &Target<'_>, loading: &Loading<'_>) ->
         return Err(failure);
     }
 
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "loaded in {:.1}s",

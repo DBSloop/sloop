@@ -93,7 +93,7 @@ pub fn run(context: &mut Context<'_>, asked: &Syncing<'_>) -> Outcome<Exit> {
         asked.create,
     )?
     else {
-        anstream::println!("{}", style::dim("left alone."));
+        crate::say!("{}", style::dim("left alone."));
         return Ok(Exit::Success);
     };
 
@@ -188,6 +188,12 @@ fn into_a_new_database(
     )?;
     let reading = reading.expect("the source is proved before anything is created");
 
+    // A rehearsal that never made the destination has nothing to copy into, and has already
+    // said what it would have made.
+    let Some(built) = built else {
+        return Ok(Exit::Success);
+    };
+
     // **No `Destroying`.** There is nothing in there to replace: this run made it. The shape
     // it does not have yet is `merge`'s business, and this is not the only way to arrive at
     // a destination with nothing in it — see `Shaped`.
@@ -232,7 +238,7 @@ fn merge(
 ) -> Outcome<Exit> {
     let adapter = super::adapter_for(source_target.engine, context.global);
 
-    anstream::println!(
+    crate::say!(
         "{} {}",
         style::paint("syncing"),
         style::dim(&format!(
@@ -243,7 +249,7 @@ fn merge(
     );
     let from_server = adapter.probe(source_target)?;
     let into_server = adapter.probe(destination_target)?;
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "{} {} → {} {}",
@@ -258,7 +264,7 @@ fn merge(
     plan.announce(&asked.only);
 
     if plan.merging.is_empty() {
-        anstream::println!("{}", style::dim("nothing to merge."));
+        crate::say!("{}", style::dim("nothing to merge."));
         return Ok(Exit::Success);
     }
 
@@ -271,9 +277,13 @@ fn merge(
 
     if let Some(destroying) = destroying {
         if !context.consent.typed(destroying)?.granted() {
-            anstream::println!("{}", style::dim("left alone."));
+            crate::say!("{}", style::dim("left alone."));
             return Ok(Exit::Success);
         }
+    }
+
+    if crate::report::would(&format!("merge into {}", destination_target.describe())) {
+        return Ok(Exit::Success);
     }
 
     // The shape goes across before the rows: all of it into a destination that holds
@@ -324,7 +334,7 @@ fn carry_out(
         Ok(merged) => merged,
         Err(failure) => {
             if let Some(dump) = &kept {
-                anstream::eprintln!(
+                crate::note!(
                     "{}",
                     style::dim(&format!(
                         "--safe: the dump is kept at {} — the merge did not finish",
@@ -336,7 +346,7 @@ fn carry_out(
         }
     };
 
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "merged in {:.1}s",
@@ -347,15 +357,35 @@ fn carry_out(
     // Sequences last, and only once every row is in: a counter set from a table that is
     // still being filled is a counter that is already wrong.
     for moved in adapter.reset_sequences(destination)? {
-        anstream::println!("  {}", style::dim(&moved));
+        crate::say!("  {}", style::dim(&moved));
     }
+
+    crate::report::result(serde_json::json!({
+        "source": source.describe(),
+        "destination": destination.describe(),
+        "seconds": started.elapsed().as_secs_f64(),
+        "tables": merged
+            .iter()
+            .map(|one| serde_json::json!({
+                "table": one.table.to_string(),
+                "loaded": one.loaded,
+                "inserted": one.inserted,
+                "updated": one.updated,
+                "kept": one.kept,
+                "before": one.before,
+                "after": one.after,
+                "adds_up": one.adds_up(),
+            }))
+            .collect::<Vec<_>>(),
+        "skipped": plan.skipping.iter().map(ToString::to_string).collect::<Vec<_>>(),
+    }));
 
     let exit = report(&merged);
     if let Some(dump) = kept {
         if exit == Exit::Success {
             discard(&dump);
         } else {
-            anstream::eprintln!(
+            crate::note!(
                 "{}",
                 style::dim(&format!(
                     "--safe: the dump is kept at {} — the counts did not agree",
@@ -418,7 +448,7 @@ impl Plan {
 
     /// Say what is about to happen, and what is not.
     fn announce(&self, only: &Selection<'_>) {
-        anstream::println!(
+        crate::say!(
             "  {}",
             style::dim(&format!(
                 "merging {}{}, parents first",
@@ -435,7 +465,7 @@ impl Plan {
         // not going to arrive, and somebody reading this needs to know which one rather
         // than how many.
         for table in &self.skipping {
-            anstream::println!(
+            crate::say!(
                 "  {}",
                 style::dim(&format!(
                     "skipping {table} — it has no primary key, so there is no way to tell \
@@ -492,7 +522,7 @@ impl Shaped {
     /// Say which of the three this run is, before anybody agrees to it.
     fn announce(&self) {
         if self.is_bare() {
-            anstream::println!(
+            crate::say!(
                 "  {}",
                 style::dim(
                     "the destination has no tables, so its shape is copied across first and \
@@ -502,7 +532,7 @@ impl Shaped {
             return;
         }
 
-        anstream::println!(
+        crate::say!(
             "  {}",
             style::dim(&format!(
                 "the destination has {}",
@@ -514,7 +544,7 @@ impl Shaped {
         // be created there, and creating a table changes the destination's shape rather than
         // its rows — so it is said before the question rather than reported after it.
         for table in &self.missing {
-            anstream::println!(
+            crate::say!(
                 "  {}",
                 style::dim(&format!("{table} is not there yet, so it is created first"))
             );
@@ -607,7 +637,7 @@ fn merge_each(
             .merge_table(source, destination, shape)
             .inspect_err(|_| {
                 if kept.is_none() && !merged.is_empty() {
-                    anstream::eprintln!(
+                    crate::note!(
                         "{}",
                         style::dim(&format!(
                             "{} had already been merged and {} is where it stopped",
@@ -618,7 +648,7 @@ fn merge_each(
                 }
             })?;
 
-        anstream::println!("  {}", style::dim(&describe(&one)));
+        crate::say!("  {}", style::dim(&describe(&one)));
         merged.push(one);
     }
     Ok(merged)
@@ -660,7 +690,7 @@ fn describe(merged: &Merged) -> String {
 /// writing to it while this ran — finished, but not proved, which is what `6` is for.
 fn report(merged: &[Merged]) -> Exit {
     let total = |what: fn(&Merged) -> u64| merged.iter().map(what).sum::<u64>();
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "{} merged: {} new, {} replaced, {} kept",
@@ -676,7 +706,7 @@ fn report(merged: &[Merged]) -> Exit {
         return Exit::Success;
     }
 
-    anstream::eprintln!(
+    crate::note!(
         "{}",
         style::dim(&format!(
             "{} did not add up: {}",
@@ -710,7 +740,7 @@ fn net(adapter: &dyn Adapter, source: &Target<'_>, only: &[Table]) -> Outcome<Pa
     })?;
 
     let dump = crate::backup::dump_file(&directory);
-    anstream::eprintln!(
+    crate::note!(
         "{}",
         style::dim(&format!(
             "--safe: dumping the source to {} first — it is not encrypted, and it goes when \
@@ -721,7 +751,7 @@ fn net(adapter: &dyn Adapter, source: &Target<'_>, only: &[Table]) -> Outcome<Pa
 
     match adapter.dump(source, &dump, only) {
         Ok(summary) => {
-            anstream::println!(
+            crate::say!(
                 "  {}",
                 style::dim(&format!("dumped {}", describe_bytes(summary.bytes)))
             );
@@ -737,7 +767,7 @@ fn net(adapter: &dyn Adapter, source: &Target<'_>, only: &[Table]) -> Outcome<Pa
 /// Remove a temporary dump, and say so if it will not go.
 fn discard(directory: &Path) {
     if let Err(error) = std::fs::remove_dir_all(directory) {
-        anstream::eprintln!(
+        crate::note!(
             "{}",
             style::dim(&format!(
                 "the temporary dump at {} could not be removed: {error}",

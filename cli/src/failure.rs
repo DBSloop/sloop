@@ -91,10 +91,40 @@ impl Failure {
 
     /// Print it the way clap prints its own errors, so the two never look like they came
     /// from different programs.
-    pub fn report(&self) {
-        anstream::eprintln!("{} {}", style::error_prefix(), self.message);
+    /// Say this went wrong without ending the run, and without claiming to be its result.
+    ///
+    /// **For the commands that carry on.** `backup --all`, `db test` and `doctor` each work
+    /// through a list and report the ones that failed as they go — and under `--json` every
+    /// one of those calling [`Failure::report`] would print a document of its own, which is
+    /// several documents on one standard output and therefore not JSON at all. There is one
+    /// document per run, and it is the envelope `main` prints at the end.
+    pub fn mention(&self) {
+        crate::report::problem(&format!("{} {}", style::error_prefix(), self.message));
         if let Some(hint) = &self.hint {
-            anstream::eprintln!("{} {hint}", style::label("  hint:"));
+            crate::report::problem(&format!("{} {hint}", style::label("  hint:")));
+        }
+    }
+
+    pub fn report(&self) {
+        // **Through `problem`, which `--quiet` cannot silence.** Everything else this tool
+        // prints is commentary somebody may not want; this is the sentence that says the run
+        // did not do what it was asked, and a scheduled job that swallows it is worse than
+        // one that says too much.
+        //
+        // Under `--json` the same failure is a document instead — see `report::failed`.
+        if crate::report::is_json() {
+            crate::report::document(&serde_json::json!({
+                "ok": false,
+                "exit": self.exit.code(),
+                "error": self.message,
+                "hint": self.hint,
+            }));
+            return;
+        }
+
+        crate::report::problem(&format!("{} {}", style::error_prefix(), self.message));
+        if let Some(hint) = &self.hint {
+            crate::report::problem(&format!("{} {hint}", style::label("  hint:")));
         }
     }
 }

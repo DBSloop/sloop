@@ -31,7 +31,7 @@
 #[path = "consent_tests.rs"]
 mod tests;
 
-use std::io::{IsTerminal as _, Write as _};
+use std::io::IsTerminal as _;
 
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
@@ -112,8 +112,7 @@ impl<'a> Consent<'a> {
             .hint(format!("pass {flag} to answer it up front")));
         }
 
-        anstream::print!("{} {question} ", style::paint("?"));
-        let _ = std::io::stdout().flush();
+        crate::report::ask(&format!("{} {question} ", style::paint("?")));
 
         let mut answer = String::new();
         std::io::stdin()
@@ -139,12 +138,11 @@ impl<'a> Consent<'a> {
             return Ok(Consented::ByFlag);
         }
 
-        anstream::print!(
+        crate::report::ask(&format!(
             "{} type {} to destroy it, or anything else to stop: ",
             style::paint("?"),
             style::paint(destroying.named)
-        );
-        let _ = std::io::stdout().flush();
+        ));
 
         let mut given = String::new();
         std::io::stdin()

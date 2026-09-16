@@ -70,6 +70,7 @@ pub fn list(context: &Context<'_>, name: Option<&str>, check: bool) -> Outcome<E
     let wanted = name.map(store::label_for);
 
     let mut tally = Tally::default();
+    let mut listed: Vec<serde_json::Value> = Vec::new();
 
     for store in &stores {
         let backups: Vec<&Stored> = store
@@ -84,16 +85,29 @@ pub fn list(context: &Context<'_>, name: Option<&str>, check: bool) -> Outcome<E
         }
 
         if stores.len() > 1 {
-            anstream::println!("{}", style::dim(store.scope.label()));
+            crate::say!("{}", style::dim(store.scope.label()));
         }
 
         for group in grouped(&backups) {
             print_group(&group);
             tally.add(&group);
+            listed.extend(group.iter().map(|stored| {
+                serde_json::json!({
+                    "label": stored.label,
+                    "registry": store.scope.label(),
+                    "engine": stored.engine.to_string(),
+                    "directory": stored.directory.display().to_string(),
+                    "taken_utc": stored.taken.utc_path(),
+                    "complete": stored.is_complete(),
+                    "damaged": stored.is_damaged(),
+                    "rows": stored.manifest.as_ref().map(|manifest| manifest.rows),
+                    "bytes": stored.manifest.as_ref().map(|manifest| manifest.dump.bytes),
+                })
+            }));
         }
 
         for stray in &store.found.strays {
-            anstream::println!(
+            crate::say!(
                 "  {}",
                 style::dim(&format!(
                     "{} is not a backup sloop wrote — left alone",
@@ -103,12 +117,14 @@ pub fn list(context: &Context<'_>, name: Option<&str>, check: bool) -> Outcome<E
         }
     }
 
+    crate::report::result(serde_json::json!({ "backups": listed }));
+
     if tally.directories == 0 {
         return Ok(nothing_to_show(context, &stores, name));
     }
 
-    anstream::println!();
-    anstream::println!("{}", style::dim(&tally.summary(check)));
+    crate::say!();
+    crate::say!("{}", style::dim(&tally.summary(check)));
 
     if tally.damaged > 0 {
         // Exit 6 is "it finished and then the numbers disagreed", which is exactly this: a
@@ -149,15 +165,15 @@ pub fn prune(context: &Context<'_>, asked: &Pruning<'_>) -> Outcome<Exit> {
     let (removing, total) = preview(&plans);
 
     if removing == 0 {
-        anstream::println!(
+        crate::say!(
             "{}",
             style::dim("nothing to prune — the policy removes none of what is there")
         );
         return Ok(Exit::Success);
     }
 
-    anstream::println!();
-    anstream::println!(
+    crate::say!();
+    crate::say!(
         "{}",
         style::dim(&format!(
             "{} would go, freeing {}",
@@ -167,12 +183,17 @@ pub fn prune(context: &Context<'_>, asked: &Pruning<'_>) -> Outcome<Exit> {
     );
 
     if asked.dry_run {
-        anstream::println!("{}", style::dim("--dry-run: nothing was removed."));
+        crate::say!("{}", style::dim("--dry-run: nothing was removed."));
         return Ok(Exit::Success);
     }
 
     if !context.consent.asked("Remove them?", "--yes")? {
-        anstream::println!("{}", style::dim("left alone."));
+        crate::report::result(serde_json::json!({ "removed": 0, "declined": true }));
+        crate::say!("{}", style::dim("left alone."));
+        return Ok(Exit::Success);
+    }
+
+    if crate::report::would("remove the backups listed above") {
         return Ok(Exit::Success);
     }
 
@@ -195,13 +216,19 @@ pub fn prune(context: &Context<'_>, asked: &Pruning<'_>) -> Outcome<Exit> {
                     // the retention still has to be applied, exactly as `backup --all`
                     // keeps going and reports what failed.
                     failed += 1;
-                    anstream::eprintln!("{}", style::dim(failure.message()));
+                    crate::note!("{}", style::dim(failure.message()));
                 }
             }
         }
     }
 
-    anstream::println!(
+    crate::report::result(serde_json::json!({
+        "removed": removed,
+        "freed_bytes": freed,
+        "failed": failed,
+    }));
+
+    crate::say!(
         "{}",
         style::dim(&format!(
             "removed {}, freed {}",
@@ -290,7 +317,7 @@ fn print_group(group: &[&Stored]) {
     // The same counting as the footer, for the same reason: a heading reading "2 backups"
     // over a list where one of them is a half-written directory is the silent count again,
     // one line higher up.
-    anstream::println!(
+    crate::say!(
         "{}  {}",
         style::paint(&first.label),
         style::dim(&format!(
@@ -301,7 +328,7 @@ fn print_group(group: &[&Stored]) {
     );
 
     for stored in group {
-        anstream::println!("  {}", line_for(stored));
+        crate::say!("  {}", line_for(stored));
     }
 }
 
@@ -357,7 +384,7 @@ fn nothing_to_show(context: &Context<'_>, stores: &[Store], name: Option<&str>) 
         .collect();
 
     if let Some(name) = name {
-        anstream::println!(
+        crate::say!(
             "{}",
             style::dim(&format!("nothing has been backed up under {name}."))
         );
@@ -368,7 +395,7 @@ fn nothing_to_show(context: &Context<'_>, stores: &[Store], name: Option<&str>) 
                 .collect();
             labels.sort_unstable();
             labels.dedup();
-            anstream::println!(
+            crate::say!(
                 "{}",
                 style::dim(&format!("there are backups under: {}", labels.join(", ")))
             );
@@ -376,14 +403,14 @@ fn nothing_to_show(context: &Context<'_>, stores: &[Store], name: Option<&str>) 
         return Exit::Success;
     }
 
-    anstream::println!(
+    crate::say!(
         "{}",
         style::dim(&format!(
             "nothing has been backed up into {} yet.",
             context.registries.resolution().describe(context.global)
         ))
     );
-    anstream::println!(
+    crate::say!(
         "{}",
         style::dim("`sloop backup <name>` takes one — `sloop db list` shows the names.")
     );
@@ -412,11 +439,11 @@ fn preview(plans: &[(Scope, Plan)]) -> (usize, u64) {
 
     for (scope, plan) in plans {
         if several {
-            anstream::println!("{}", style::dim(scope.label()));
+            crate::say!("{}", style::dim(scope.label()));
         }
 
         for stored in &plan.remove {
-            anstream::println!(
+            crate::say!(
                 "  {} {}  {}",
                 style::paint("remove"),
                 line_for(stored),
@@ -438,7 +465,7 @@ fn preview(plans: &[(Scope, Plan)]) -> (usize, u64) {
             // The held reason and nothing else. `line_for` would print what is wrong with
             // the directory as well, and two overlapping explanations of the same thing is
             // how a preview stops being read.
-            anstream::println!(
+            crate::say!(
                 "  {} {}  {}",
                 style::dim("  keep"),
                 when_of(stored),
@@ -452,7 +479,7 @@ fn preview(plans: &[(Scope, Plan)]) -> (usize, u64) {
             .filter(|(_, held)| matches!(held, Held::Newest | Held::Young))
             .count();
         if ordinary > 0 {
-            anstream::println!(
+            crate::say!(
                 "  {}",
                 style::dim(&format!(
                     "{} kept by the policy",

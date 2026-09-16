@@ -21,7 +21,7 @@
 //! installed. See that module for why the hash is pinned rather than fetched.
 
 use std::collections::BTreeMap;
-use std::io::{IsTerminal, Read, Write};
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -132,7 +132,7 @@ pub fn ensure(engine: Engine, global: &Path) -> Outcome<Inventory> {
         return Err(nothing_to_offer(engine, &missing));
     };
 
-    anstream::println!(
+    crate::say!(
         "{} {} for {engine}, and sloop does not bundle them.",
         style::heading("Missing:"),
         missing
@@ -141,7 +141,7 @@ pub fn ensure(engine: Engine, global: &Path) -> Outcome<Inventory> {
             .collect::<Vec<_>>()
             .join(", ")
     );
-    anstream::println!("{}", plan.describe());
+    crate::say!("{}", plan.describe());
 
     if !asked(&plan.question())? {
         remembered.set(engine, Answer::Declined, global);
@@ -168,7 +168,7 @@ pub fn ensure(engine: Engine, global: &Path) -> Outcome<Inventory> {
     }
 
     remembered.set(engine, Answer::Installed, global);
-    anstream::println!("{} {engine}'s tools are ready.", style::heading("Done."));
+    crate::say!("{} {engine}'s tools are ready.", style::heading("Done."));
     Ok(after)
 }
 
@@ -361,11 +361,11 @@ fn install_postgres_archive(release: &releases::Release, into: &Path) -> Outcome
     // The index, first and optionally. It decides nothing — see `releases` — so a machine
     // that cannot reach postgresql.org still installs, it just installs without a comment.
     if let Some(note) = index_note(&workspace, release) {
-        anstream::println!("  {}", style::dim(&note));
+        crate::say!("  {}", style::dim(&note));
     }
 
     let archive = workspace.join(release.file_name());
-    anstream::println!("  {} {}", style::label("Downloading"), release.url());
+    crate::say!("  {} {}", style::label("Downloading"), release.url());
     download(&release.url(), &archive)?;
 
     verify(&archive, release).inspect_err(|_| {
@@ -373,7 +373,7 @@ fn install_postgres_archive(release: &releases::Release, into: &Path) -> Outcome
         // that might be less careful.
         let _ = std::fs::remove_file(&archive);
     })?;
-    anstream::println!("  {} SHA-256 matches", style::label("Verified"));
+    crate::say!("  {} SHA-256 matches", style::label("Verified"));
 
     std::fs::create_dir_all(into).map_err(|error| {
         Failure::new(
@@ -387,7 +387,7 @@ fn install_postgres_archive(release: &releases::Release, into: &Path) -> Outcome
     let _ = std::fs::remove_file(&archive);
     let _ = std::fs::remove_dir(&workspace);
 
-    anstream::println!("  {} {}", style::label("Installed into"), into.display());
+    crate::say!("  {} {}", style::label("Installed into"), into.display());
     Ok(())
 }
 
@@ -645,8 +645,7 @@ fn system_archiver() -> PathBuf {
 
 /// Ask a yes-or-no question. Anything that is not a yes is a no.
 fn asked(question: &str) -> Outcome<bool> {
-    anstream::print!("{question} [y/N] ");
-    let _ = std::io::stdout().flush();
+    crate::report::ask(&format!("{question} [y/N] "));
 
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer).map_err(|error| {

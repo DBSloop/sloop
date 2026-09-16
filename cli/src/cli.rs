@@ -28,6 +28,11 @@ in it that could phone home even if it wanted to.";
     styles = style::clap_styles(),
     max_term_width = 100,
 )]
+/// **Seven booleans, and clippy is right in general and wrong here.** Every one of them is a
+/// global flag a user typed, read once in `main` and never passed around; the struct clippy is
+/// warning about is a struct whose fields get muddled at a call site, and this one has no call
+/// sites at all — clap fills it in from `argv` by name.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Cli {
     /// Use the global registry, whichever directory you are standing in.
     #[arg(long, global = true, conflicts_with = "project")]
@@ -67,6 +72,42 @@ pub struct Cli {
     /// something else by editing one flag.
     #[arg(long, value_name = "NAME", global = true)]
     pub confirm: Option<String>,
+
+    /// Say nothing but what went wrong.
+    ///
+    /// Silences the running commentary, never a failure: a scheduled run that fails quietly
+    /// is a run nobody finds out about.
+    #[arg(long, short = 'q', global = true)]
+    pub quiet: bool,
+
+    /// Print one JSON document instead of talking.
+    ///
+    /// The document is the whole of standard output, so it parses. Anything the run wants to
+    /// say about itself goes to standard error.
+    #[arg(long, global = true, conflicts_with = "quiet")]
+    pub json: bool,
+
+    /// Never colour the output, whatever this terminal supports.
+    ///
+    /// `NO_COLOR` in the environment says the same thing, and colour already disappears on
+    /// its own when the output is a pipe or a file.
+    #[arg(long, global = true)]
+    pub no_color: bool,
+
+    /// Append everything this run prints to a file as well.
+    ///
+    /// Without the colour, and with anything that reads like a credential taken out — a
+    /// sloop log is meant to be pasteable into a public issue.
+    #[arg(long, value_name = "PATH", global = true)]
+    pub log_file: Option<std::path::PathBuf>,
+
+    /// Say what would happen and change nothing.
+    ///
+    /// Every command that would write stops at the point where it would, having done all the
+    /// reading and all the checking first — so a dry run is a real rehearsal rather than a
+    /// guess.
+    #[arg(long, global = true)]
+    pub dry_run: bool,
 
     /// Left empty on purpose: no command opens the interactive menu.
     #[command(subcommand)]

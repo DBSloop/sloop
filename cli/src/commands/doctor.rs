@@ -86,14 +86,14 @@ pub fn run(global: &Path, may_install: bool, registered: &Registered<'_>) -> Exi
         // One engine at a time, and a refusal on one is not a reason to stop asking about
         // the next: somebody may well want PostgreSQL fetched and MariaDB left alone.
         for engine in short_of {
-            anstream::println!();
+            crate::say!();
             if let Err(failure) = acquire::ensure(engine, global) {
-                failure.report();
+                failure.mention();
             }
         }
         // The report above is now out of date wherever an install succeeded, and a stale
         // report is worse than no report. Take it again.
-        anstream::println!();
+        crate::say!();
         inventory = Inventory::everything(&fetched);
         print_report(&inventory, &fetched);
     }
@@ -101,7 +101,7 @@ pub fn run(global: &Path, may_install: bool, registered: &Registered<'_>) -> Exi
     // Last, and after any install: checking a role needs the client tools that were just
     // fetched, and a section that said "no tools" above an install that just finished
     // would be answering a question nobody still has.
-    anstream::println!();
+    crate::say!();
     let roles_can_dump = print_privileges(registered, &inventory);
 
     verdict(&inventory, roles_can_dump)
@@ -127,8 +127,8 @@ fn verdict(inventory: &Inventory, roles_can_dump: bool) -> Exit {
 }
 
 fn print_report(inventory: &Inventory, fetched: &Path) {
-    anstream::println!("{}", style::heading("Client tools"));
-    anstream::println!(
+    crate::say!("{}", style::heading("Client tools"));
+    crate::say!(
         "{}",
         style::dim(
             "  sloop drives the tools each engine ships. It does not bundle them: mysqldump \
@@ -137,12 +137,12 @@ fn print_report(inventory: &Inventory, fetched: &Path) {
     );
 
     for engine in Engine::ALL {
-        anstream::println!();
+        crate::say!();
         print_engine(inventory, engine);
     }
 
-    anstream::println!();
-    anstream::println!(
+    crate::say!();
+    crate::say!(
         "{} {}",
         style::label("  sloop keeps what it fetches in"),
         fetched.display()
@@ -152,7 +152,7 @@ fn print_report(inventory: &Inventory, fetched: &Path) {
 fn print_engine(inventory: &Inventory, engine: Engine) {
     let ready = inventory.has_everything_for(engine);
     let mark = if ready { "ready" } else { "not ready" };
-    anstream::println!(
+    crate::say!(
         "  {} {}",
         style::paint(&format!("{engine}")),
         style::dim(&format!("— {mark}"))
@@ -166,21 +166,21 @@ fn print_engine(inventory: &Inventory, engine: Engine) {
         } else {
             acquire::how_to_install(engine)
         };
-        anstream::println!("    {}", style::dim(&format!("→ {what}")));
+        crate::say!("    {}", style::dim(&format!("→ {what}")));
     }
 
     for &tool in Tool::needed_by(engine) {
         let every = inventory.every(tool);
         match every.split_first() {
-            None => anstream::println!(
+            None => crate::say!(
                 "    {:<14} {}",
                 tool.to_string(),
                 style::dim(&format!("missing — {}", tool.what_for()))
             ),
             Some((best, rest)) => {
-                anstream::println!("    {:<14} {}", tool.to_string(), describe(tool, best));
+                crate::say!("    {:<14} {}", tool.to_string(), describe(tool, best));
                 for other in rest {
-                    anstream::println!(
+                    crate::say!(
                         "    {:<14} {}",
                         "",
                         style::dim(&format!("also {}", describe_plain(other)))
@@ -221,8 +221,8 @@ fn describe(tool: Tool, candidate: &Candidate) -> String {
 /// half of this that reaches the exit code. A database that could not be reached is not
 /// counted against it; see the module comment for why.
 fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool {
-    anstream::println!("{}", style::heading("Privileges"));
-    anstream::println!(
+    crate::say!("{}", style::heading("Privileges"));
+    crate::say!(
         "{}",
         style::dim(
             "  Every engine wants more than SELECT, and not every gap is loud: short of one \
@@ -233,8 +233,8 @@ fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool 
     );
 
     if registered.registries.is_empty() {
-        anstream::println!();
-        anstream::println!(
+        crate::say!();
+        crate::say!(
             "{}",
             style::dim(&format!(
                 "  Nothing is registered in {}, so there is no role to check. \
@@ -249,8 +249,8 @@ fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool 
     }
 
     if registered.offline {
-        anstream::println!();
-        anstream::println!(
+        crate::say!();
+        crate::say!(
             "{}",
             style::dim("  --offline, so nothing was asked. What each engine needs:")
         );
@@ -261,7 +261,7 @@ fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool 
     let mut every_role_can_dump = true;
 
     for (scope, name, database) in registered.registries.all() {
-        anstream::println!();
+        crate::say!();
         match check(database, registered, scope, inventory) {
             Ok(report) => {
                 every_role_can_dump &= report.can_dump();
@@ -271,13 +271,13 @@ fn print_privileges(registered: &Registered<'_>, inventory: &Inventory) -> bool 
             // not installed: all of them stop this one check and none of them is a reason
             // to abandon the rest of the report, or the databases after it.
             Err(failure) => {
-                anstream::println!(
+                crate::say!(
                     "  {}  {}",
                     style::paint(name),
                     style::dim(&database.credential_key())
                 );
-                anstream::println!("    {}", style::dim("could not be checked"));
-                failure.report();
+                crate::say!("    {}", style::dim("could not be checked"));
+                failure.mention();
             }
         }
     }
@@ -306,7 +306,7 @@ fn check(
     )?;
 
     for note in &resolved.notes {
-        anstream::println!("    {}", style::dim(note));
+        crate::say!("    {}", style::dim(note));
     }
 
     // The inventory this command has already built and already printed, rather than
@@ -319,12 +319,12 @@ fn check(
 
 /// One database's findings.
 fn print_one(name: &str, database: &Database, report: &Report) {
-    anstream::println!(
+    crate::say!(
         "  {}  {}",
         style::paint(name),
         style::dim(&database.credential_key())
     );
-    anstream::println!(
+    crate::say!(
         "    {}",
         style::dim(&format!(
             "{} {}{}, connected as {}",
@@ -356,7 +356,7 @@ fn print_one(name: &str, database: &Database, report: &Report) {
         } else {
             format!("— {}: {gaps} of {needed} missing", phase.heading())
         };
-        anstream::println!("    {}", style::dim(&summary));
+        crate::say!("    {}", style::dim(&summary));
 
         // Only the gaps get elaborated. A held privilege is a line nobody needs to read,
         // and printing eleven of them is how the two that matter get scrolled past.
@@ -364,18 +364,18 @@ fn print_one(name: &str, database: &Database, report: &Report) {
             let Verdict::Missing(detail) = &finding.verdict else {
                 continue;
             };
-            anstream::println!("      {} {}", style::paint("✗"), finding.requirement.title);
+            crate::say!("      {} {}", style::paint("✗"), finding.requirement.title);
             if !detail.is_empty() {
-                anstream::println!("          {}", style::dim(detail));
+                crate::say!("          {}", style::dim(detail));
             }
-            anstream::println!("          {}", style::dim(finding.requirement.consequence));
+            crate::say!("          {}", style::dim(finding.requirement.consequence));
         }
 
         // Anything that could not be established at all. Rare, and never guessed at.
         for finding in &rows {
             if let Verdict::Unknown(why) = &finding.verdict {
-                anstream::println!("      {} {}", style::dim("?"), finding.requirement.title);
-                anstream::println!("          {}", style::dim(why));
+                crate::say!("      {} {}", style::dim("?"), finding.requirement.title);
+                crate::say!("          {}", style::dim(why));
             }
         }
 
@@ -383,9 +383,9 @@ fn print_one(name: &str, database: &Database, report: &Report) {
         // `Report::remedy_for` for why that distinction is worth the extra lines.
         let remedy = report.remedy_for(phase, &database.database);
         if !remedy.is_empty() {
-            anstream::println!("      {}", style::dim("grant:"));
+            crate::say!("      {}", style::dim("grant:"));
             for statement in remedy {
-                anstream::println!("        {statement}");
+                crate::say!("        {statement}");
             }
         }
     }
@@ -411,11 +411,11 @@ fn print_the_documented_minimum(inventory: &Inventory) {
     };
 
     for engine in showing {
-        anstream::println!();
-        anstream::println!("  {}", style::paint(&format!("{engine}")));
+        crate::say!();
+        crate::say!("  {}", style::paint(&format!("{engine}")));
 
         for phase in [Phase::Dump, Phase::Restore] {
-            anstream::println!("    {}", style::dim(&format!("— {}", phase.heading())));
+            crate::say!("    {}", style::dim(&format!("— {}", phase.heading())));
             // Title first and the grants under it, rather than two columns: a row like
             // "USAGE on each schema, SELECT on each table and sequence" is wider than any
             // column worth having, and the thing worth reading is what it lets you do.
@@ -423,19 +423,19 @@ fn print_the_documented_minimum(inventory: &Inventory) {
                 .iter()
                 .filter(|row| row.phase == phase)
             {
-                anstream::println!("      {}", row.title);
-                anstream::println!("        {}", style::dim(&row.privileges.join(", ")));
+                crate::say!("      {}", row.title);
+                crate::say!("        {}", style::dim(&row.privileges.join(", ")));
             }
         }
 
         if !privileges::waived_by(engine).is_empty() {
-            anstream::println!(
+            crate::say!(
                 "    {}",
                 style::dim("— what the manual asks for and sloop does not need")
             );
             for waived in privileges::waived_by(engine) {
-                anstream::println!("      {}", waived.privilege);
-                anstream::println!("        {}", style::dim(waived.because));
+                crate::say!("      {}", waived.privilege);
+                crate::say!("        {}", style::dim(waived.because));
             }
         }
     }

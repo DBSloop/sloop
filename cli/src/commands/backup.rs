@@ -76,6 +76,28 @@ pub struct Taken {
 }
 
 impl Taken {
+    /// The same backup, as a `--json` run reports it.
+    ///
+    /// The manifest is the record of what was taken, so this is the manifest's own fields —
+    /// a script reading this and a person reading `backups list` are looking at one thing.
+    #[must_use]
+    pub fn as_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "label": self.manifest.label,
+            "directory": self.directory.display().to_string(),
+            "engine": self.manifest.engine.to_string(),
+            "database": self.manifest.database,
+            "rows": self.manifest.rows,
+            "tables": self.manifest.tables.len(),
+            "bytes": self.manifest.dump.bytes,
+            "sha256": self.manifest.dump.sha256,
+            "encrypted": self.manifest.dump.encryption.is_some(),
+            "taken_utc": self.manifest.taken.utc,
+            "taken_local": self.manifest.taken.local,
+            "seconds": self.manifest.took_seconds,
+        })
+    }
+
     /// The lines worth printing once it is done.
     ///
     /// Built rather than printed, so that what a person is shown is something a test can
@@ -113,7 +135,7 @@ pub fn run(context: &mut Context<'_>, name: Option<&str>, all: bool, mode: Mode)
             let inventory = Inventory::for_engine(engine, &fetched(context));
 
             let (_, database) = context.registries.find(name)?;
-            let taken = one(
+            let Some(taken) = one(
                 context,
                 &inventory,
                 sealing.as_ref(),
@@ -121,10 +143,14 @@ pub fn run(context: &mut Context<'_>, name: Option<&str>, all: bool, mode: Mode)
                 name,
                 database,
                 mode,
-            )?;
+            )?
+            else {
+                return Ok(Exit::Success);
+            };
             for line in taken.describe() {
-                anstream::println!("  {}", style::dim(&line));
+                crate::say!("  {}", style::dim(&line));
             }
+            crate::report::result(serde_json::json!({ "backups": [taken.as_json()] }));
             Ok(Exit::Success)
         }
         (None, true) => every(context, mode),
@@ -173,38 +199,55 @@ fn every(context: &mut Context<'_>, mode: Mode) -> Outcome<Exit> {
 
     let inventory = Inventory::everything(&fetched(context));
     let mut failures: Vec<(String, Failure)> = Vec::new();
+    let mut landed: Vec<serde_json::Value> = Vec::new();
     let mut done = 0_usize;
 
     for (index, (scope, name, database)) in jobs.iter().enumerate() {
         if index > 0 {
-            anstream::println!();
+            crate::say!();
         }
         let sealed_to = sealing.get(scope).and_then(Option::as_ref);
         match one(context, &inventory, sealed_to, *scope, name, database, mode) {
-            Ok(taken) => {
+            Ok(Some(taken)) => {
                 done += 1;
                 for line in taken.describe() {
-                    anstream::println!("  {}", style::dim(&line));
+                    crate::say!("  {}", style::dim(&line));
                 }
+                landed.push(taken.as_json());
             }
+            // A rehearsal: it said what it would have done and wrote nothing.
+            Ok(None) => {}
             // Said now as well as at the end. A run over thirty databases should not keep
             // the first failure to itself until the last one has finished.
             Err(failure) => {
                 let failure = failure.prefixed(*name);
-                failure.report();
+                failure.mention();
                 failures.push(((*name).to_owned(), failure));
             }
         }
     }
 
+    crate::report::result(serde_json::json!({
+        "backups": landed,
+        "attempted": jobs.len(),
+        "failed": failures
+            .iter()
+            .map(|(name, failure)| serde_json::json!({
+                "name": name,
+                "error": failure.message(),
+                "exit": failure.exit().code(),
+            }))
+            .collect::<Vec<_>>(),
+    }));
+
     // One line, whatever the length of the run: what a person scrolls to the bottom for,
     // and the only place every failed database is named together.
-    anstream::println!();
+    crate::say!();
     let counted = style::paint(&format!("backed up {done} of {}", jobs.len()));
     if failures.is_empty() {
-        anstream::println!("{counted}");
+        crate::say!("{counted}");
     } else {
-        anstream::println!(
+        crate::say!(
             "{counted} {}",
             style::dim(&format!(
                 "— {} failed: {}",
@@ -245,9 +288,9 @@ fn one(
     name: &str,
     database: &Database,
     mode: Mode,
-) -> Outcome<Taken> {
+) -> Outcome<Option<Taken>> {
     let key = database.credential_key();
-    anstream::println!("{}  {}", style::paint(name), style::dim(&key));
+    crate::say!("{}  {}", style::paint(name), style::dim(&key));
 
     // The encrypted file sits beside the registry that names the database, so a project
     // entry and a global one of the same name read from two different stores.
@@ -261,7 +304,7 @@ fn one(
         },
     )?;
     for note in &resolved.notes {
-        anstream::println!("  {}", style::dim(note));
+        crate::say!("  {}", style::dim(note));
     }
 
     let root = context.registries.root_in(scope).ok_or_else(|| {
@@ -276,7 +319,7 @@ fn one(
     let server = adapter.probe(&target)?;
     let counts = adapter.row_counts(&target)?;
     let rows: u64 = counts.iter().map(|count| count.rows).sum();
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "{} {}{}, {}, {}",
@@ -287,6 +330,13 @@ fn one(
             plural(rows, "row"),
         ))
     );
+
+    // **Everything above this is a read.** The server has been reached, the key has been
+    // found and the rows have been counted; a rehearsal stops before the first directory is
+    // made, which is the first thing this leaves behind.
+    if crate::report::would(&format!("back up {name} to {}", root.display())) {
+        return Ok(None);
+    }
 
     let taken = Stamp::now();
     let (directory, swap_into) = destination(&root, database.engine, name, taken, mode)?;
@@ -325,15 +375,15 @@ fn one(
             // that is killed mid-dump cost nothing at all.
             if let Some(latest) = swap_into {
                 store::swap_in(&directory, &latest)?;
-                return Ok(Taken {
+                return Ok(Some(Taken {
                     directory: latest,
                     manifest,
-                });
+                }));
             }
-            Ok(Taken {
+            Ok(Some(Taken {
                 directory,
                 manifest,
-            })
+            }))
         }
         Err(failure) => {
             if !existed {
@@ -392,7 +442,7 @@ fn destination(
     // Anything left over from a run that was killed is put right before this one starts,
     // and out loud: a directory that repaired itself in silence teaches nobody anything.
     for note in store::recover_replace(&label_dir)? {
-        anstream::println!("  {}", style::dim(&note));
+        crate::say!("  {}", style::dim(&note));
     }
 
     Ok((
@@ -536,12 +586,12 @@ fn sealing_for(context: &mut Context<'_>, scope: Scope) -> Outcome<Option<Public
         match crate::commands::key::create(&mut context.registries, scope, &sealed) {
             Ok(encryption) => encryption,
             Err(failure) => {
-                anstream::eprintln!(
+                crate::note!(
                     "{} {}",
                     style::dim("note: this backup is not encrypted —"),
                     style::dim(failure.message())
                 );
-                anstream::eprintln!(
+                crate::note!(
                     "  {}",
                     style::dim(
                         "a machine with no keyring can keep a key in the Argon2id file \
@@ -570,10 +620,10 @@ fn sealing_for(context: &mut Context<'_>, scope: Scope) -> Outcome<Option<Public
 /// terminal it exits `2` naming the command that answers, because a scheduled run must never
 /// hang on a question nobody is there to read.
 fn keep_a_copy_first(context: &mut Context<'_>, scope: Scope, public: &PublicKey) -> Outcome<()> {
-    anstream::eprintln!();
-    anstream::eprintln!("{}", style::paint("this registry has a new backup key"));
-    anstream::eprintln!("  {}", style::dim(&public.to_string()));
-    anstream::eprintln!(
+    crate::note!();
+    crate::note!("{}", style::paint("this registry has a new backup key"));
+    crate::note!("  {}", style::dim(&public.to_string()));
+    crate::note!(
         "  {}",
         style::dim(
             "backups from here on are encrypted to it. The private half is on this machine \
@@ -581,7 +631,7 @@ fn keep_a_copy_first(context: &mut Context<'_>, scope: Scope, public: &PublicKey
              unreadable — there is no recovery, no reset and nobody to ask."
         )
     );
-    anstream::eprintln!(
+    crate::note!(
         "  {}",
         style::dim("`sloop key export > backup-key.txt` writes it out. Keep that somewhere else.")
     );

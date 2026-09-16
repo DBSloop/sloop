@@ -14,6 +14,7 @@ mod engine;
 mod exit;
 mod failure;
 mod registry;
+mod report;
 mod secret;
 mod style;
 mod tools;
@@ -50,8 +51,30 @@ fn main() -> ExitCode {
         }
     };
 
+    // **Before a command runs, and before anything is printed.** A `--log-file` that cannot
+    // be opened is a usage error now rather than a surprise halfway through a backup, and a
+    // `--no-color` decided after the first line has been written is a line with colour in it.
+    if let Err(failure) = report::settle(&report::Asked {
+        quiet: cli.quiet,
+        json: cli.json,
+        no_color: cli.no_color,
+        log_file: cli.log_file.as_deref(),
+        dry_run: cli.dry_run,
+    }) {
+        failure.report();
+        return failure.exit().into();
+    }
+
+    let named = cli
+        .command
+        .as_ref()
+        .map_or("menu", crate::cli::Command::path);
+
     match run(&cli) {
-        Ok(exit) => exit.into(),
+        Ok(exit) => {
+            report::finish(named, exit);
+            exit.into()
+        }
         Err(failure) => {
             failure.report();
             failure.exit().into()

@@ -21,7 +21,7 @@
 //! has no way to ask for one exits `2` naming `--password-stdin`, because a scheduled run
 //! that hangs on an invisible question is the worst failure this tool can have.
 
-use std::io::{IsTerminal as _, Read as _, Write as _};
+use std::io::{IsTerminal as _, Read as _};
 use std::path::Path;
 
 use crate::cli::{Fields, PasswordSource};
@@ -89,6 +89,10 @@ pub fn add(
         announce_server(&reached);
     }
 
+    if crate::report::would(&format!("register {name}")) {
+        return Ok(Exit::Success);
+    }
+
     // Replacing a record orphans whatever the old one pointed at, exactly as an edit does.
     let retire = replacing
         .as_ref()
@@ -102,7 +106,13 @@ pub fn add(
         retire,
     )?;
 
-    anstream::println!(
+    crate::report::result(serde_json::json!({
+        "name": name,
+        "registry": scope.label(),
+        "connection": database.credential_key(),
+        "password": route.describe(),
+    }));
+    crate::say!(
         "{} {} in the {} registry {}",
         style::paint("registered"),
         style::paint(name),
@@ -113,7 +123,7 @@ pub fn add(
             route.describe()
         ))
     );
-    anstream::println!("  {}", style::dim(&database.credential_key()));
+    crate::say!("  {}", style::dim(&database.credential_key()));
     Ok(Exit::Success)
 }
 
@@ -181,7 +191,7 @@ pub struct Building<'a> {
     pub role_password_command: Option<&'a str>,
 }
 
-/// What [`build`] left on the server and in the registry.
+/// What [`build`] left on the server and in the registry, or `None` under `--dry-run`.
 ///
 /// **The password comes back rather than being looked up again.** `mirror --create` needs to
 /// connect as the role it just made, and reading it straight back out of the keyring would
@@ -240,7 +250,7 @@ pub fn build(
     global: &Path,
     consent: Consent<'_>,
     asked: &Building<'_>,
-) -> Outcome<Built> {
+) -> Outcome<Option<Built>> {
     check_name(asked.name)?;
 
     let engine = asked.engine;
@@ -272,24 +282,21 @@ pub fn build(
     // a tool feel hostile.
     unattended_needs(asked)?;
 
-    anstream::println!(
-        "{} {}",
-        style::paint("creating"),
-        style::dim(&crate::engine::connection_string(
-            engine, &role, asked.host, port, &database
-        ))
-    );
-    anstream::println!(
-        "  {}",
-        style::dim(&format!(
-            "as {superuser}, whose password is used once and kept nowhere"
-        ))
-    );
+    announce_what_is_being_made(engine, &role, asked.host, port, &database, &superuser);
 
     // The new role's password before anything is contacted: a run that cannot finish should
     // not first ask somebody for a superuser password.
     let (role_password, generated) = role_password(asked)?;
     let admin_password = superuser_password(asked, &superuser, asked.host, port)?;
+
+    // **Everything above this line is reading and checking.** A rehearsal does all of it —
+    // the name, the registry, the flags a run with no terminal is missing — and stops here.
+    if crate::report::would(&format!(
+        "create {}, owned by {role}",
+        crate::engine::connection_string(engine, &role, asked.host, port, &database)
+    )) {
+        return Ok(None);
+    }
 
     let adapter = super::adapter_for(engine, global);
     let maintenance = Target {
@@ -334,7 +341,7 @@ pub fn build(
         None,
     )?;
 
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "registered as {} in the {} registry ({}), password in {}",
@@ -345,14 +352,30 @@ pub fn build(
         ))
     );
 
+    crate::report::result(serde_json::json!({
+        "name": asked.name,
+        "registry": scope.label(),
+        "engine": engine.to_string(),
+        "host": asked.host,
+        "port": port,
+        "database": database,
+        "user": role,
+        "role_existed": done.role_existed,
+        "grants": done.grants,
+        "password": route.describe(),
+        // **The password itself is never a field.** Rule 3 does not have a JSON exception,
+        // and a document is the easiest thing in this program to redirect into a file.
+        "password_printed": generated && !done.role_existed,
+    }));
+
     if generated && !done.role_existed {
         print_once(&role, &role_password, &route);
     }
 
-    Ok(Built {
+    Ok(Some(Built {
         record,
         secret: role_password,
-    })
+    }))
 }
 
 /// What the database and its owner are going to be called on the server.
@@ -399,12 +422,11 @@ pub fn name_it(label: &str, database: Option<&str>, role: Option<&str>) -> Outco
 /// cannot see is the defect this exists to fix, so the answer is either what they typed or
 /// what they could read while deciding not to type anything.
 fn ask_for(question: &str, default: &str) -> Outcome<String> {
-    anstream::print!(
+    crate::report::ask(&format!(
         "{} {question} {} ",
         style::paint("?"),
         style::dim(&format!("[{default}]"))
-    );
-    let _ = std::io::stdout().flush();
+    ));
 
     let mut given = String::new();
     std::io::stdin()
@@ -457,6 +479,30 @@ fn check_server_name(name: &str) -> Outcome<&str> {
     Ok(name)
 }
 
+/// What is about to be created, and which account is creating it.
+fn announce_what_is_being_made(
+    engine: Engine,
+    role: &str,
+    host: &str,
+    port: u16,
+    database: &str,
+    superuser: &str,
+) {
+    crate::say!(
+        "{} {}",
+        style::paint("creating"),
+        style::dim(&crate::engine::connection_string(
+            engine, role, host, port, database
+        ))
+    );
+    crate::say!(
+        "  {}",
+        style::dim(&format!(
+            "as {superuser}, whose password is used once and kept nowhere"
+        ))
+    );
+}
+
 /// Show a generated password, once.
 ///
 /// **Only ever reached at a terminal** — `role_password` refuses to generate one when there
@@ -465,21 +511,21 @@ fn check_server_name(name: &str) -> Outcome<&str> {
 /// output, so that a person piping this command's output somewhere does not pipe the
 /// password with it.
 fn print_once(role: &str, password: &Secret, route: &Route) {
-    anstream::eprintln!();
-    anstream::eprintln!(
+    crate::report::secret("");
+    crate::report::secret(&format!(
         "{} {}",
         style::paint("the password for"),
         style::paint(role)
-    );
-    anstream::eprintln!("  {}", password.expose());
-    anstream::eprintln!(
+    ));
+    crate::report::secret(&format!("  {}", password.expose()));
+    crate::report::secret(&format!(
         "  {}",
         style::dim(&format!(
             "it is in {} and this is the only time it is printed — put it in your \
              application now",
             route.describe()
         ))
-    );
+    ));
 }
 
 /// Where a password sloop just generated should live on *this* machine.
@@ -500,19 +546,19 @@ fn kept_where() -> Route {
 
 /// What the server did, in the order it did it.
 fn announce_created(database: &str, role: &str, done: &crate::engine::Provisioned) {
-    anstream::println!("{} {database}", style::paint("created"));
+    crate::say!("{} {database}", style::paint("created"));
     if done.role_existed {
-        anstream::println!(
+        crate::say!(
             "  {}",
             style::dim(&format!(
                 "{role} was already on the server, so it keeps the password it had"
             ))
         );
     } else {
-        anstream::println!("  {}", style::dim(&format!("role {role} created")));
+        crate::say!("  {}", style::dim(&format!("role {role} created")));
     }
     for grant in &done.grants {
-        anstream::println!("  {}", style::dim(&format!("granted {grant}")));
+        crate::say!("  {}", style::dim(&format!("granted {grant}")));
     }
 }
 
@@ -746,19 +792,38 @@ type Row = (String, Scope, String, String);
 /// there is no state of a registry that cannot be printed.
 pub fn list(context: &Context<'_>) -> Exit {
     if context.registries.is_empty() {
-        anstream::println!(
+        crate::report::result(serde_json::json!({ "databases": [] }));
+        crate::say!(
             "{}",
             style::dim(&format!(
                 "Nothing is registered in {}.",
                 context.registries.resolution().describe(context.global)
             ))
         );
-        anstream::println!(
+        crate::say!(
             "{}",
             style::dim("`sloop db add <name> --url postgres://user@host/database` starts one.")
         );
         return Exit::Success;
     }
+
+    crate::report::result(serde_json::json!({
+        "databases": context
+            .registries
+            .all()
+            .map(|(scope, name, database)| serde_json::json!({
+                "name": name,
+                "registry": scope.label(),
+                "engine": database.engine.to_string(),
+                "host": database.host,
+                "port": database.port,
+                "database": database.database,
+                "user": database.user,
+                // A route, never a value — the same property that lets this be printed.
+                "password": database.password.overridden_by(context.password_command).describe(),
+            }))
+            .collect::<Vec<_>>(),
+    }));
 
     let rows: Vec<Row> = context
         .registries
@@ -800,7 +865,7 @@ pub fn list(context: &Context<'_>) -> Exit {
         let shadowed = seen.contains(&name.as_str());
         seen.push(name);
 
-        anstream::println!(
+        crate::say!(
             "{}{}  {}{}  {}",
             style::paint(name),
             pad(name, name_column),
@@ -814,8 +879,8 @@ pub fn list(context: &Context<'_>) -> Exit {
         );
     }
 
-    anstream::println!();
-    anstream::println!(
+    crate::say!();
+    crate::say!(
         "{}",
         style::dim(&format!(
             "A bare name is looked for in {}.",
@@ -851,7 +916,7 @@ pub fn test(context: &Context<'_>, name: Option<&str>) -> Outcome<Exit> {
     };
 
     if wanted.is_empty() {
-        anstream::println!(
+        crate::say!(
             "{}",
             style::dim("Nothing is registered, so nothing to test.")
         );
@@ -861,27 +926,42 @@ pub fn test(context: &Context<'_>, name: Option<&str>) -> Outcome<Exit> {
     // Like `backup --all`, a failure is reported and the run carries on: knowing that
     // four of five are fine is worth more than stopping at the first one that is not.
     let mut worst = Exit::Success;
+    let mut results = Vec::with_capacity(wanted.len());
 
     for (scope, name, database) in &wanted {
-        anstream::println!();
-        anstream::println!(
+        crate::say!();
+        crate::say!(
             "{}  {}  {}",
             style::paint(name),
             database.credential_key(),
             style::dim(scope.label())
         );
 
-        match connect(database, context, *scope) {
-            Ok(server) => announce_server(&server),
+        let reached = match connect(database, context, *scope) {
+            Ok(server) => {
+                announce_server(&server);
+                Some(server)
+            }
             Err(failure) => {
-                failure.report();
+                failure.mention();
                 if matches!(worst, Exit::Success) {
                     worst = failure.exit();
                 }
+                None
             }
-        }
+        };
+        results.push(serde_json::json!({
+            "name": name,
+            "registry": scope.label(),
+            "connection": database.credential_key(),
+            "reached": reached.is_some(),
+            "engine": reached.as_ref().map(|server| server.engine.to_string()),
+            "version": reached.as_ref().map(|server| server.version.to_string()),
+            "tls": reached.as_ref().map(|server| server.tls),
+        }));
     }
 
+    crate::report::result(serde_json::json!({ "tested": results }));
     Ok(worst)
 }
 
@@ -906,7 +986,7 @@ pub fn edit(
     let after = draft.into_database(route.clone())?;
 
     if after == before {
-        anstream::println!("{}", style::dim(&format!("{name} is already like that.")));
+        crate::say!("{}", style::dim(&format!("{name} is already like that.")));
         return Ok(Exit::Success);
     }
 
@@ -946,6 +1026,10 @@ pub fn edit(
         announce_server(&reached);
     }
 
+    if crate::report::would(&format!("change what {name} points at")) {
+        return Ok(Exit::Success);
+    }
+
     write(
         &mut context.registries,
         scope,
@@ -955,14 +1039,14 @@ pub fn edit(
         Retiring::between(&before, &after),
     )?;
 
-    anstream::println!(
+    crate::say!(
         "{} {} {}",
         style::paint("changed"),
         style::paint(name),
         style::dim(&format!("in the {} registry", scope.label()))
     );
-    anstream::println!("  {}", style::dim(&before.credential_key()));
-    anstream::println!("  {}", after.credential_key());
+    crate::say!("  {}", style::dim(&before.credential_key()));
+    crate::say!("  {}", after.credential_key());
     Ok(Exit::Success)
 }
 
@@ -993,18 +1077,24 @@ pub fn rename(context: &mut Context<'_>, from: &str, to: &str) -> Outcome<Exit> 
     // The qualifier is not part of the name on disk: `global:staging` names the entry
     // `staging`, and renaming it has to take the qualifier off first.
     let stored = crate::registry::Qualified::parse(from)?.name().to_owned();
+
+    if crate::report::would(&format!("rename {from} to {to}")) {
+        return Ok(Exit::Success);
+    }
+
     context
         .registries
         .update(scope, |registry| registry.rename(&stored, to.to_owned()))?;
 
-    anstream::println!(
+    crate::report::result(serde_json::json!({ "from": stored, "to": to }));
+    crate::say!(
         "{} {} {} {}",
         style::paint("renamed"),
         stored,
         style::dim("→"),
         style::paint(to)
     );
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim("the password is filed under the connection, so it did not move")
     );
@@ -1167,10 +1257,10 @@ fn secret_for(
         ) {
             Ok(resolved) => {
                 for note in &resolved.notes {
-                    anstream::eprintln!("{}", style::dim(note));
+                    crate::note!("{}", style::dim(note));
                 }
             }
-            Err(failure) => anstream::eprintln!(
+            Err(failure) => crate::note!(
                 "{}",
                 style::dim(&format!(
                     "note: {} — registered anyway, because {} is read on every run rather \
@@ -1187,7 +1277,7 @@ fn secret_for(
     if let Some(secret) = from_url {
         // Said plainly rather than refused. See the module comment: by the time this
         // runs, that password has already been in `ps` and is already in the history.
-        anstream::eprintln!(
+        crate::note!(
             "{}",
             style::dim(
                 "note: the password came from the URL, so it was visible in `ps` and is in \
@@ -1219,7 +1309,7 @@ fn secret_for(
     };
 
     for note in secret.notes() {
-        anstream::eprintln!("{}", style::dim(&note));
+        crate::note!("{}", style::dim(&note));
     }
 
     Ok(Some(secret))
@@ -1291,7 +1381,7 @@ fn connect(
         },
     )?;
     for note in &resolved.notes {
-        anstream::println!("  {}", style::dim(note));
+        crate::say!("  {}", style::dim(note));
     }
 
     super::adapter_for(database.engine, context.global).probe(&database.target(&resolved.secret))
@@ -1323,7 +1413,7 @@ fn probe(
 }
 
 fn announce_server(server: &crate::engine::ServerInfo) {
-    anstream::println!(
+    crate::say!(
         "  {} {}{}",
         style::paint(&format!("{}", server.engine)),
         server.version,
@@ -1369,7 +1459,7 @@ fn write(
     // lost password if the write then failed.
     if let Some(old) = retire {
         if let Err(failure) = forget(&old.route, &old.key, registries, scope) {
-            anstream::eprintln!(
+            crate::note!(
                 "{}",
                 style::dim(&format!(
                     "the password under the old key could not be removed: {}",
@@ -1463,13 +1553,13 @@ pub fn remove(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
     let (scope, record) = context.registries.find(name)?;
     let record = record.clone();
 
-    anstream::println!(
+    crate::say!(
         "{} {}  {}",
         style::dim("forgetting"),
         style::paint(name),
         style::dim(&record.credential_key())
     );
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "the {} registry, and the password kept in {}",
@@ -1477,13 +1567,17 @@ pub fn remove(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
             record.password.describe()
         ))
     );
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim("the database itself is not touched — that is `sloop db drop`")
     );
 
     if !context.consent.asked("Forget it?", "--yes")? {
-        anstream::println!("{}", style::dim("left alone."));
+        crate::say!("{}", style::dim("left alone."));
+        return Ok(Exit::Success);
+    }
+
+    if crate::report::would(&format!("forget {name}")) {
         return Ok(Exit::Success);
     }
 
@@ -1502,7 +1596,7 @@ pub fn remove(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
             &context.registries,
             scope,
         ) {
-            anstream::eprintln!(
+            crate::note!(
                 "{}",
                 style::dim(&format!(
                     "the record is gone; its password could not be removed: {}",
@@ -1512,7 +1606,8 @@ pub fn remove(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
         }
     }
 
-    anstream::println!("{} {}", style::paint("forgot"), style::paint(name));
+    crate::report::result(serde_json::json!({ "name": name, "forgotten": true }));
+    crate::say!("{} {}", style::paint("forgot"), style::paint(name));
     Ok(Exit::Success)
 }
 
@@ -1562,13 +1657,13 @@ pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
     let adapter = super::adapter_for(record.engine, context.global);
     let server = adapter.probe(&target)?;
 
-    anstream::println!(
+    crate::say!(
         "{} {}",
         style::paint("about to drop"),
         style::paint(&record.database)
     );
-    anstream::println!("  {}", style::dim(&key));
-    anstream::println!(
+    crate::say!("  {}", style::dim(&key));
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "{} {}, registered here as {name}",
@@ -1581,7 +1676,7 @@ pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
     // tables could not be listed would be the wrong way round.
     if let Ok(counts) = adapter.row_counts(&target) {
         let rows: u64 = counts.iter().map(|count| count.rows).sum();
-        anstream::println!(
+        crate::say!(
             "  {}",
             style::dim(&format!(
                 "{} table(s), {rows} row(s) — all of it",
@@ -1593,7 +1688,7 @@ pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
     // **Said once, plainly, and before the question.** Nothing is kept, so the only honest
     // thing to do is name the command that would have kept something while there is still
     // time to run it.
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "nothing is kept and this cannot be undone — `sloop backup {}` first if you \
@@ -1606,21 +1701,31 @@ pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
     // server rather than the label: the label is what sloop calls it, and the name is what
     // is about to stop existing.
     if !context.consent.typed(&destroying)?.granted() {
-        anstream::println!("{}", style::dim("left alone."));
+        crate::say!("{}", style::dim("left alone."));
+        return Ok(Exit::Success);
+    }
+
+    if crate::report::would(&format!("drop {}", target.describe())) {
         return Ok(Exit::Success);
     }
 
     let ended = adapter.terminate_connections(&target)?;
     if ended > 0 {
-        anstream::println!(
+        crate::say!(
             "  {}",
             style::dim(&format!("ended {ended} other connection(s)"))
         );
     }
 
     adapter.drop_database(&target)?;
-    anstream::println!("{} {}", style::paint("dropped"), record.database);
-    anstream::println!(
+    crate::report::result(serde_json::json!({
+        "name": name,
+        "database": record.database,
+        "dropped": true,
+        "connections_ended": ended,
+    }));
+    crate::say!("{} {}", style::paint("dropped"), record.database);
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "{name} is still registered and now points at nothing — `sloop db remove {}` \

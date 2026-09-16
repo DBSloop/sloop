@@ -56,6 +56,11 @@ pub struct Initialised {
 /// Create the registry, register the name, and say what happened.
 pub fn run(target: &Path, global: &Path) -> Outcome<()> {
     let report = create(target, global)?;
+    crate::report::result(serde_json::json!({
+        "project": report.project.display().to_string(),
+        "registry": report.registry.display().to_string(),
+        "existed": report.existed,
+    }));
     print(&report, global);
     Ok(())
 }
@@ -133,31 +138,31 @@ fn print(report: &Initialised, global: &Path) {
         "Project registry created"
     };
 
-    anstream::println!();
+    crate::say!();
     for line in wordmark::render(terminal_columns()).lines() {
         // One space, so the leftmost glyph of the block lands in the same column as
         // the text under it. The block is drawn flush left; everything else is not.
-        anstream::println!(" {line}");
+        crate::say!(" {line}");
     }
-    anstream::println!();
-    anstream::println!("  {}", style::heading(headline));
-    anstream::println!();
-    anstream::println!(
+    crate::say!();
+    crate::say!("  {}", style::heading(headline));
+    crate::say!();
+    crate::say!(
         "{}",
         row("registry", &report.registry.display().to_string())
     );
     for line in name_rows(&report.naming, &report.project) {
-        anstream::println!("{line}");
+        crate::say!("{line}");
     }
-    anstream::println!("{}", row("global", &global.display().to_string()));
-    anstream::println!();
-    anstream::println!(
+    crate::say!("{}", row("global", &global.display().to_string()));
+    crate::say!();
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "{PROJECT_DIR} ignores itself, so git will never see it."
         ))
     );
-    anstream::println!();
+    crate::say!();
 }
 
 fn name_rows(naming: &Naming, project: &Path) -> Vec<String> {

@@ -342,6 +342,40 @@ impl Comparison {
         self.failures().next().is_none()
     }
 
+    /// The same findings, as a `--json` run reports them.
+    ///
+    /// **One object per table, with the finding as a word.** A script that wants to know
+    /// whether a copy landed reads `ok` on the envelope; one that wants to know *which* table
+    /// drifted reads this, and a word it can match on is worth more than a sentence it has to
+    /// parse.
+    #[must_use]
+    pub fn as_json(&self) -> Vec<serde_json::Value> {
+        self.rows
+            .iter()
+            .map(|row| {
+                let (finding, source, destination) = match row.finding {
+                    Finding::Matched { rows } => ("matched", Some(rows), Some(rows)),
+                    Finding::Drifted {
+                        source,
+                        destination,
+                    } => ("drifted", Some(source), Some(destination)),
+                    Finding::Empty { source } => ("empty", Some(source), Some(0)),
+                    Finding::Missing { source } => ("missing", Some(source), None),
+                    Finding::OnlyInDestination { rows } => {
+                        ("only_in_destination", None, Some(rows))
+                    }
+                };
+                serde_json::json!({
+                    "table": row.table,
+                    "finding": finding,
+                    "source": source,
+                    "destination": destination,
+                    "counted": self.mode == Mode::Exact,
+                })
+            })
+            .collect()
+    }
+
     /// What the process exits with.
     ///
     /// `6` and not `1`: it finished, and then the counts disagreed. A scheduler reading
@@ -471,9 +505,9 @@ pub fn against(
 pub fn print(comparison: &Comparison) {
     let mut lines = comparison.describe().into_iter();
     if let Some(heading) = lines.next() {
-        anstream::println!("  {}", style::dim(&heading));
+        crate::say!("  {}", style::dim(&heading));
     }
     for line in lines {
-        anstream::println!("    {}", style::dim(&line));
+        crate::say!("    {}", style::dim(&line));
     }
 }

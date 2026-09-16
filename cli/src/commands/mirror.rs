@@ -50,7 +50,7 @@
 #[path = "mirror_tests.rs"]
 mod tests;
 
-use std::io::{IsTerminal as _, Write as _};
+use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 
 use crate::consent::{Consent, Destroying};
@@ -156,7 +156,7 @@ pub fn run(context: &mut Context<'_>, asked: &Mirroring<'_>) -> Outcome<Exit> {
         asked.create,
     )?
     else {
-        anstream::println!("{}", style::dim("left alone."));
+        crate::say!("{}", style::dim("left alone."));
         return Ok(Exit::Success);
     };
 
@@ -241,12 +241,11 @@ pub(super) fn decide(
 
 /// Ask which database this is going into. `None` when nothing was named.
 fn ask_where(source: &str) -> Outcome<Option<String>> {
-    anstream::print!(
+    crate::report::ask(&format!(
         "{} {} goes into which database? ",
         style::paint("?"),
         style::paint(source)
-    );
-    let _ = std::io::stdout().flush();
+    ));
 
     let mut given = String::new();
     std::io::stdin()
@@ -345,6 +344,12 @@ fn into_a_new_database(
     )?;
     let reading = reading.expect("the source is proved before anything is created");
 
+    // A rehearsal that never made the destination has nothing to copy into, and has already
+    // said what it would have made.
+    let Some(built) = built else {
+        return Ok(Exit::Success);
+    };
+
     // **No `Destroying`.** There is nothing in there to destroy — see the note at the top of
     // this module.
     copy(
@@ -387,7 +392,7 @@ pub(super) fn make_the_destination(
     consent: Consent<'_>,
     asked: &Making<'_>,
     prove_the_source: impl FnOnce(&mut Registries) -> Outcome<()>,
-) -> Outcome<db::Built> {
+) -> Outcome<Option<db::Built>> {
     let Making {
         source,
         from,
@@ -496,7 +501,7 @@ fn copy(
 ) -> Outcome<Exit> {
     let adapter = super::adapter_for(source_target.engine, context.global);
 
-    anstream::println!(
+    crate::say!(
         "{} {}",
         style::paint("mirroring"),
         style::dim(&format!(
@@ -526,14 +531,21 @@ fn copy(
 
     if let Some(destroying) = destroying {
         if !context.consent.typed(destroying)?.granted() {
-            anstream::println!("{}", style::dim("left alone."));
+            crate::say!("{}", style::dim("left alone."));
             return Ok(Exit::Success);
         }
     }
 
+    if crate::report::would(&format!(
+        "replace the contents of {}",
+        destination_target.describe()
+    )) {
+        return Ok(Exit::Success);
+    }
+
     let cleared = scope.clear(adapter.as_ref(), destination_target)?;
     if cleared > 0 {
-        anstream::println!(
+        crate::say!(
             "  {}",
             style::dim(&format!("cleared {}", plural(cleared, "table")))
         );
@@ -553,7 +565,7 @@ fn copy(
         scope.copy(adapter.as_ref(), source_target, destination_target)?;
         None
     };
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "copied in {:.1}s",
@@ -568,7 +580,7 @@ fn copy(
             .narrowed_to(|table| scope.covers(table)),
     );
     for line in comparison.describe() {
-        anstream::println!("  {}", style::dim(&line));
+        crate::say!("  {}", style::dim(&line));
     }
 
     // **The net goes only when the copy is proved.** `--safe` exists for the run that does
@@ -578,7 +590,7 @@ fn copy(
         if comparison.landed() {
             discard(&dump);
         } else {
-            anstream::eprintln!(
+            crate::note!(
                 "{}",
                 style::dim(&format!(
                     "--safe: the dump is kept at {} — the counts did not agree",
@@ -587,6 +599,16 @@ fn copy(
             );
         }
     }
+
+    crate::report::result(serde_json::json!({
+        "source": source_target.describe(),
+        "destination": destination_target.describe(),
+        "scoped": !matches!(scope, Chosen::Everything),
+        "cleared": cleared,
+        "seconds": started.elapsed().as_secs_f64(),
+        "verified": comparison.landed(),
+        "tables": comparison.as_json(),
+    }));
 
     Ok(comparison.exit())
 }
@@ -638,7 +660,7 @@ impl Chosen {
             return;
         };
 
-        anstream::println!(
+        crate::say!(
             "  {}",
             style::dim(&format!(
                 "only {}: {}",
@@ -650,7 +672,7 @@ impl Chosen {
                     .join(", ")
             ))
         );
-        anstream::println!(
+        crate::say!(
             "  {}",
             style::dim(
                 "those tables are dropped and recreated; everything else in the destination \
@@ -710,7 +732,7 @@ fn announce_both(
 ) -> Outcome<Side> {
     let from = adapter.probe(source)?;
     let into = adapter.probe(destination)?;
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "{} {} → {} {}",
@@ -723,7 +745,7 @@ fn announce_both(
     // numbers that were never meant to match.
     let before = Side::counted(adapter, source, mode)?.narrowed_to(|table| scope.covers(table));
     let rows: u64 = before.counts.iter().map(|count| count.rows).sum();
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "copying {}, {}",
@@ -762,7 +784,7 @@ fn through_a_file(
     })?;
 
     let dump = crate::backup::dump_file(&directory);
-    anstream::eprintln!(
+    crate::note!(
         "{}",
         style::dim(&format!(
             "--safe: dumping to {} first — it is not encrypted, and it goes when the counts \
@@ -779,13 +801,13 @@ fn through_a_file(
             return Err(failure);
         }
     };
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!("dumped {}", describe_bytes(summary.bytes)))
     );
 
     if let Err(failure) = adapter.restore(destination, &dump) {
-        anstream::eprintln!(
+        crate::note!(
             "{}",
             style::dim(&format!(
                 "--safe: the dump is kept at {} — the restore did not finish",
@@ -805,7 +827,7 @@ fn through_a_file(
 /// holding a plaintext dump, so it is never silent.
 fn discard(directory: &Path) {
     if let Err(error) = std::fs::remove_dir_all(directory) {
-        anstream::eprintln!(
+        crate::note!(
             "{}",
             style::dim(&format!(
                 "the temporary dump at {} could not be removed: {error}",
@@ -909,7 +931,7 @@ pub(super) fn secret_for(
         },
     )?;
     for note in &resolved.notes {
-        anstream::println!("  {}", style::dim(note));
+        crate::say!("  {}", style::dim(note));
     }
     Ok(resolved.secret)
 }
@@ -926,12 +948,12 @@ fn announce_destination(adapter: &dyn Adapter, target: &Target<'_>, scope: &Chos
         .filter(|count| scope.covers(&count.table))
         .collect();
     if existing.is_empty() {
-        anstream::println!("  {}", style::dim("the destination is empty"));
+        crate::say!("  {}", style::dim("the destination is empty"));
         return;
     }
 
     let rows: u64 = existing.iter().map(|count| count.rows).sum();
-    anstream::println!(
+    crate::say!(
         "  {}",
         style::dim(&format!(
             "replacing what the destination has now — {}, {}",
