@@ -333,10 +333,69 @@ machine, so a password passed that way has already been read by anyone who wante
 #[derive(Debug, Subcommand)]
 pub enum BackupsCommand {
     /// Show stored backups, newest first, in local time.
-    List,
-    /// Delete backups past the retention limit, after showing which ones.
-    Prune,
+    #[command(after_long_help = LIST_NOTES)]
+    List {
+        /// Only this database's backups. Every database when left out.
+        name: Option<String>,
+
+        /// Hash every dump and compare it with its manifest.
+        ///
+        /// Reads every byte of every backup, so it is a check somebody asks for rather
+        /// than something a listing does on the way past. Exits `6` on a mismatch.
+        #[arg(long)]
+        check: bool,
+    },
+
+    /// Delete backups past a retention limit, after showing which ones.
+    #[command(after_long_help = PRUNE_NOTES)]
+    Prune {
+        /// Only this database's backups. Every database when left out.
+        name: Option<String>,
+
+        /// Keep this many of the newest backups of each database.
+        #[arg(long, value_name = "N")]
+        keep: Option<usize>,
+
+        /// Remove backups older than this — `12h`, `30d`, `6w`.
+        #[arg(long, value_name = "AGE")]
+        older_than: Option<String>,
+
+        /// Show what would go, and remove nothing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Remove unfinished and damaged directories too.
+        ///
+        /// Left alone by default: a half-written dump is all somebody has if the disk
+        /// filled up mid-backup, and deciding that for them is not this command's to do.
+        #[arg(long)]
+        include_broken: bool,
+
+        /// Do not ask. The only way to prune without a terminal.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
+
+/// What `backups list --help` says under the flags.
+const LIST_NOTES: &str = "A backup is a directory with a manifest in it. The manifest is
+written last, so a directory without one is a run that did not finish — those are listed
+as unfinished and never counted as something a restore could use.
+
+Times are local, always. The directory names are UTC so that they sort.";
+
+/// What `backups prune --help` says under the flags.
+const PRUNE_NOTES: &str = "One rule at least, or both:
+
+  sloop backups prune --keep 7                keep the newest seven of each
+  sloop backups prune --older-than 30d        throw away last month
+  sloop backups prune --keep 7 --older-than 30d
+
+With both, `--keep` is a floor: a backup has to be past the newest seven *and* older than
+thirty days before it goes. That is the one a crontab wants — never leave me with fewer
+than seven, whatever the dates say.
+
+Nothing is deleted before you have seen the list. `--dry-run` stops there.";
 
 /// `sloop key …` — moving the one secret that restoring needs.
 #[derive(Debug, Subcommand)]
@@ -436,8 +495,8 @@ impl BackupsCommand {
     #[must_use]
     pub fn path(&self) -> &'static str {
         match self {
-            Self::List => "backups list",
-            Self::Prune => "backups prune",
+            Self::List { .. } => "backups list",
+            Self::Prune { .. } => "backups prune",
         }
     }
 }

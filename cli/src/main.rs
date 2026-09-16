@@ -25,7 +25,7 @@ use std::process::ExitCode;
 
 use clap::Parser as _;
 
-use crate::cli::{Cli, Command, DbCommand, KeyCommand};
+use crate::cli::{BackupsCommand, Cli, Command, DbCommand, KeyCommand};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::locations::Locations;
@@ -116,6 +116,14 @@ fn run(cli: &Cli) -> Outcome<Exit> {
                 return commands::backup::run(&mut context, name.as_deref(), *all);
             }
 
+            if let Some(Command::Backups { command }) = &cli.command {
+                let context = commands::backups::Context {
+                    registries,
+                    global: &global,
+                };
+                return backups(&context, command);
+            }
+
             if let Some(Command::Key { command }) = &cli.command {
                 let mut context = commands::key::Context {
                     registries,
@@ -151,6 +159,36 @@ fn run(cli: &Cli) -> Outcome<Exit> {
 
         Some(command) => Ok(unimplemented(&format!("'{}'", command.path()), None)),
         None => Ok(unimplemented("the interactive menu", None)),
+    }
+}
+
+/// Hand a `backups` subcommand its arguments.
+///
+/// The same reason `db` has one below: clap's shape is taken apart here, so nothing in
+/// `commands::backups` has to know what a derived enum looks like.
+fn backups(context: &commands::backups::Context<'_>, command: &BackupsCommand) -> Outcome<Exit> {
+    match command {
+        BackupsCommand::List { name, check } => {
+            commands::backups::list(context, name.as_deref(), *check)
+        }
+        BackupsCommand::Prune {
+            name,
+            keep,
+            older_than,
+            dry_run,
+            include_broken,
+            yes,
+        } => commands::backups::prune(
+            context,
+            &commands::backups::Pruning {
+                name: name.as_deref(),
+                keep: *keep,
+                older_than: older_than.as_deref(),
+                dry_run: *dry_run,
+                include_broken: *include_broken,
+                yes: *yes,
+            },
+        ),
     }
 }
 

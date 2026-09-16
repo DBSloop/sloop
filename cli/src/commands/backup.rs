@@ -549,7 +549,7 @@ fn fetched(context: &Context<'_>) -> PathBuf {
 }
 
 /// `1 table`, `2 tables`, `0 rows`.
-fn plural(count: u64, thing: &str) -> String {
+pub fn plural(count: u64, thing: &str) -> String {
     if count == 1 {
         format!("{count} {thing}")
     } else {
@@ -563,7 +563,7 @@ fn plural(count: u64, thing: &str) -> String {
 /// the last one rather than against a disk quota, so being exactly right about the unit
 /// matters less than the two numbers being comparable — but calling 1024 bytes a kilobyte
 /// in a tool that also prints a checksum would be sloppy in a place people look for rigour.
-fn describe_bytes(bytes: u64) -> String {
+pub fn describe_bytes(bytes: u64) -> String {
     #[allow(clippy::cast_precision_loss)]
     let mut size = bytes as f64;
     let mut unit = "B";

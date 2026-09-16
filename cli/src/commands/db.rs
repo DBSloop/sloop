@@ -856,7 +856,7 @@ pub fn remove(context: &mut Context<'_>, name: &str, yes: bool) -> Outcome<Exit>
         style::dim("the database itself is not touched — that is `sloop db drop`")
     );
 
-    if !confirmed(yes, "Forget it?", "--yes")? {
+    if !super::confirmed(yes, "Forget it?", "--yes")? {
         anstream::println!("{}", style::dim("left alone."));
         return Ok(Exit::Success);
     }
@@ -1087,36 +1087,6 @@ fn safety_backup(
 // ---------------------------------------------------------------------------------------
 // Asking
 // ---------------------------------------------------------------------------------------
-
-/// A yes-or-no question, for the things that do not destroy data.
-///
-/// Rule 4: with no terminal there is nobody to ask, so it exits `2` naming the flag that
-/// would have answered instead of waiting for somebody who is not there.
-fn confirmed(already: bool, question: &str, flag: &str) -> Outcome<bool> {
-    if already {
-        return Ok(true);
-    }
-    if !std::io::stdin().is_terminal() {
-        return Err(Failure::new(
-            Exit::Usage,
-            format!("{question} — and there is no terminal to ask at"),
-        )
-        .hint(format!("pass {flag} to answer it up front")));
-    }
-
-    anstream::print!("{} {question} ", style::paint("?"));
-    let _ = std::io::Write::flush(&mut std::io::stdout());
-
-    let mut answer = String::new();
-    std::io::stdin()
-        .read_line(&mut answer)
-        .map_err(|error| Failure::usage(format!("could not read the answer: {error}")))?;
-
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
-}
 
 /// The confirmation for something that destroys data: the name, typed out.
 ///

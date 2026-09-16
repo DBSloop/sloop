@@ -58,6 +58,51 @@ impl Stamp {
         self.seconds
     }
 
+    /// Read a directory name back into the moment it stands for.
+    ///
+    /// Exactly the shape [`Stamp::utc_path`] writes — `20260916T031500Z` — and nothing
+    /// else. `R12` needs it because a backup that died before its manifest was written has
+    /// nothing else left to say when it was taken, and "some time, unknown" is not what a
+    /// listing should print beside a directory that is about to be offered for deletion.
+    ///
+    /// **Validated by round-trip.** Every candidate is turned back into a path and compared
+    /// with what came in, so `20260231T000000Z` and `20261332T000000Z` are refused without
+    /// a calendar's worth of range checks: there is one calendar in this module and this is
+    /// it, asked the other way round.
+    #[must_use]
+    pub fn from_utc_path(name: &str) -> Option<Self> {
+        let bytes = name.as_bytes();
+        if bytes.len() != 16 || bytes[8] != b'T' || bytes[15] != b'Z' {
+            return None;
+        }
+
+        // `parse` alone would take `+3` as three. A backup directory is machine-written and
+        // every one of these positions is a digit or the name is not one of ours.
+        let digits = |range: std::ops::Range<usize>| -> Option<i64> {
+            let text = name.get(range)?;
+            text.bytes()
+                .all(|byte| byte.is_ascii_digit())
+                .then(|| text.parse().ok())
+                .flatten()
+        };
+
+        let year = digits(0..4)?;
+        let month = u32::try_from(digits(4..6)?).ok()?;
+        let day = u32::try_from(digits(6..8)?).ok()?;
+        let hour = digits(9..11)?;
+        let minute = digits(11..13)?;
+        let second = digits(13..15)?;
+
+        let stamp = Self {
+            seconds: days_from_civil(year, month, day) * 86_400
+                + hour * 3_600
+                + minute * 60
+                + second,
+        };
+
+        (stamp.utc_path() == name).then_some(stamp)
+    }
+
     /// `2026-09-16T03:15:00Z` — the same moment, for a file rather than a directory name.
     ///
     /// Full ISO 8601 with its separators, because a manifest is read by people and by
@@ -243,4 +288,27 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
         u32::try_from(month).unwrap_or(1),
         u32::try_from(day).unwrap_or(1),
     )
+}
+
+/// Turn a proleptic Gregorian date into days-since-1970.
+///
+/// Hinnant's `days_from_civil`, the exact inverse of [`civil_from_days`] above and the
+/// same shifted era: a four-hundred-year cycle starting on 1 March, so the leap day lands
+/// at the end of a cycle and February needs no special case. Kept beside its inverse
+/// rather than anywhere else, because the two share one constant — `719_468`, the days
+/// from 0000-03-01 to 1970-01-01 — and a copy of that number elsewhere is a bug waiting to
+/// be written.
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let month = i64::from(month);
+    let day = i64::from(day);
+
+    // January and February belong to the previous year of the shifted era.
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400; // [0, 399]
+    let month_prime = if month > 2 { month - 3 } else { month + 9 }; // March is 0
+    let day_of_year = (153 * month_prime + 2) / 5 + day - 1; // [0, 365]
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+
+    era * 146_097 + day_of_era - 719_468
 }

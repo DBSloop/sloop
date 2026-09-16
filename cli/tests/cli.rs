@@ -13,14 +13,7 @@ mod support;
 use support::Sandbox;
 
 /// Every command that will do something one day and does not yet.
-const STUBS: &[&[&str]] = &[
-    &["backups", "list"],
-    &["backups", "prune"],
-    &["restore"],
-    &["mirror"],
-    &["sync"],
-    &["uninstall"],
-];
+const STUBS: &[&[&str]] = &[&["restore"], &["mirror"], &["sync"], &["uninstall"]];
 
 /// Commands with a body. They move here one task at a time.
 ///
@@ -38,6 +31,8 @@ const IMPLEMENTED: &[&[&str]] = &[
     &["db", "remove"],
     &["db", "drop"],
     &["backup"],
+    &["backups", "list"],
+    &["backups", "prune"],
     &["key", "export"],
     &["key", "import"],
 ];

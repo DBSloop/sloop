@@ -24,6 +24,7 @@
 
 pub mod manifest;
 pub mod stamp;
+pub mod store;
 
 #[cfg(test)]
 mod tests;
