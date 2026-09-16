@@ -165,7 +165,22 @@ pub enum Command {
     },
 
     /// Merge a database into another, keeping rows the destination already had.
-    Sync,
+    #[command(after_long_help = SYNC_NOTES)]
+    Sync {
+        /// The registered database to copy from. Only ever read.
+        source: String,
+
+        /// The registered database to merge it into. Its rows are added to and replaced.
+        #[arg(long, value_name = "NAME")]
+        to: String,
+
+        /// Dump the source to a file first, so a merge that fails can be replayed.
+        ///
+        /// Off by default: a copy is not a backup and leaves nothing behind. While the merge
+        /// runs, the file is an unencrypted dump of the source on this machine's disk.
+        #[arg(long)]
+        safe: bool,
+    },
 
     /// Move the backup encryption key between machines.
     Key {
@@ -674,7 +689,7 @@ impl Command {
                 | Self::Backups { .. }
                 | Self::Restore { .. }
                 | Self::Mirror { .. }
-                | Self::Sync
+                | Self::Sync { .. }
                 | Self::Key { .. }
         )
     }
@@ -690,7 +705,7 @@ impl Command {
             Self::Backups { command } => command.path(),
             Self::Restore { .. } => "restore",
             Self::Mirror { .. } => "mirror",
-            Self::Sync => "sync",
+            Self::Sync { .. } => "sync",
             Self::Key { command } => command.path(),
             Self::Uninstall => "uninstall",
         }
@@ -814,6 +829,34 @@ localhost counts as 127.0.0.1.
 
 Exit 6 means the copy finished and then a table did not add up. A live source that
 changes while the dump runs is reported as drift rather than as a failure.";
+
+/// What `sync --help` says under the flags: what it keeps, and what it will not do.
+const SYNC_NOTES: &str =
+    "A merge, not a copy. Afterwards the destination holds everything the source holds, plus
+whatever it already had that the source does not:
+
+  rows the source has and the destination does not    inserted
+  rows both have                                      replaced with the source's
+  rows only the destination has                       kept, and reported
+
+  sloop sync live --to staging
+  sloop sync live --to staging --safe    # dump the source first, deleted once it adds up
+
+Tables are merged parents first, in an order worked out from their foreign keys. Two
+tables whose keys point at each other have no such order, and sync refuses rather than
+loading half of them.
+
+A table with no primary key is skipped and named. There is no way to tell which row is
+which without one, so a merge would insert every row again on the second run.
+
+Sequences and auto-increment counters are reset afterwards, above the rows that are now
+there — otherwise the next insert on the destination collides with a row this brought in.
+
+The source is only ever read. Not one statement sloop sends to it changes anything.
+
+Exit 6 means the merge finished and a table did not add up: the destination has to end
+with the rows it started with plus the ones that were new, and one that does not means
+something else was writing to it while this ran.";
 
 /// What `restore --help` says under the flags, because the order things happen in is the
 /// thing somebody about to run this needs to know.

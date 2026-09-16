@@ -37,13 +37,20 @@ use crate::failure::{Failure, Outcome};
 
 use super::privileges::{self, Finding, Report, Verdict, verdict_from};
 use super::{
-    Adapter, Capabilities, Engine, Provisioned, Provisioning, ServerInfo, Table, TableCount,
-    Target, Version,
+    Adapter, Capabilities, Engine, Merged, Provisioned, Provisioning, ServerInfo, Table,
+    TableCount, TableShape, Target, Version,
 };
 
 /// Long enough to cross a slow link, short enough that a scheduled run does not sit on a
 /// dead host until someone notices. Matches the PostgreSQL adapter.
 const CONNECT_TIMEOUT_SECONDS: &str = "10";
+
+/// The staging table a merge lands in. Temporary, so it belongs to the session and goes
+/// with it — a run that is killed leaves nothing to find.
+const STAGING: &str = "sloop_merging";
+
+/// How the counts a merge needs are picked out of everything else the client prints.
+const MARKER: &str = "sloop-merge";
 
 /// One encoding from end to end.
 ///
@@ -360,6 +367,157 @@ impl MysqlFamily {
             .filter(|line| !line.is_empty())
             .map(|line| line.split('\t').map(str::to_owned).collect())
             .collect())
+    }
+
+    /// Run a two-column query and gather the second column under the first.
+    ///
+    /// Every catalogue question a merge asks comes back this shape — a table name and one
+    /// of its columns, one row each, already in the order the answer has to keep.
+    fn gathered(
+        &self,
+        target: &Target<'_>,
+        sql: &str,
+    ) -> Outcome<std::collections::HashMap<String, Vec<String>>> {
+        let mut gathered: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for row in self.query(target, sql)? {
+            let (Some(table), Some(value)) = (row.first(), row.get(1)) else {
+                continue;
+            };
+            gathered
+                .entry(table.clone())
+                .or_default()
+                .push(value.clone());
+        }
+        Ok(gathered)
+    }
+
+    /// Land the source's rows in a temporary table, count what is about to happen, and
+    /// upsert.
+    ///
+    /// **`mysqldump`, one `INSERT` per row, rewritten to name the staging table.** The MySQL
+    /// family has no `COPY … TO STDOUT`: `SELECT … INTO OUTFILE` writes a file on the
+    /// *server*, and `LOAD DATA LOCAL INFILE` reads one on this machine. Both would leave
+    /// something behind, and a copy is not a backup. So the rows arrive as the statements
+    /// `mysqldump` already knows how to write, and the only thing changed on the way past is
+    /// which table they name.
+    ///
+    /// **Nothing that is not recognised is forwarded.** A line this code cannot account for
+    /// is refused rather than passed through, because "passed through" would mean writing an
+    /// unrewritten `INSERT` straight into the real table — the one outcome that has to be
+    /// impossible.
+    fn merge_through_a_temporary_table(
+        &self,
+        source: &Target<'_>,
+        destination: &Target<'_>,
+        shape: &TableShape,
+    ) -> Outcome<Merged> {
+        let table = quote_identifier(&shape.table.name);
+        let staging = quote_identifier(STAGING);
+        let (header, footer) = merge_script(shape, &table, &staging);
+
+        let mut dumping = self.spawn(&self.tools.dump, source);
+        dumping
+            .args(Self::connection_args(source))
+            .arg("--single-transaction")
+            .arg("--hex-blob")
+            // No schema, one statement per row, every column named: the three flags that
+            // together make the output something a line at a time can be rewritten.
+            .arg("--no-create-info")
+            .arg("--complete-insert")
+            .arg("--skip-extended-insert")
+            .arg("--skip-add-locks")
+            .arg("--skip-disable-keys")
+            .arg("--skip-comments");
+        dumping.args(&self.flags().dump);
+        dumping.arg(source.database).arg(&shape.table.name);
+
+        let mut reading = dumping
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| self.missing_tool(&self.tools.dump, &error))?;
+
+        let mut writing = self
+            .spawn(&self.tools.client, destination)
+            .args(Self::connection_args(destination))
+            .arg(format!("--connect-timeout={CONNECT_TIMEOUT_SECONDS}"))
+            .arg(format!("--database={}", destination.database))
+            .arg("--batch")
+            .arg("--skip-column-names")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                let _ = reading.kill();
+                let _ = reading.wait();
+                self.missing_tool(&self.tools.client, &error)
+            })?;
+
+        let mut source_said = reading.stderr.take().expect("stderr was piped");
+        let source_saying = std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = Read::read_to_end(&mut source_said, &mut said);
+            said
+        });
+
+        let rewritten = {
+            let mut sink = writing.stdin.take().expect("stdin was piped");
+            let rows = reading.stdout.take().expect("stdout was piped");
+            let streamed = sink
+                .write_all(header.as_bytes())
+                .map_err(|error| error.to_string())
+                .and_then(|()| rewrite_inserts(rows, &mut sink, &table, &staging))
+                .and_then(|()| {
+                    sink.write_all(footer.as_bytes())
+                        .map_err(|error| error.to_string())
+                });
+            // Dropped here, so the client sees the end of the script rather than waiting.
+            drop(sink);
+            streamed
+        };
+
+        let written = writing.wait_with_output().map_err(|error| {
+            Failure::new(
+                Exit::Restore,
+                format!("{} would not finish: {error}", self.tools.client.display()),
+            )
+        })?;
+        let read = reading.wait().map_err(|error| {
+            Failure::new(
+                Exit::Dump,
+                format!("{} would not finish: {error}", self.tools.dump.display()),
+            )
+        })?;
+        let complained =
+            String::from_utf8_lossy(&source_saying.join().unwrap_or_default()).into_owned();
+
+        // The source's complaint outranks the destination's: a client fed half a script
+        // fails at the script, which is the symptom rather than the cause.
+        if !read.success() {
+            return Err(from_stderr(
+                &self.tools.dump,
+                &complained,
+                Exit::Dump,
+                source,
+            ));
+        }
+        if !written.status.success() {
+            return Err(from_tool(
+                &self.tools.client,
+                &written,
+                Exit::Restore,
+                destination,
+            ));
+        }
+        rewritten.map_err(|why| Failure::new(Exit::Restore, why))?;
+
+        Merged::from_markers(
+            &shape.table,
+            &String::from_utf8_lossy(&written.stdout),
+            "\t",
+        )
     }
 
     /// Refuse a server of the other family.
@@ -823,6 +981,96 @@ impl Adapter for MysqlFamily {
         }
 
         Ok(())
+    }
+
+    fn shapes(&self, target: &Target<'_>) -> Outcome<Vec<TableShape>> {
+        // **Four questions, four round trips — not four per table.** `GROUP_CONCAT` would
+        // have made it one, and would also have truncated silently at
+        // `group_concat_max_len`, which is 1024 bytes by default. A wide table would come
+        // back with half its columns and the merge would quietly drop the rest.
+        let tables = self.tables(target)?;
+        let columns = self.gathered(target, COLUMNS_SQL)?;
+        let keys = self.gathered(target, PRIMARY_KEYS_SQL)?;
+        let parents = self.gathered(target, FOREIGN_KEYS_SQL)?;
+
+        Ok(tables
+            .into_iter()
+            .map(|table| TableShape {
+                columns: columns.get(&table.name).cloned().unwrap_or_default(),
+                primary_key: keys.get(&table.name).cloned().unwrap_or_default(),
+                references: parents
+                    .get(&table.name)
+                    .map(|named| {
+                        named
+                            .iter()
+                            .map(|name| Table {
+                                schema: table.schema.clone(),
+                                name: name.clone(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                // **Never true here.** `AUTO_INCREMENT` takes an explicit value without
+                // being asked, so there is nothing for a merge to override — the flag
+                // exists for PostgreSQL's `GENERATED ALWAYS AS IDENTITY`, which refuses one.
+                server_assigned: false,
+                table,
+            })
+            .collect())
+    }
+
+    fn merge_table(
+        &self,
+        source: &Target<'_>,
+        destination: &Target<'_>,
+        shape: &TableShape,
+    ) -> Outcome<Merged> {
+        self.merge_through_a_temporary_table(source, destination, shape)
+            .map_err(|failure| failure.prefixed(&shape.table))
+    }
+
+    fn reset_sequences(&self, target: &Target<'_>) -> Outcome<Vec<String>> {
+        // Which tables even have a counter. `EXTRA` is where the MySQL family records it,
+        // and a table without one has nothing to reset.
+        let counted = self
+            .query(target, AUTO_INCREMENT_TABLES_SQL)
+            .map_err(|failure| failure.at(Exit::Restore))?;
+
+        let mut moved = Vec::new();
+        for row in &counted {
+            let (Some(table), Some(column)) = (row.first(), row.get(1)) else {
+                continue;
+            };
+
+            // `max + 1`, read from the rows that are actually there. InnoDB usually moves
+            // its own counter past an explicit insert, but "usually" is not something a
+            // merge can hand to whatever inserts next.
+            let highest = self.query(
+                target,
+                &format!(
+                    "SELECT coalesce(MAX({}), 0) + 1 FROM {}",
+                    quote_identifier(column),
+                    quote_identifier(table)
+                ),
+            )?;
+            let next: u64 = highest
+                .first()
+                .and_then(|row| row.first())
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(1);
+
+            self.query(
+                target,
+                &format!(
+                    "ALTER TABLE {} AUTO_INCREMENT = {next}",
+                    quote_identifier(table)
+                ),
+            )
+            .map_err(|failure| failure.at(Exit::Restore))?;
+            moved.push(format!("{table}.{column} now hands out {next} next"));
+        }
+
+        Ok(moved)
     }
 
     fn provision(&self, target: &Target<'_>, asked: &Provisioning<'_>) -> Outcome<Provisioned> {
@@ -1532,6 +1780,163 @@ impl MysqlFamily {
 ///
 /// MySQL has no schemas: a database is the schema, which is why `TABLE_SCHEMA` lands in
 /// [`Table::schema`] and the two engines share one type.
+/// The two halves of the script a merge runs on the destination, with the rows in between.
+///
+/// **Separate from the plumbing that runs it**, for the same reason as PostgreSQL's: one
+/// half is about quoting and SQL, the other about pipes and which child's complaint
+/// outranks which.
+fn merge_script(shape: &TableShape, table: &str, staging: &str) -> (String, String) {
+    let columns: Vec<String> = shape
+        .columns
+        .iter()
+        .map(|name| quote_identifier(name))
+        .collect();
+    let listed = columns.join(", ");
+    let keys: Vec<String> = shape
+        .primary_key
+        .iter()
+        .map(|name| quote_identifier(name))
+        .collect();
+    let matching = keys
+        .iter()
+        .map(|key| format!("d.{key} = s.{key}"))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+
+    // A table that is nothing but its key has nothing to replace, and `ON DUPLICATE KEY
+    // UPDATE` needs at least one assignment — so the key is assigned to itself, which is
+    // MySQL's own idiom for "leave the row alone".
+    let replaced: Vec<String> = columns
+        .iter()
+        .filter(|column| !keys.contains(column))
+        .map(|column| format!("{column} = VALUES({column})"))
+        .collect();
+    let resolution = if replaced.is_empty() {
+        keys.first()
+            .map(|key| format!("{key} = {key}"))
+            .unwrap_or_default()
+    } else {
+        replaced.join(", ")
+    };
+
+    let counted = |name: &str, what: &str| {
+        format!(
+            "SELECT {}, {}, ({what});\n",
+            sql_literal(MARKER),
+            sql_literal(name)
+        )
+    };
+
+    let header = format!("START TRANSACTION;\nCREATE TEMPORARY TABLE {staging} LIKE {table};\n");
+    let footer = format!(
+        "{loaded}{before}{matched}{kept}\
+         INSERT INTO {table} ({listed}) SELECT {listed} FROM {staging} \
+         ON DUPLICATE KEY UPDATE {resolution};\n\
+         {after}\
+         DROP TEMPORARY TABLE {staging};\n\
+         COMMIT;\n",
+        loaded = counted("loaded", &format!("SELECT COUNT(*) FROM {staging}")),
+        before = counted("before", &format!("SELECT COUNT(*) FROM {table}")),
+        matched = counted(
+            "matched",
+            &format!(
+                "SELECT COUNT(*) FROM {table} d \
+                 WHERE EXISTS (SELECT 1 FROM {staging} s WHERE {matching})"
+            )
+        ),
+        kept = counted(
+            "kept",
+            &format!(
+                "SELECT COUNT(*) FROM {table} d \
+                 WHERE NOT EXISTS (SELECT 1 FROM {staging} s WHERE {matching})"
+            )
+        ),
+        after = counted("after", &format!("SELECT COUNT(*) FROM {table}")),
+    );
+
+    (header, footer)
+}
+
+/// Every column a merge carries, in the order the table declares them.
+///
+/// **Generated columns are left out.** MySQL computes them from the others and refuses a
+/// value for one outright, so carrying it would turn every merge of that table into an
+/// error. `EXTRA` is where both `VIRTUAL GENERATED` and `STORED GENERATED` are recorded —
+/// and also `auto_increment`, which is kept, because a merge exists to carry keys.
+const COLUMNS_SQL: &str = "\
+SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS \
+WHERE TABLE_SCHEMA = DATABASE() AND coalesce(EXTRA, '') NOT LIKE '%GENERATED%' \
+ORDER BY TABLE_NAME, ORDINAL_POSITION";
+
+/// What makes a row the same row. `PRIMARY` is the fixed name of a primary key here.
+const PRIMARY_KEYS_SQL: &str = "\
+SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.STATISTICS \
+WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME = 'PRIMARY' \
+ORDER BY TABLE_NAME, SEQ_IN_INDEX";
+
+/// What has to exist before a row can.
+///
+/// A table pointing at itself is excluded: an employee with a manager is ordinary, is not
+/// the cycle `sync` refuses, and the rows inside one table arrive in one statement anyway.
+/// A key pointing out of this database is excluded too — sync copies one database.
+const FOREIGN_KEYS_SQL: &str = "\
+SELECT DISTINCT TABLE_NAME, REFERENCED_TABLE_NAME FROM information_schema.KEY_COLUMN_USAGE \
+WHERE TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_SCHEMA = DATABASE() \
+AND REFERENCED_TABLE_NAME IS NOT NULL AND REFERENCED_TABLE_NAME <> TABLE_NAME \
+ORDER BY 1, 2";
+
+/// The tables that hand out numbers, and the column that gets them.
+const AUTO_INCREMENT_TABLES_SQL: &str = "\
+SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS \
+WHERE TABLE_SCHEMA = DATABASE() AND EXTRA LIKE '%auto_increment%' \
+ORDER BY 1";
+
+/// Point `mysqldump`'s inserts at the staging table, and refuse anything else.
+///
+/// **The one thing that must be impossible is forwarding an `INSERT` unchanged**, because
+/// that writes into the real table and skips the merge entirely. So the rule runs the other
+/// way round from the usual filter: a line is forwarded only when this code knows exactly
+/// what it is.
+///
+/// Three kinds of line are known. An `INSERT INTO <table> …` whose table is the one being
+/// merged, which is rewritten. A `/*!… */;` conditional comment, which is how `mysqldump`
+/// sets the session's character set and time zone — dropping those is how a `TIMESTAMP`
+/// silently moves by the offset between two machines. And blank lines.
+fn rewrite_inserts(
+    rows: impl Read,
+    sink: &mut impl Write,
+    table: &str,
+    staging: &str,
+) -> Result<(), String> {
+    let wanted = format!("INSERT INTO {table} ");
+    let replacement = format!("INSERT INTO {staging} ");
+
+    for line in std::io::BufReader::new(rows).lines() {
+        let line = line.map_err(|error| format!("the rows stopped arriving: {error}"))?;
+        let trimmed = line.trim_start();
+
+        let forwarded = if let Some(rest) = trimmed.strip_prefix(&wanted) {
+            format!("{replacement}{rest}")
+        } else if trimmed.is_empty() {
+            continue;
+        } else if trimmed.starts_with("/*!") && trimmed.ends_with("*/;") {
+            line.clone()
+        } else {
+            return Err(format!(
+                "the dump of {table} had a line this build does not recognise, so nothing \
+                 was written: {}",
+                trimmed.chars().take(60).collect::<String>()
+            ));
+        };
+
+        sink.write_all(forwarded.as_bytes())
+            .and_then(|()| sink.write_all(b"\n"))
+            .map_err(|error| format!("the rows stopped moving: {error}"))?;
+    }
+
+    Ok(())
+}
+
 const TABLES_SQL: &str = "\
 SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES \
 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' \

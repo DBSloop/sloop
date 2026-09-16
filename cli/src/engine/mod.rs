@@ -277,7 +277,7 @@ pub struct ServerInfo {
 ///
 /// MySQL has no schemas and uses the database name in that position, which keeps one type
 /// honest across all three engines instead of two nearly-identical ones.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Table {
     /// The schema it lives in.
     pub schema: String,
@@ -298,6 +298,133 @@ pub struct TableCount {
     pub table: Table,
     /// `count(*)`, never an estimate.
     pub rows: u64,
+}
+
+/// A table as a merge has to understand it.
+///
+/// **Three questions, asked once.** What columns to carry, what makes a row the same row,
+/// and what has to exist before it can. `sync` needs all three of every table before it
+/// moves one row, because the order the tables go in is a property of the set rather than
+/// of any one of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableShape {
+    /// Which table.
+    pub table: Table,
+    /// Its columns, in the order the engine reports them.
+    pub columns: Vec<String>,
+    /// Whether the server assigns a value to some column by itself and has to be told to
+    /// take the source's instead.
+    ///
+    /// PostgreSQL's `GENERATED ALWAYS AS IDENTITY` refuses an explicit value outright; the
+    /// MySQL family's `AUTO_INCREMENT` accepts one without being asked. The neutral fact is
+    /// the one worth carrying, and each adapter spells the remedy its own way.
+    pub server_assigned: bool,
+    /// The columns of its primary key, or empty where it has none.
+    ///
+    /// **Empty is not an error here.** A table with no primary key has no definition of
+    /// "the same row", so there is nothing a merge could replace — `sync` skips it and says
+    /// so, which is a decision for the command rather than for the adapter.
+    pub primary_key: Vec<String>,
+    /// The tables its foreign keys point at, itself excluded.
+    ///
+    /// A self-reference is left out deliberately: a table that points at itself is ordinary
+    /// — an employee with a manager — and is not the cycle `sync` refuses. Rows inside one
+    /// table are loaded in one statement, so the order within it never arises.
+    pub references: Vec<Table>,
+}
+
+/// What merging one table did.
+///
+/// **Every number is counted, not inferred**, which is the same rule `verify` runs under:
+/// `loaded` and `matched` are `count(*)` against the staging table, and `before` and `after`
+/// are `count(*)` against the destination. That is what makes `after == before + inserted`
+/// an invariant a run can be failed on rather than a hope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Merged {
+    /// Which table.
+    pub table: Table,
+    /// Rows read from the source.
+    pub loaded: u64,
+    /// Rows the destination did not have, and now does.
+    pub inserted: u64,
+    /// Rows the destination already had, now holding what the source holds.
+    pub updated: u64,
+    /// Rows in the destination that the source has none of. **Kept**, and reported.
+    pub kept: u64,
+    /// The destination's `count(*)` before.
+    pub before: u64,
+    /// The destination's `count(*)` after.
+    pub after: u64,
+}
+
+impl Merged {
+    /// Did the destination gain exactly the rows that were new, and lose none?
+    ///
+    /// The one thing a merge promises that arithmetic can check: nothing was deleted, and
+    /// nothing arrived that was not counted on the way in.
+    #[must_use]
+    pub const fn adds_up(&self) -> bool {
+        self.after == self.before + self.inserted
+    }
+
+    /// Read the numbers a merge script printed about itself.
+    ///
+    /// **Labelled rows, read by name.** The script that does the merge emits one row per
+    /// number — `sloop-merge<sep>loaded<sep>500` — because the MySQL family cannot name a
+    /// temporary table twice in one query and a single wide row would therefore have been a
+    /// PostgreSQL-only shape. Reading by name also means a line of output arriving in a
+    /// different order, or a notice landing between two of them, changes nothing.
+    ///
+    /// **A missing number is a failure, not a zero.** The client exited successfully, so the
+    /// script ran; a marker that is not there means the output was not what this code thinks
+    /// it was, and answering "0 rows merged, all fine" would be the worst reading of that.
+    pub fn from_markers(table: &Table, said: &str, separator: &str) -> Outcome<Self> {
+        /// The label every one of those rows starts with.
+        const MARKER: &str = "sloop-merge";
+
+        let mut found: Vec<(String, u64)> = Vec::new();
+        for line in said.lines() {
+            let Some(rest) = line.trim_end().strip_prefix(MARKER) else {
+                continue;
+            };
+            let mut parts = rest.split(separator).filter(|part| !part.is_empty());
+            if let (Some(name), Some(value)) = (parts.next(), parts.next())
+                && let Ok(number) = value.trim().parse()
+            {
+                found.push((name.trim().to_owned(), number));
+            }
+        }
+
+        let read = |name: &str| {
+            found
+                .iter()
+                .find(|(found, _)| found == name)
+                .map(|(_, value)| *value)
+                .ok_or_else(|| {
+                    Failure::new(
+                        Exit::Restore,
+                        format!(
+                            "the merge of {table} finished without saying how many rows {name}"
+                        ),
+                    )
+                    .hint("this is a bug in sloop rather than in the database; please report it")
+                })
+        };
+
+        let loaded = read("loaded")?;
+        let matched = read("matched")?;
+        Ok(Self {
+            table: table.clone(),
+            loaded,
+            // `matched` is what the destination already had, so the rest of what was loaded
+            // is what it did not.
+            inserted: loaded.saturating_sub(matched),
+            updated: matched,
+            kept: read("kept")?,
+            before: read("before")?,
+            after: read("after")?,
+        })
+    }
 }
 
 /// What an engine can and cannot do, said out loud.
@@ -472,6 +599,51 @@ pub trait Adapter {
     /// **The source is only ever read**, exactly as in [`Adapter::dump_into`]. What changes
     /// is the destination, and only its contents.
     fn copy_into(&self, source: &Target<'_>, destination: &Target<'_>) -> Outcome<()>;
+
+    /// The shape of every table: its columns, its primary key, and what it points at.
+    ///
+    /// **Everything `sync` needs to plan a merge, in one round trip per question rather than
+    /// one per table.** A database with three hundred tables would otherwise be nine hundred
+    /// connections' worth of catalogue queries before a single row moved.
+    ///
+    /// Read from the **source**, because the source is what is being copied — a destination
+    /// column the source has never heard of is not in the merge and is not touched.
+    fn shapes(&self, target: &Target<'_>) -> Outcome<Vec<TableShape>>;
+
+    /// Merge one table's rows from `source` into `destination`.
+    ///
+    /// **Rows added, rows already there replaced, rows only the destination has kept.** That
+    /// is the whole difference from [`Adapter::copy_into`], and it is why this is one method
+    /// per engine rather than something a caller assembles: PostgreSQL merges with `COPY`
+    /// into a temporary table and `INSERT … ON CONFLICT`, the MySQL family with a stream of
+    /// single-row inserts and `ON DUPLICATE KEY UPDATE`, and neither spelling survives being
+    /// written in terms of the other.
+    ///
+    /// **Through a temporary table, always**, and never straight into the real one. The
+    /// staging table belongs to the session, so a run that is killed halfway leaves nothing
+    /// behind to find — and it is what makes the numbers in [`Merged`] countable rather than
+    /// estimated.
+    ///
+    /// **The source is only ever read**, rule 6. The only statement this sends to it is one
+    /// `SELECT`.
+    fn merge_table(
+        &self,
+        source: &Target<'_>,
+        destination: &Target<'_>,
+        shape: &TableShape,
+    ) -> Outcome<Merged>;
+
+    /// Put every sequence and identity column back above the rows that are now there.
+    ///
+    /// **A merge inserts explicit keys, and a sequence does not notice.** Copy a table whose
+    /// `id` runs to 500 into a destination whose sequence is sitting at 7, and the next
+    /// insert on the destination collides with row 7 — which is a failure that shows up
+    /// later, in someone else's application, with nothing pointing back at the sync that
+    /// caused it. So the sequences are reset at the end of every run, and what was reset is
+    /// printed.
+    ///
+    /// Returns what it moved, in the engine's own words, for printing.
+    fn reset_sequences(&self, target: &Target<'_>) -> Outcome<Vec<String>>;
 
     /// Create a role, a database it owns, and the grants that make the two usable.
     ///

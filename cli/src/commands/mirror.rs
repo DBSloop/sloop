@@ -266,8 +266,18 @@ fn into_a_registered_database(
     };
     context.consent.checked_early(&destroying)?;
 
-    let reading = secret_for(context, from_scope, from)?;
-    let writing = secret_for(context, into_scope, &into)?;
+    let reading = secret_for(
+        &context.registries,
+        context.password_command,
+        from_scope,
+        from,
+    )?;
+    let writing = secret_for(
+        &context.registries,
+        context.password_command,
+        into_scope,
+        &into,
+    )?;
 
     copy(
         context,
@@ -305,6 +315,7 @@ fn into_a_new_database(
         &proposed.host,
         proposed.port,
         &proposed.database,
+        MIRRORING_ITSELF,
     )?;
 
     let building = db::Building {
@@ -327,7 +338,12 @@ fn into_a_new_database(
     // flags costs nothing, so it goes first.
     db::unattended_needs(&building)?;
 
-    let reading = secret_for(context, from_scope, from)?;
+    let reading = secret_for(
+        &context.registries,
+        context.password_command,
+        from_scope,
+        from,
+    )?;
     super::adapter_for(from.engine, context.global).probe(&from.target(&reading))?;
 
     let built = db::build(
@@ -619,8 +635,13 @@ fn refuse_a_self_mirror(
         &into.host,
         into.port,
         &into.database,
+        MIRRORING_ITSELF,
     )
 }
+
+/// What a mirror onto itself would have done, which is the half worth reading.
+const MIRRORING_ITSELF: &str =
+    "a mirror drops the destination's contents, so this would destroy the source";
 
 /// The same guard, against a destination that may not exist yet.
 ///
@@ -628,13 +649,18 @@ fn refuse_a_self_mirror(
 /// to compare against — only the host, port and name the new database is *going* to have. So
 /// the comparison takes those three rather than a second [`Database`], and the guard is one
 /// implementation serving both paths instead of a copy for each.
-fn refuse_the_same_connection(
+///
+/// `consequence` is what the caller would have done, because that is the half of the message
+/// worth reading: a mirror onto itself destroys the source, and a sync onto itself merely
+/// wastes an afternoon. `sync` is the third caller — see [`super::sync`].
+pub(super) fn refuse_the_same_connection(
     source: &str,
     from: &Database,
     destination: &str,
     host: &str,
     port: u16,
     database: &str,
+    consequence: &str,
 ) -> Outcome<()> {
     if from.port != port || from.database != database || !same_host(&from.host, host) {
         return Ok(());
@@ -650,7 +676,7 @@ fn refuse_the_same_connection(
             &from.database
         )
     ))
-    .hint("a mirror drops the destination's contents, so this would destroy the source"))
+    .hint(consequence))
 }
 
 /// Is this the same machine, however the two were spelled?
@@ -663,10 +689,19 @@ fn same_host(one: &str, two: &str) -> bool {
 }
 
 /// Resolve one end's password through whichever of the four routes its record names.
-fn secret_for(context: &Context<'_>, scope: Scope, record: &Database) -> Outcome<Secret> {
+///
+/// **The pieces rather than a [`Context`]**, because `sync` holds a context of its own shape
+/// and needs exactly this: the registries the record came out of, and whatever
+/// `--password-command` said.
+pub(super) fn secret_for(
+    registries: &Registries,
+    password_command: Option<&str>,
+    scope: Scope,
+    record: &Database,
+) -> Outcome<Secret> {
     let key = record.credential_key();
-    let route = record.password.overridden_by(context.password_command);
-    let sealed = context.registries.sealed_in(scope).unwrap_or_default();
+    let route = record.password.overridden_by(password_command);
+    let sealed = registries.sealed_in(scope).unwrap_or_default();
     let resolved = resolve(
         &route,
         &Lookup {

@@ -112,8 +112,25 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
     // a copy per command drifting apart. See `consent`.
     let consent = Consent::given(cli.yes, cli.force, cli.confirm.as_deref());
 
+    dispatch(cli, &global, &resolution, registries, consent, command)
+}
+
+/// Which command, now that everything every command needs has been worked out.
+///
+/// **Split from [`with_registry`] because the two do different jobs.** Above is the part
+/// that can fail before a command is even chosen — an unreadable registry, a project that is
+/// not there. This is the switchboard, and it stays a flat list so that adding a command is
+/// adding one entry rather than finding somewhere to put it.
+fn dispatch(
+    cli: &Cli,
+    global: &Path,
+    resolution: &registry::Resolution,
+    registries: Registries,
+    consent: Consent<'_>,
+    command: &Command,
+) -> Outcome<Exit> {
     if let Some(Command::Doctor { offline }) = &cli.command {
-        return Ok(doctor(cli, &global, &resolution, &registries, *offline));
+        return Ok(doctor(cli, global, resolution, &registries, *offline));
     }
 
     if let Some(Command::Backup {
@@ -125,7 +142,7 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
     {
         let mut context = commands::backup::Context {
             registries,
-            global: &global,
+            global,
             password_command: cli.password_command.as_deref(),
         };
         return backup(&mut context, name.as_deref(), *all, *replace);
@@ -133,21 +150,24 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
 
     if let Some(Command::Backups { command }) = &cli.command {
         let context = commands::backups::Context {
-            consent,
             registries,
-            global: &global,
+            global,
+            consent,
         };
         return backups(&context, command);
     }
 
     if let Some(Command::Restore { name, from }) = &cli.command {
-        let context = commands::restore::Context {
-            registries,
-            global: &global,
-            password_command: cli.password_command.as_deref(),
-            consent,
-        };
-        return commands::restore::run(&context, name, from.as_deref());
+        return commands::restore::run(
+            &commands::restore::Context {
+                registries,
+                global,
+                password_command: cli.password_command.as_deref(),
+                consent,
+            },
+            name,
+            from.as_deref(),
+        );
     }
 
     if let Some(Command::Mirror {
@@ -160,7 +180,7 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
     {
         let mut context = commands::mirror::Context {
             registries,
-            global: &global,
+            global,
             password_command: cli.password_command.as_deref(),
             consent,
         };
@@ -174,15 +194,22 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
         );
     }
 
+    if let Some(Command::Sync { source, to, safe }) = &cli.command {
+        return commands::sync::run(
+            &commands::sync::Context {
+                registries,
+                global,
+                password_command: cli.password_command.as_deref(),
+                consent,
+            },
+            source,
+            to,
+            *safe,
+        );
+    }
+
     if let Some(Command::Key { command }) = &cli.command {
-        let mut context = commands::key::Context {
-            registries,
-            global: &global,
-        };
-        return match command {
-            KeyCommand::Export => commands::key::export(&mut context),
-            KeyCommand::Import => commands::key::import(&mut context),
-        };
+        return key(&mut commands::key::Context { registries, global }, command);
     }
 
     if let Some(Command::Db { command }) = &cli.command {
@@ -190,7 +217,7 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
             consent,
             registries,
             password_command: cli.password_command.as_deref(),
-            global: &global,
+            global,
         };
         return db(&mut context, command);
     }
@@ -198,10 +225,10 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
     Ok(unimplemented(
         &format!("'{}'", command.path()),
         Some(&[
-            format!("It would have read {}.", resolution.describe(&global)),
+            format!("It would have read {}.", resolution.describe(global)),
             format!(
                 "A name would be looked for in {}.",
-                resolution.describe_lookup(&global)
+                resolution.describe_lookup(global)
             ),
             describe_registry(&registries, cli.password_command.as_deref()),
         ]),
@@ -304,6 +331,14 @@ fn mirror(
             new: new.into(),
         },
     )
+}
+
+/// Hand a `key` subcommand its arguments.
+fn key(context: &mut commands::key::Context<'_>, command: &KeyCommand) -> Outcome<Exit> {
+    match command {
+        KeyCommand::Export => commands::key::export(context),
+        KeyCommand::Import => commands::key::import(context),
+    }
 }
 
 /// Hand a `db` subcommand its arguments.

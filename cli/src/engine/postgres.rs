@@ -21,12 +21,25 @@ use crate::failure::{Failure, Outcome};
 
 use super::privileges::{self, Finding, Report, Verdict, verdict_from};
 use super::{
-    Adapter, Capabilities, Engine, Provisioned, Provisioning, ServerInfo, Table, TableCount,
-    Target, Version,
+    Adapter, Capabilities, Engine, Merged, Provisioned, Provisioning, ServerInfo, Table,
+    TableCount, TableShape, Target, Version,
 };
 
 /// A separator that cannot turn up inside an identifier or a number.
 const FIELD: &str = "\u{1f}";
+
+/// The separator *inside* one of those fields, for a column list gathered into one value.
+const INNER: &str = "\u{1e}";
+
+/// And the one between a schema and a table name inside an entry of such a list.
+const PAIR: &str = "\u{1d}";
+
+/// The staging table a merge lands in. Temporary, so it belongs to the session and goes
+/// with it — a run that is killed leaves nothing to find.
+const STAGING: &str = "sloop_merging";
+
+/// How the counts a merge needs are picked out of everything else psql prints.
+const MARKER: &str = "sloop-merge";
 
 /// Long enough to cross a slow link, short enough that a scheduled run does not sit on a
 /// dead host until someone notices.
@@ -261,6 +274,115 @@ impl Postgres {
         }
 
         Ok(())
+    }
+
+    /// Land the source's rows in a temporary table, count what is about to happen, and
+    /// upsert.
+    ///
+    /// **One session, one transaction, one temporary table that the session owns.** A merge
+    /// that is killed halfway leaves nothing to find — the staging table goes with the
+    /// connection, and the transaction means the destination is either as it was or as it
+    /// should be, never half of each.
+    ///
+    /// **The numbers come back out of the same script that does the work**, marked so they
+    /// can be picked out of psql's output, because a second connection asking afterwards
+    /// would be asking about a different moment.
+    fn merge_through_a_temporary_table(
+        &self,
+        source: &Target<'_>,
+        destination: &Target<'_>,
+        shape: &TableShape,
+        table: &str,
+        columns: &[String],
+        mut reading: std::process::Child,
+    ) -> Outcome<Merged> {
+        let (header, footer) = merge_script(shape, table, columns);
+
+        let mut writing = Self::spawn(&self.tools.query, destination)
+            .args(Self::connection_args(destination))
+            .arg("--no-psqlrc")
+            .arg("--quiet")
+            .arg("--tuples-only")
+            .arg("--no-align")
+            .arg("--field-separator")
+            .arg(FIELD)
+            .arg("--variable")
+            .arg("ON_ERROR_STOP=1")
+            .arg("--file")
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                let _ = reading.kill();
+                let _ = reading.wait();
+                missing_tool(&self.tools.query, &error)
+            })?;
+
+        // Both children's stderr is drained on threads of its own, for the reason
+        // `copy_into` gives: a full pipe stops the process that owns it, and either one
+        // stopping deadlocks the other end of the stream.
+        let mut source_said = reading.stderr.take().expect("stderr was piped");
+        let source_saying = std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut source_said, &mut said);
+            said
+        });
+
+        // **The rows pass through this process and never become a file.** `COPY … FROM
+        // STDIN` takes its data inline in the script it is part of, so there is no second
+        // stream to hand psql and no OS pipe that could carry both. A copy is not a backup —
+        // so what is between the two servers is a buffer, not a disk.
+        let streamed = {
+            use std::io::Write as _;
+            let mut sink = writing.stdin.take().expect("stdin was piped");
+            let mut rows = reading.stdout.take().expect("stdout was piped");
+            sink.write_all(header.as_bytes())
+                .and_then(|()| std::io::copy(&mut rows, &mut sink).map(|_| ()))
+                .and_then(|()| sink.write_all(footer.as_bytes()))
+        };
+
+        let written = writing.wait_with_output().map_err(|error| {
+            Failure::new(
+                Exit::Restore,
+                format!("{} would not finish: {error}", self.tools.query.display()),
+            )
+        })?;
+        let read = reading
+            .wait()
+            .map_err(|error| Failure::new(Exit::Dump, format!("psql would not finish: {error}")))?;
+        let complained = String::from_utf8_lossy(&source_saying.join().unwrap_or_default())
+            .trim()
+            .to_owned();
+
+        // The source's complaint first: a short stream is the symptom when the read failed,
+        // and reporting the write's confusion about it would name the wrong end.
+        if !read.success() {
+            return Err(from_stderr(
+                &self.tools.query,
+                &complained,
+                Exit::Dump,
+                source,
+            ));
+        }
+        if !written.status.success() {
+            return Err(from_tool(
+                &self.tools.query,
+                &written,
+                Exit::Restore,
+                destination,
+            ));
+        }
+        streamed.map_err(|error| {
+            Failure::new(Exit::Restore, format!("the rows stopped moving: {error}"))
+        })?;
+
+        Merged::from_markers(
+            &shape.table,
+            &String::from_utf8_lossy(&written.stdout),
+            FIELD,
+        )
     }
 
     /// Is there a row in `catalogue` whose `column` is `name`?
@@ -669,6 +791,93 @@ impl Adapter for Postgres {
         Ok(())
     }
 
+    fn shapes(&self, target: &Target<'_>) -> Outcome<Vec<TableShape>> {
+        let rows = self.query(target, SHAPES_SQL)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let split = |at: usize| -> Vec<String> {
+                    row.get(at)
+                        .filter(|value| !value.is_empty())
+                        .map(|value| value.split(INNER).map(str::to_owned).collect())
+                        .unwrap_or_default()
+                };
+                Some(TableShape {
+                    table: Table {
+                        schema: row.first()?.clone(),
+                        name: row.get(1)?.clone(),
+                    },
+                    columns: split(2),
+                    server_assigned: row.get(3).is_some_and(|value| value == "t"),
+                    primary_key: split(4),
+                    references: split(5)
+                        .iter()
+                        .filter_map(|parent| {
+                            let (schema, name) = parent.split_once(PAIR)?;
+                            Some(Table {
+                                schema: schema.to_owned(),
+                                name: name.to_owned(),
+                            })
+                        })
+                        .collect(),
+                })
+            })
+            .collect())
+    }
+
+    fn merge_table(
+        &self,
+        source: &Target<'_>,
+        destination: &Target<'_>,
+        shape: &TableShape,
+    ) -> Outcome<Merged> {
+        let table = format!(
+            "{}.{}",
+            quote_identifier(&shape.table.schema),
+            quote_identifier(&shape.table.name)
+        );
+        let columns: Vec<String> = shape
+            .columns
+            .iter()
+            .map(|name| quote_identifier(name))
+            .collect();
+        let listed = columns.join(", ");
+
+        // **One `SELECT`, and it is everything this method ever sends to the source.** Rule
+        // 6, and the column list is the source's own, so a column only the destination has
+        // is not named, not written, and not lost.
+        let reading = Self::spawn(&self.tools.query, source)
+            .args(Self::connection_args(source))
+            .arg("--no-psqlrc")
+            .arg("--quiet")
+            .arg("--variable")
+            .arg("ON_ERROR_STOP=1")
+            .arg("--command")
+            .arg(format!("COPY (SELECT {listed} FROM {table}) TO STDOUT"))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| missing_tool(&self.tools.query, &error))?;
+
+        self.merge_through_a_temporary_table(source, destination, shape, &table, &columns, reading)
+            .map_err(|failure| failure.prefixed(&shape.table))
+    }
+
+    fn reset_sequences(&self, target: &Target<'_>) -> Outcome<Vec<String>> {
+        let rows = self
+            .query(target, RESET_SEQUENCES_SQL)
+            .map_err(|failure| failure.at(Exit::Restore))?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let sequence = row.first()?;
+                let next = row.get(1)?;
+                Some(format!("{sequence} now hands out {next} next"))
+            })
+            .collect())
+    }
+
     fn provision(&self, target: &Target<'_>, asked: &Provisioning<'_>) -> Outcome<Provisioned> {
         // The script is built in a `String`, which takes `fmt::Write`.
         use std::fmt::Write as _;
@@ -992,6 +1201,171 @@ fn maintenance_target<'a>(target: &'a Target<'a>) -> Target<'a> {
         ..*target
     }
 }
+
+/// The two halves of the script a merge runs on the destination, with the rows in between.
+///
+/// **Separate from the plumbing that runs it**, because they are two different kinds of care:
+/// one is about quoting and SQL, the other about pipes and which child's complaint outranks
+/// which.
+fn merge_script(shape: &TableShape, table: &str, columns: &[String]) -> (String, String) {
+    let listed = columns.join(", ");
+    let keys: Vec<String> = shape
+        .primary_key
+        .iter()
+        .map(|name| quote_identifier(name))
+        .collect();
+    let matching = keys
+        .iter()
+        .map(|key| format!("d.{key} = s.{key}"))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+
+    // **Everything but the key is replaced; a table that is nothing but its key has nothing
+    // to replace.** `DO UPDATE SET` with an empty list is a syntax error, and a row whose
+    // every column is part of the key is already identical when the key matches — so
+    // `DO NOTHING` is not a shortcut, it is the same outcome.
+    let replaced: Vec<String> = columns
+        .iter()
+        .filter(|column| !keys.contains(column))
+        .map(|column| format!("{column} = EXCLUDED.{column}"))
+        .collect();
+    let resolution = if replaced.is_empty() {
+        "DO NOTHING".to_owned()
+    } else {
+        format!("DO UPDATE SET {}", replaced.join(", "))
+    };
+
+    // `GENERATED ALWAYS AS IDENTITY` refuses an explicit value outright, and a merge whose
+    // whole job is to carry the source's keys has to say so.
+    let overriding = if shape.server_assigned {
+        " OVERRIDING SYSTEM VALUE"
+    } else {
+        ""
+    };
+
+    // **One statement per number, each labelled.** Reading them back by name rather than by
+    // position is what lets the MySQL family emit the same five: it cannot name a temporary
+    // table twice in one query, so a single wide `SELECT` would have been PostgreSQL-shaped
+    // and nothing else.
+    let counted = |name: &str, what: &str| {
+        format!(
+            "SELECT {}, {}, ({what});\n",
+            sql_literal(MARKER),
+            sql_literal(name)
+        )
+    };
+
+    let header = format!(
+        "BEGIN;\n\
+         CREATE TEMP TABLE {STAGING} (LIKE {table}) ON COMMIT DROP;\n\
+         COPY {STAGING} ({listed}) FROM STDIN;\n"
+    );
+    let footer = format!(
+        "\\.\n\
+         {loaded}{before}{matched}{kept}\
+         INSERT INTO {table} ({listed}){overriding} SELECT {listed} FROM {STAGING} \
+         ON CONFLICT ({keyed}) {resolution};\n\
+         {after}\
+         COMMIT;\n",
+        keyed = keys.join(", "),
+        loaded = counted("loaded", &format!("SELECT count(*) FROM {STAGING}")),
+        before = counted("before", &format!("SELECT count(*) FROM {table}")),
+        matched = counted(
+            "matched",
+            &format!(
+                "SELECT count(*) FROM {table} d \
+                 WHERE EXISTS (SELECT 1 FROM {STAGING} s WHERE {matching})"
+            )
+        ),
+        kept = counted(
+            "kept",
+            &format!(
+                "SELECT count(*) FROM {table} d \
+                 WHERE NOT EXISTS (SELECT 1 FROM {STAGING} s WHERE {matching})"
+            )
+        ),
+        after = counted("after", &format!("SELECT count(*) FROM {table}")),
+    );
+
+    (header, footer)
+}
+
+/// Every table's shape, in one statement.
+///
+/// **One round trip, not three per table.** Columns, primary key and foreign keys are three
+/// catalogue questions, and a database with three hundred tables would be nine hundred
+/// connections' worth of them before a single row moved.
+///
+/// `attgenerated <> ''` is excluded from the column list on purpose: a stored generated
+/// column is computed from the others and refuses a value outright, so carrying it would
+/// turn every merge into an error. `attidentity = 'a'` is *kept* and flagged instead —
+/// `GENERATED ALWAYS AS IDENTITY` is a key worth copying, and PostgreSQL will hand it over
+/// to `OVERRIDING SYSTEM VALUE`.
+///
+/// A foreign key pointing at the table's own rows is left out of `references`: an employee
+/// with a manager is not a cycle, and the rows inside one table arrive in one statement.
+const SHAPES_SQL: &str = "\
+WITH cols AS (\
+  SELECT a.attrelid, string_agg(a.attname, E'\\x1e' ORDER BY a.attnum) AS names, \
+         bool_or(a.attidentity = 'a') AS assigned \
+    FROM pg_attribute a \
+   WHERE a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = '' \
+   GROUP BY a.attrelid\
+), pk AS (\
+  SELECT c.conrelid, string_agg(a.attname, E'\\x1e' ORDER BY k.ord) AS names \
+    FROM pg_constraint c \
+    JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(num, ord) ON true \
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.num \
+   WHERE c.contype = 'p' \
+   GROUP BY c.conrelid\
+), fk AS (\
+  SELECT c.conrelid, string_agg(DISTINCT pn.nspname || E'\\x1d' || pc.relname, E'\\x1e') AS parents \
+    FROM pg_constraint c \
+    JOIN pg_class pc ON pc.oid = c.confrelid \
+    JOIN pg_namespace pn ON pn.oid = pc.relnamespace \
+   WHERE c.contype = 'f' AND c.confrelid <> c.conrelid \
+   GROUP BY c.conrelid\
+) \
+SELECT n.nspname, c.relname, coalesce(cols.names, ''), \
+       coalesce(cols.assigned, false), coalesce(pk.names, ''), coalesce(fk.parents, '') \
+  FROM pg_class c \
+  JOIN pg_namespace n ON n.oid = c.relnamespace \
+  LEFT JOIN cols ON cols.attrelid = c.oid \
+  LEFT JOIN pk ON pk.conrelid = c.oid \
+  LEFT JOIN fk ON fk.conrelid = c.oid \
+ WHERE c.relkind = 'r' AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%' \
+ ORDER BY 1, 2";
+
+/// Put every sequence back above the rows that are now in the column it feeds.
+///
+/// **Identity columns are sequences too**, which is why this walks `pg_depend` rather than
+/// `pg_get_serial_sequence`: `deptype = 'a'` is a `serial`'s sequence and `'i'` is an
+/// identity column's, and both hand out numbers that a merge has just inserted past.
+///
+/// `setval(…, max + 1, false)` rather than `setval(…, max)`: the third argument is
+/// `is_called`, and `false` means the next `nextval` returns exactly this number. An empty
+/// table comes back to 1, which is where it started.
+///
+/// `query_to_xml` is how a `max()` over a table named in a row is run inside the same
+/// statement — the same trick the exact row counts use, and for the same reason.
+const RESET_SEQUENCES_SQL: &str = "\
+SELECT x.seq, x.next, setval(x.seq::regclass, x.next, false) \
+  FROM (\
+    SELECT quote_ident(ns.nspname) || '.' || quote_ident(s.relname) AS seq, \
+           coalesce((xpath('/row/m/text()', query_to_xml(\
+             format('select max(%I) as m from %I.%I', a.attname, tn.nspname, t.relname), \
+             false, true, '')))[1]::text::bigint, 0) + 1 AS next \
+      FROM pg_class s \
+      JOIN pg_namespace ns ON ns.oid = s.relnamespace \
+      JOIN pg_depend d ON d.objid = s.oid AND d.classid = 'pg_class'::regclass \
+                      AND d.deptype IN ('a', 'i') \
+      JOIN pg_class t ON t.oid = d.refobjid AND t.relkind = 'r' \
+      JOIN pg_namespace tn ON tn.oid = t.relnamespace \
+      JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = d.refobjsubid \
+     WHERE s.relkind = 'S' AND tn.nspname <> 'information_schema' \
+       AND tn.nspname NOT LIKE 'pg\\_%'\
+  ) x \
+ ORDER BY 1";
 
 /// Quote an identifier for PostgreSQL. Doubling the quotes is the whole rule.
 ///

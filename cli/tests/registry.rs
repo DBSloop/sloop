@@ -191,7 +191,7 @@ fn a_command_run_from_a_subdirectory_finds_the_project() {
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
     let deep = sandbox.make_dir("demo/src/inner/deeper");
-    let run = sandbox.sloop_in(&deep, &["sync"]);
+    let run = sandbox.sloop_in(&deep, &["db", "list"]);
 
     run.expect_said(&project.join(".sloop").display().to_string());
     run.expect_said("nearest .sloop");
@@ -207,14 +207,14 @@ fn the_nearest_project_wins_when_one_is_inside_another() {
 
     let below = sandbox.make_dir("outer/inner/src");
     sandbox
-        .sloop_in(&below, &["sync"])
+        .sloop_in(&below, &["db", "list"])
         .expect_said(&inner.join(".sloop").display().to_string());
 }
 
 #[test]
 fn with_no_project_anywhere_it_reads_the_global_store() {
     let sandbox = Sandbox::new("no-project");
-    let run = sandbox.sloop(&["sync"]);
+    let run = sandbox.sloop(&["db", "list"]);
 
     run.expect_said(&sandbox.global_dir().display().to_string());
     run.expect_said("no .sloop");
@@ -226,7 +226,7 @@ fn global_ignores_a_project_that_is_right_here() {
     let project = sandbox.make_dir("demo");
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
-    let run = sandbox.sloop_in(&project, &["--global", "sync"]);
+    let run = sandbox.sloop_in(&project, &["--global", "db", "list"]);
 
     run.expect_said(&sandbox.global_dir().display().to_string());
     run.expect_said("--global");
@@ -239,12 +239,45 @@ fn a_name_is_looked_for_in_the_project_before_the_global_store() {
     let project = sandbox.make_dir("demo");
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
+    // **One database in each store**, because the line that says where a bare name is
+    // looked for is printed with the listing — and an empty registry has no listing. That
+    // is also the only state in which the sentence means anything.
     sandbox
-        .sloop_in(&project, &["sync"])
+        .sloop_in(
+            &project,
+            &[
+                "db",
+                "add",
+                "here",
+                "--url",
+                "postgres://a@h/d",
+                "--env",
+                "PW",
+            ],
+        )
+        .expect_code(0);
+    sandbox
+        .sloop_in(
+            &project,
+            &[
+                "--global",
+                "db",
+                "add",
+                "there",
+                "--url",
+                "postgres://a@h/d",
+                "--env",
+                "PW",
+            ],
+        )
+        .expect_code(0);
+
+    sandbox
+        .sloop_in(&project, &["db", "list"])
         .expect_said("this project, then the global store");
 
     sandbox
-        .sloop_in(&project, &["--global", "sync"])
+        .sloop_in(&project, &["--global", "db", "list"])
         .expect_said("looked for in the global store")
         .expect_silent_about("this project, then");
 }
@@ -257,7 +290,7 @@ fn the_flag_reaches_a_project_by_name_from_anywhere() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .sloop_in(&elsewhere, &["-C", "demo", "sync"])
+        .sloop_in(&elsewhere, &["-C", "demo", "db", "list"])
         .expect_said(&project.join(".sloop").display().to_string())
         .expect_said("named by -C");
 }
@@ -270,7 +303,10 @@ fn the_flag_reaches_a_project_by_path_from_anywhere() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .sloop_in(&elsewhere, &["-C", &project.display().to_string(), "sync"])
+        .sloop_in(
+            &elsewhere,
+            &["-C", &project.display().to_string(), "db", "list"],
+        )
         .expect_said(&project.join(".sloop").display().to_string());
 }
 
@@ -278,7 +314,7 @@ fn the_flag_reaches_a_project_by_path_from_anywhere() {
 fn a_flag_that_names_nothing_is_a_usage_error() {
     let sandbox = Sandbox::new("bad-flag");
     sandbox
-        .sloop(&["-C", "no-such-project", "sync"])
+        .sloop(&["-C", "no-such-project", "db", "list"])
         .expect_code(2)
         .expect_said("no-such-project");
 }
@@ -291,7 +327,7 @@ fn the_environment_variable_does_what_the_flag_does() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .command(&elsewhere, &["sync"])
+        .command(&elsewhere, &["db", "list"])
         .env("SLOOP_PROJECT", "demo")
         .run()
         .expect_said(&project.join(".sloop").display().to_string())
@@ -302,7 +338,7 @@ fn the_environment_variable_does_what_the_flag_does() {
 fn an_environment_variable_that_names_nothing_is_a_usage_error() {
     let sandbox = Sandbox::new("env-bad");
     sandbox
-        .command(sandbox.work(), &["sync"])
+        .command(sandbox.work(), &["db", "list"])
         .env("SLOOP_PROJECT", "no-such-project")
         .run()
         .expect_code(2)
@@ -316,10 +352,10 @@ fn an_empty_environment_variable_means_unset() {
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
     sandbox
-        .command(&project, &["sync"])
+        .command(&project, &["db", "list"])
         .env("SLOOP_PROJECT", "")
         .run()
-        .expect_code(1)
+        .expect_code(0)
         .expect_said("nearest .sloop");
 }
 
@@ -333,7 +369,7 @@ fn the_flag_outranks_the_environment_variable() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .command(&elsewhere, &["-C", "wanted", "sync"])
+        .command(&elsewhere, &["-C", "wanted", "db", "list"])
         .env("SLOOP_PROJECT", "other")
         .run()
         .expect_said(&wanted.join(".sloop").display().to_string())
@@ -347,7 +383,7 @@ fn asking_for_both_registries_at_once_is_a_usage_error() {
     sandbox.sloop_in(&project, &["init"]).expect_code(0);
 
     sandbox
-        .sloop_in(&project, &["--global", "-C", "demo", "sync"])
+        .sloop_in(&project, &["--global", "-C", "demo", "db", "list"])
         .expect_code(2);
 }
 
@@ -382,7 +418,7 @@ fn a_pointer_written_with_windows_line_endings_still_resolves() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .sloop_in(&elsewhere, &["-C", "demo", "sync"])
+        .sloop_in(&elsewhere, &["-C", "demo", "db", "list"])
         .expect_said(&project.join(".sloop").display().to_string());
 }
 
@@ -399,7 +435,7 @@ fn a_project_path_with_spaces_in_it_survives_the_round_trip() {
 
     let elsewhere = sandbox.make_dir("somewhere-else");
     sandbox
-        .sloop_in(&elsewhere, &["-C", "the demo", "sync"])
+        .sloop_in(&elsewhere, &["-C", "the demo", "db", "list"])
         .expect_said(&project.join(".sloop").display().to_string());
 }
 

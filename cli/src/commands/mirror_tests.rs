@@ -231,6 +231,7 @@ fn creating_the_source_over_again_is_refused_before_anything_is_made() {
         &made.host,
         made.port,
         &made.database,
+        "would destroy the source",
     )
     .expect_err("that names the source");
 
@@ -250,6 +251,7 @@ fn creating_the_source_over_again_is_refused_before_anything_is_made() {
         &beside.host,
         beside.port,
         &beside.database,
+        "would destroy the source",
     )
     .expect("a second database on one server is a copy");
 }

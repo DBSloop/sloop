@@ -55,13 +55,20 @@ fn a_registry_is_read_and_each_route_named() {
         .expect_said("the environment variable REPORTS_PASSWORD")
         .expect_said("the command `op read op://vault/db/password`");
 
-    // The count comes from a command that still only describes what it would read, which
-    // keeps the other half of the same reader — `describe_registry` — under test. It has
-    // to be a command that is still a stub, so it moves down the list as tasks land: it
-    // was `backup` until R9, `restore` until R13 and `mirror` until R14.
-    sandbox
-        .sloop_in(&project, &["sync"])
-        .expect_said("It holds 3 databases");
+    // **The count used to come from whichever command was still a stub** — `backup` until
+    // R9, `restore` until R13, `mirror` until R14, `sync` until R15 — because a stub printed
+    // the other half of the same reader. There is no registry-reading stub left, so the
+    // count is read where a user reads it: `db list` prints one line per database.
+    assert_eq!(
+        sandbox
+            .sloop_in(&project, &["db", "list"])
+            .stdout()
+            .lines()
+            .filter(|line| line.contains("://"))
+            .count(),
+        3,
+        "three databases were registered and the listing has to show all three"
+    );
 }
 
 /// A registry saved by a Windows editor, or checked out with `core.autocrlf`, has to load.
@@ -194,12 +201,6 @@ fn a_project_with_no_registry_file_yet_is_not_an_error() {
         .sloop_in(&project, &["db", "list"])
         .expect_code(0)
         .expect_said("Nothing is registered");
-    // Whichever command is still a stub — see the note in `a_registry_is_read_and_each_
-    // route_named`.
-    sandbox
-        .sloop_in(&project, &["sync"])
-        .expect_code(1)
-        .expect_said("no databases in it yet");
 }
 
 #[test]
