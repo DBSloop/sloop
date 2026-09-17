@@ -69,11 +69,13 @@ pub enum Proof {
     Signed {
         /// Where the `.asc` is.
         signature_url: String,
-        /// Whose signature it has to be, so a *valid* signature by somebody else is still a
-        /// refusal. A good signature from the wrong key is the whole attack this prevents.
-        key: &'static str,
-        /// What that key is called, for the sentence.
-        key_named: &'static str,
+        /// Whose signature it may be, as `(fingerprint, name)`.
+        ///
+        /// **A list because publishers rotate keys**, and an archive signed with last year's
+        /// is still that publisher's archive. Any one of them is enough and **nothing else
+        /// is**: a good signature by a key that is not on this list is refused exactly as a
+        /// wrong hash is, which is the whole attack this prevents.
+        keys: &'static [(&'static str, &'static str)],
     },
 }
 
@@ -84,7 +86,10 @@ impl Proof {
         match self {
             Self::Pinned { .. } => "the SHA-256 this sloop was built with".to_owned(),
             Self::Published { from, .. } => format!("the SHA-256 {from} publishes"),
-            Self::Signed { key_named, .. } => format!("{key_named}'s GPG signature"),
+            Self::Signed { keys, .. } => format!(
+                "{}'s GPG signature",
+                keys.first().map_or("the publisher", |(_, named)| *named)
+            ),
         }
     }
 
@@ -145,9 +150,8 @@ pub fn holds(archive: &Path, proof: &Proof, what: &str) -> Outcome<()> {
         }
         Proof::Signed {
             signature_url,
-            key,
-            key_named,
-        } => signature_holds(archive, signature_url, key, key_named, what),
+            keys,
+        } => signature_holds(archive, signature_url, keys, what),
     }
 }
 
@@ -186,8 +190,7 @@ fn size_of(archive: &Path) -> Outcome<u64> {
 fn signature_holds(
     archive: &Path,
     signature_url: &str,
-    key: &str,
-    key_named: &str,
+    keys: &[(&str, &str)],
     what: &str,
 ) -> Outcome<()> {
     let Some(gpg) = gpg() else {
@@ -225,28 +228,40 @@ fn signature_holds(
         )));
     }
 
-    // The key, not just *a* key. `gpg` prints the long id with spaces on some versions and
-    // without on others, so both spellings are looked for.
+    // **One of the listed keys, not just *a* key.** `gpg` prints the fingerprint with spaces
+    // on some versions and without on others, so both spellings are looked for.
+    if keys.iter().any(|(key, _)| mentions(&told, key)) {
+        return Ok(());
+    }
+
+    let expected = keys
+        .iter()
+        .map(|(key, named)| format!("{named} ({key})"))
+        .collect::<Vec<_>>()
+        .join(", or ");
+
+    Err(
+        wrong(what, &format!("it is signed, but not by {expected}")).hint(format!(
+            "gpg said: {}\n\nA good signature by the wrong key is exactly what this check \
+             exists to catch. Nothing has been unpacked",
+            told.trim()
+        )),
+    )
+}
+
+/// Does what `gpg` said name this fingerprint, spaced or not?
+fn mentions(told: &str, key: &str) -> bool {
+    if told.contains(key) {
+        return true;
+    }
+
     let spaced = key
         .as_bytes()
         .chunks(4)
         .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
         .collect::<Vec<_>>()
         .join(" ");
-
-    if !told.contains(key) && !told.contains(&spaced) {
-        return Err(wrong(
-            what,
-            &format!("it is signed, but not by {key_named} ({key})"),
-        )
-        .hint(format!(
-            "gpg said: {}\n\nA good signature by the wrong key is exactly what this check \
-             exists to catch. Nothing has been unpacked",
-            told.trim()
-        )));
-    }
-
-    Ok(())
+    told.contains(&spaced)
 }
 
 /// Where the system's `gpg` is, if it has one.

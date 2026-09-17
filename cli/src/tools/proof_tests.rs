@@ -172,8 +172,7 @@ fn whether_a_proof_can_be_checked_here_is_answerable_without_downloading_anythin
 
     let signed = Proof::Signed {
         signature_url: "https://example.invalid/x.asc".to_owned(),
-        key: "A4A9406876FCBD3C456770C88C718D3B5072E1F5",
-        key_named: "MySQL Release Engineering",
+        keys: crate::tools::catalogue::MYSQL_KEYS,
     };
     // True or false depending on the machine — what is asserted is that asking is free and
     // that the answer is the same as whether `gpg` is there.
@@ -185,8 +184,7 @@ fn whether_a_proof_can_be_checked_here_is_answerable_without_downloading_anythin
 fn a_machine_with_no_gpg_is_told_what_to_install() {
     let signed = Proof::Signed {
         signature_url: "https://example.invalid/x.asc".to_owned(),
-        key: "A4A9406876FCBD3C456770C88C718D3B5072E1F5",
-        key_named: "MySQL Release Engineering",
+        keys: crate::tools::catalogue::MYSQL_KEYS,
     };
 
     assert!(!signed.checkable_here() || super::gpg().is_some());
@@ -230,8 +228,7 @@ fn every_proof_says_what_it_checked_against() {
     assert_eq!(
         Proof::Signed {
             signature_url: String::new(),
-            key: "",
-            key_named: "MySQL Release Engineering"
+            keys: crate::tools::catalogue::MYSQL_KEYS,
         }
         .describe(),
         "MySQL Release Engineering's GPG signature"
