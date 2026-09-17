@@ -181,6 +181,129 @@ pub fn install_for_tests(engine: Engine, into: &Path) -> Outcome<()> {
         .carry_out(into)
 }
 
+/// Get a whole PostgreSQL 18 — the server, not just the client programs.
+///
+/// **The same archive, the same checksum, a different set of members.** `R6` already proved
+/// it received the pinned EnterpriseDB build intact; a server is what comes out when `share`
+/// and `initdb` are taken out of it too. So there is one download path in sloop, one pinned
+/// hash, and one place that shells out to the system's own `curl`.
+///
+/// Off Windows there is no such archive, and the answer is the machine's own package manager
+/// — the same offer `R6` makes, for the package that carries the server rather than the
+/// client.
+pub fn postgres_server(global: &Path) -> Outcome<()> {
+    let into = crate::server::fetched_dir(global);
+    let wanted = crate::server::WANTED_MAJOR;
+
+    if !std::io::stdin().is_terminal() {
+        return Err(Failure::new(
+            Exit::Usage,
+            format!(
+                "sloop keeps its own state in PostgreSQL {wanted}, this machine has none, and \
+                 there is no terminal to ask about installing one at"
+            ),
+        )
+        .hint("run `sloop setup` in a terminal once"));
+    }
+
+    let Some(plan) = server_plan() else {
+        return Err(Failure::new(
+            Exit::Usage,
+            format!("sloop has no way to install PostgreSQL {wanted} on this machine"),
+        )
+        .hint(format!(
+            "install PostgreSQL {wanted} yourself, then run `sloop setup` again"
+        )));
+    };
+
+    crate::say!(
+        "{} sloop keeps its own state in PostgreSQL {wanted}, and this machine has none.",
+        style::heading("Needed:")
+    );
+    crate::say!("{}", plan.describe());
+
+    if !asked(&plan.question())? {
+        return Err(Failure::new(
+            Exit::Usage,
+            format!("PostgreSQL {wanted} is needed and that was declined"),
+        )
+        .hint(format!(
+            "install PostgreSQL {wanted} yourself, then run `sloop setup` again"
+        )));
+    }
+
+    match plan {
+        Plan::FetchPostgresForWindows(release) => {
+            std::fs::create_dir_all(&into).map_err(|error| {
+                Failure::new(
+                    Exit::Usage,
+                    format!("could not create {}: {error}", into.display()),
+                )
+            })?;
+            let archive = fetch_verified(release, &into)?;
+            extract_server(&archive, &into)?;
+            let _ = std::fs::remove_file(&archive);
+            crate::say!("  {} {}", style::label("Installed into"), into.display());
+            Ok(())
+        }
+        Plan::PackageManager(offer) => offer.run(),
+    }
+}
+
+/// What this platform can offer for a PostgreSQL *server*.
+///
+/// The client-tool offer asks for `postgresql-client` and `libpq`, neither of which can hold
+/// a database. This asks for the server package of the exact major sloop needs — pinned,
+/// because "whatever `postgresql` means today" is how a machine ends up with 16.
+fn server_plan() -> Option<Plan> {
+    let wanted = crate::server::WANTED_MAJOR;
+
+    if cfg!(windows) {
+        let release = releases::newest();
+        // The pinned archive has to actually be the major sloop wants. It is today, and this
+        // is what makes the day it stops being true a refusal rather than a cluster on the
+        // wrong version.
+        return (release.major == wanted).then_some(Plan::FetchPostgresForWindows(release));
+    }
+
+    if cfg!(target_os = "macos") && on_path("brew") {
+        return Some(Plan::PackageManager(Offer {
+            manager: "Homebrew",
+            command: vec![
+                "brew".to_owned(),
+                "install".to_owned(),
+                format!("postgresql@{wanted}"),
+            ],
+        }));
+    }
+    if on_path("apt-get") {
+        return Some(Plan::PackageManager(Offer {
+            manager: "apt",
+            command: vec![
+                "sudo".to_owned(),
+                "apt-get".to_owned(),
+                "install".to_owned(),
+                "-y".to_owned(),
+                format!("postgresql-{wanted}"),
+            ],
+        }));
+    }
+    if on_path("dnf") {
+        return Some(Plan::PackageManager(Offer {
+            manager: "dnf",
+            command: vec![
+                "sudo".to_owned(),
+                "dnf".to_owned(),
+                "install".to_owned(),
+                "-y".to_owned(),
+                format!("postgresql{wanted}-server"),
+            ],
+        }));
+    }
+
+    None
+}
+
 /// What sloop would do about a missing engine on this machine.
 pub(super) enum Plan {
     /// Download the pinned PostgreSQL archive and take three programs out of it.
@@ -345,8 +468,31 @@ fn on_path(program: &str) -> bool {
     })
 }
 
-/// Download, prove, unpack.
+/// Download, prove, unpack the client programs.
 fn install_postgres_archive(release: &releases::Release, into: &Path) -> Outcome<()> {
+    std::fs::create_dir_all(into).map_err(|error| {
+        Failure::new(
+            Exit::Usage,
+            format!("could not create {}: {error}", into.display()),
+        )
+    })?;
+
+    let archive = fetch_verified(release, into)?;
+    extract(&archive, into)?;
+
+    // A third of a gigabyte is not worth keeping for the 51 MB that came out of it.
+    let _ = std::fs::remove_file(&archive);
+
+    crate::say!("  {} {}", style::label("Installed into"), into.display());
+    Ok(())
+}
+
+/// Download the pinned archive and prove it is the one, leaving it beside `into`.
+///
+/// **One path, two callers.** The client tools and the whole server come out of the same
+/// archive, and a second copy of "download, check the size, check the hash" is a second
+/// chance for one of them to skip a step.
+fn fetch_verified(release: &releases::Release, into: &Path) -> Outcome<PathBuf> {
     let workspace = into
         .parent()
         .map_or_else(|| into.to_path_buf(), Path::to_path_buf)
@@ -375,20 +521,7 @@ fn install_postgres_archive(release: &releases::Release, into: &Path) -> Outcome
     })?;
     crate::say!("  {} SHA-256 matches", style::label("Verified"));
 
-    std::fs::create_dir_all(into).map_err(|error| {
-        Failure::new(
-            Exit::Usage,
-            format!("could not create {}: {error}", into.display()),
-        )
-    })?;
-    extract(&archive, into)?;
-
-    // A third of a gigabyte is not worth keeping for the 51 MB that came out of it.
-    let _ = std::fs::remove_file(&archive);
-    let _ = std::fs::remove_dir(&workspace);
-
-    crate::say!("  {} {}", style::label("Installed into"), into.display());
-    Ok(())
+    Ok(archive)
 }
 
 /// Ask postgresql.org what it has, and turn that into one sentence or none.
@@ -583,13 +716,44 @@ fn sha256_of(path: &Path) -> Outcome<String> {
 /// cannot read a zip at all; the one that can is the `bsdtar` Windows itself ships in
 /// System32, and it is asked for by its full path.
 fn extract(archive: &Path, into: &Path) -> Outcome<()> {
+    unpack(
+        archive,
+        into,
+        "--strip-components=2",
+        &[
+            "pgsql/bin/*.dll",
+            "pgsql/bin/pg_dump*",
+            "pgsql/bin/pg_restore*",
+            "pgsql/bin/psql*",
+        ],
+    )
+}
+
+/// Take a whole PostgreSQL out of the same archive: the programs, the libraries they need,
+/// and `share`, which `initdb` reads its templates out of and cannot create a cluster
+/// without.
+///
+/// `--strip-components=1` rather than 2, because the layout has to survive: every one of
+/// these programs finds `share` by walking up from its own directory, and a flat `bin` would
+/// give an `initdb` that cannot find `postgres.bki`.
+fn extract_server(archive: &Path, into: &Path) -> Outcome<()> {
+    unpack(
+        archive,
+        into,
+        "--strip-components=1",
+        &["pgsql/bin", "pgsql/lib", "pgsql/share"],
+    )
+}
+
+/// The system's own archiver, on the members named.
+fn unpack(archive: &Path, into: &Path, strip: &str, members: &[&str]) -> Outcome<()> {
     let archiver = system_archiver();
 
     let status = Command::new(&archiver)
         .current_dir(into)
         .arg("-xf")
         .arg(archive)
-        .arg("--strip-components=2")
+        .arg(strip)
         // pgAdmin's own libraries, which are most of the archive and none of our business.
         .arg("--exclude")
         .arg("pgsql/bin/wx*")
@@ -601,12 +765,9 @@ fn extract(archive: &Path, into: &Path) -> Outcome<()> {
         //
         // Every pattern here has to match something. The archiver treats one that matches
         // nothing as an error, which is a good property — a release that stopped shipping
-        // `pg_restore` should fail loudly — but it means this list is Windows-shaped on
+        // `pg_restore` should fail loudly — but it means these lists are Windows-shaped on
         // purpose, because this archive is the Windows one and there is no `.so` in it.
-        .arg("pgsql/bin/*.dll")
-        .arg("pgsql/bin/pg_dump*")
-        .arg("pgsql/bin/pg_restore*")
-        .arg("pgsql/bin/psql*")
+        .args(members)
         .stdin(Stdio::null())
         .status()
         .map_err(|error| {

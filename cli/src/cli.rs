@@ -260,6 +260,27 @@ pub enum Command {
         command: KeyCommand,
     },
 
+    /// Prepare the PostgreSQL 18 sloop keeps its own state in.
+    ///
+    /// Runs on a machine that has not been set up, and is safe to run again on one that
+    /// has. A PostgreSQL 18 already serving on 5432 is used as it stands; anything else
+    /// gets a cluster of sloop's own on 5433, which disturbs nothing already on the
+    /// machine.
+    Setup {
+        /// A command that prints the superuser password of the PostgreSQL already on this
+        /// machine, for a run with no terminal to ask at.
+        #[arg(
+            long,
+            value_name = "COMMAND",
+            conflicts_with = "superuser_password_stdin"
+        )]
+        superuser_password_command: Option<String>,
+
+        /// Read that password from standard input instead of asking for it.
+        #[arg(long)]
+        superuser_password_stdin: bool,
+    },
+
     /// Remove sloop from this machine.
     Uninstall,
 }
@@ -812,6 +833,7 @@ impl Command {
             Self::Mirror { .. } => "mirror",
             Self::Sync { .. } => "sync",
             Self::Key { command } => command.path(),
+            Self::Setup { .. } => "setup",
             Self::Uninstall => "uninstall",
         }
     }
@@ -1042,6 +1064,7 @@ mod tests {
                 "mirror",
                 "sync",
                 "key",
+                "setup",
                 "uninstall",
             ]
         );

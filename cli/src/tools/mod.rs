@@ -344,6 +344,14 @@ fn look_for(tool: Tool, fetched_into: &Path) -> Vec<Candidate> {
         consider(&directory, Source::OnPath);
     }
     consider(fetched_into, Source::Fetched);
+    // **The PostgreSQL sloop keeps its own state in is a whole PostgreSQL.** Its `bin` holds
+    // `psql` and `pg_dump` beside the server, so a machine that has just been given one has
+    // the client tools too — and offering to download a third of a gigabyte of them again
+    // would be absurd. `fetched_into` is `<global>/tools/bin`, so the global store is its
+    // grandparent.
+    if let Some(global) = fetched_into.parent().and_then(Path::parent) {
+        consider(&crate::server::fetched_bin(global), Source::Fetched);
+    }
     for directory in installed_directories(tool.engine()) {
         consider(&directory, Source::Installed);
     }
@@ -379,7 +387,10 @@ fn version_of(program: &Path, tool: Tool) -> Option<Version> {
 /// Two shapes. A directory that is simply the `bin`, and a root holding one directory per
 /// version — `C:\Program Files\PostgreSQL\17\bin` — where every version is worth finding,
 /// because which of them is newest is the question this module exists to answer.
-fn installed_directories(engine: Engine) -> Vec<PathBuf> {
+///
+/// `pub(crate)` for `server::find`, which asks the same question about a *server* rather than
+/// a client and would otherwise keep a second copy of this list that went stale on its own.
+pub(crate) fn installed_directories(engine: Engine) -> Vec<PathBuf> {
     let (direct, versioned): (&[&str], &[&str]) = match engine {
         Engine::Postgres => (
             &[

@@ -17,6 +17,7 @@ mod lock;
 mod registry;
 mod report;
 mod secret;
+mod server;
 mod style;
 mod tools;
 mod ui;
@@ -96,6 +97,22 @@ fn run(cli: &Cli) -> Outcome<Exit> {
             let global = registry::adopt::global(&locations)?;
             let target = init_target(cli.project.as_deref(), &global)?;
             commands::init::run(&target, &global, &locations.home_dir()?)?;
+            Ok(Exit::Success)
+        }
+
+        Some(Command::Setup {
+            superuser_password_command,
+            superuser_password_stdin,
+        }) => {
+            let global = registry::adopt::global(&locations)?;
+            let ready = server::ensure(
+                &global,
+                &server::make::Asking {
+                    command: superuser_password_command.as_deref(),
+                    stdin: *superuser_password_stdin,
+                },
+            )?;
+            server::announce(&ready);
             Ok(Exit::Success)
         }
 
