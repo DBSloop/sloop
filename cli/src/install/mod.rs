@@ -262,12 +262,25 @@ fn already_there(global: &Path, build: &Build, into: &Path) -> Outcome<()> {
     }
 
     if into.exists() {
-        return Err(
-            Failure::new(Exit::Usage, format!("{} is already there", into.display())).hint(
-                "sloop will not install over a directory it did not write — move it aside, or \
-             delete it if it is nothing",
+        // **A directory with no record beside it is a previous attempt that did not finish**,
+        // and saying so is the difference between a refusal somebody can act on and one they
+        // have to guess at. Every install that succeeds writes a record, so there is no other
+        // way to reach this state — and sloop still will not delete it, because whatever is
+        // in there may be a data directory, and the log beside it is what says why the last
+        // attempt stopped.
+        return Err(Failure::new(
+            Exit::Usage,
+            format!(
+                "{} is already there, and sloop has no record of finishing it",
+                into.display()
             ),
-        );
+        )
+        .hint(format!(
+            "an earlier attempt got as far as unpacking and then stopped — {} says why. \
+             Delete that directory to start again; sloop will not, because it may hold a \
+             database",
+            into.join("error.log").display()
+        )));
     }
 
     Ok(())

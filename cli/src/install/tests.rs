@@ -230,6 +230,15 @@ fn a_directory_that_is_already_there_is_never_written_into() {
         "{}",
         failure.message()
     );
+    // **And it says what that state is**, which is the difference between a refusal somebody
+    // can act on and one they have to guess at: every install that succeeds writes a record,
+    // so a directory without one is an attempt that stopped part-way.
+    assert!(
+        failure
+            .hint_text()
+            .is_some_and(|hint| hint.contains("stopped") && hint.contains("error.log")),
+        "{failure:?}"
+    );
 }
 
 /// The administrative account is the conventional one for each family, so that everything a

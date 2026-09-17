@@ -7,18 +7,30 @@
 //! something connects and gives it one. So the sequence here is its own:
 //!
 //! ```text
-//! 1  write my.cnf          basedir, datadir, port, loopback, where the log goes
-//! 2  bootstrap             mysqld --initialize-insecure, or MariaDB's install-db script
-//! 3  start                 spawn it, every stream closed, and wait for it to answer
-//! 4  give root a password  over a pipe, and prove it opens the server
+//! 1  write my.cnf        basedir, datadir, port, loopback, where the log goes
+//! 2  bootstrap           mysqld --initialize-insecure, or MariaDB's install-db program
+//! 3  start               spawn it, every stream closed, and wait for it to answer
+//! 4  close every root    over a pipe, and prove the password opens the server
 //! ```
 //!
+//! **Step four is every root account and not only the one that connected.** A fresh bootstrap
+//! leaves `root@localhost`, and on Windows `root@127.0.0.1` and `root@::1` beside it, all
+//! with no password — so closing whichever one this connection happened to match would leave
+//! a database server on somebody's machine that anything else on that machine could open.
+//! The accounts are asked for and every one of them is closed.
+//!
 //! **The two forks bootstrap differently and that is not a detail.** Oracle's `mysqld` takes
-//! `--initialize-insecure`; MariaDB refuses it and ships `mariadb-install-db` instead, which
-//! on Linux defaults the root account to `unix_socket` authentication — a server nothing
-//! could log into with a password, which is exactly what sloop is about to try. So MariaDB
-//! is told `--auth-root-authentication-method=normal`, by name, rather than discovered to be
-//! unreachable afterwards.
+//! `--initialize-insecure`; MariaDB refuses it and ships an install program instead — which
+//! is itself two different programs with one name. Off Windows it is the shell script, and
+//! there the root account it makes authenticates by unix socket unless it is told
+//! `--auth-root-authentication-method=normal`: a server nothing could log into with a
+//! password, which is exactly what step four is about to try. On Windows it is a C program
+//! from 2011 that has no `--basedir` at all and refuses one by name.
+//!
+//! **And the statement is not the same in the two forks either.** `ALTER USER … IDENTIFIED
+//! BY` is MySQL 5.7's and MariaDB never took it; `SET PASSWORD … = PASSWORD(…)` is MariaDB's
+//! all the way to 11, and MySQL 8 removed the `PASSWORD()` function. There is no one
+//! spelling, so there are two.
 //!
 //! **Every program named here has two names.** MariaDB renamed all of them at 10.5 and made
 //! the new names the real ones at 11, so `mariadbd` and `mysqld` are both looked for and the
