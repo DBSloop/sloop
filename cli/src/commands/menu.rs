@@ -79,6 +79,28 @@ impl Machine {
         &self.resolution
     }
 
+    /// Find or install sloop's PostgreSQL, make its database, and create its tables.
+    ///
+    /// The same `server::set_up` the `sloop setup` command runs, with the same reporting —
+    /// the menu has already handed the terminal back, so every line it prints lands in the
+    /// scrollback the user keeps.
+    ///
+    /// **No flags, because a menu has a terminal.** `--superuser-password-command` and
+    /// `--superuser-password-stdin` exist for a run with nobody to ask; here there is
+    /// somebody, and `rpassword` asks them.
+    fn set_up(&self) -> Outcome<Exit> {
+        let settled = crate::server::set_up(
+            &self.global,
+            &crate::server::make::Asking {
+                command: None,
+                stdin: false,
+            },
+        )?;
+        crate::server::announce(&settled.ready);
+        crate::server::announce_own(&settled);
+        Ok(Exit::Success)
+    }
+
     /// Both registries, read fresh.
     fn open(&self) -> Outcome<Registries> {
         Registries::open(self.resolution.clone(), &self.global)
@@ -152,9 +174,17 @@ impl Doing for Machine {
     }
 
     fn run(&mut self, job: Job, answers: &Answers) -> Outcome<Exit> {
+        // **Before the registries, because there are none until this has run.** Setup is the
+        // one job whose whole purpose is to make the thing every other job opens, so opening
+        // it first would fail with "run `sloop setup`" on the way into `sloop setup`.
+        if matches!(job, Job::Setup) {
+            return self.set_up();
+        }
+
         let registries = self.open()?;
 
         match job {
+            Job::Setup => unreachable!("handled above, before the registries are opened"),
             Job::DbAdd => self.add(registries, answers),
             Job::DbCreate => self.create(registries, answers),
             Job::DbList => Ok(commands::db::list(&self.context(registries))),

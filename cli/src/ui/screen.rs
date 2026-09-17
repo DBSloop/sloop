@@ -72,17 +72,34 @@ pub struct Shell {
     pub holds: usize,
     /// True when there is nothing registered anywhere and no project above the cwd.
     pub fresh: bool,
+    /// Whether this machine has been through Setup.
+    ///
+    /// **The one thing that outranks every other opening screen.** `R19c` made sloop keep its
+    /// state in a PostgreSQL of its own, so a machine without one has no registry to read and
+    /// nothing else in this tree can do anything at all.
+    pub set_up: bool,
 }
 
 impl Shell {
     /// The screen a session opens on.
     ///
-    /// **First run offers `Init` and nothing else.** Not a menu with most of it greyed out:
-    /// every other screen in this tree needs a registry to be useful, and a menu whose items
-    /// all fail is a worse first impression than a menu with one item that works.
+    /// **Setup first, and it is not a choice.** `R19c` moved sloop's state into a PostgreSQL
+    /// of its own, so a machine that has not been set up has no registry to read — every
+    /// other screen in this tree would be a menu whose every item fails. Setup replaces
+    /// `Init` as the first screen of such a machine, which is `R19c5`'s whole scope and
+    /// supersedes `R18`'s *"first run offers `Init` and nothing else"*.
+    ///
+    /// **And a machine that is set up is never shown it.** The owner's rule, in one branch:
+    /// the record in `~/.sloop` is the answer, and a machine that has one has already
+    /// answered.
     #[must_use]
     pub const fn opening(&self) -> Screen {
-        if self.fresh {
+        if !self.set_up {
+            Screen::Setup {
+                cursor: 0,
+                trouble: None,
+            }
+        } else if self.fresh {
             Screen::FirstRun { cursor: 0 }
         } else {
             Screen::Home { cursor: 0 }
@@ -100,6 +117,14 @@ impl Shell {
 /// One screen, holding everything that would otherwise be lost by leaving it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Screen {
+    /// This machine has not been set up, and nothing else can happen until it has.
+    Setup {
+        /// Where the highlight is.
+        cursor: usize,
+        /// Why the last attempt did not finish. Setup is re-runnable, so this is a state to
+        /// come back from rather than an end.
+        trouble: Option<String>,
+    },
     /// Nothing is registered anywhere yet.
     FirstRun {
         /// Where the highlight is.
@@ -333,6 +358,56 @@ struct Shelf(&'static str, &'static [Leaf]);
 ///
 /// Registering comes first because you cannot back up a database sloop has never heard of;
 /// copying comes after both because it needs two.
+/// What sits above the Setup screen's one item.
+///
+/// Its own function because [`Screen::header`] is a table of screens and this is the longest
+/// entry in it — and because the failed case is the interesting one: Setup is re-runnable, so
+/// what went wrong is shown *with* the reason it is safe to try again.
+fn setup_header(trouble: Option<&str>) -> Header {
+    let mut lines = vec![
+        Line::told("machine", "not set up yet", Hue::Warn),
+        Line::Gap,
+        Line::Quiet(
+            "sloop keeps what it knows in a PostgreSQL 18 of its own — on port 5433, so \
+             whatever this machine already runs is left exactly as it is."
+                .to_owned(),
+        ),
+    ];
+
+    if let Some(trouble) = trouble {
+        lines.push(Line::Gap);
+        lines.push(Line::Wrong(trouble.to_owned()));
+        lines.push(Line::Quiet(
+            "Setup asks before every step it takes, so running it again carries on from \
+             where it stopped."
+                .to_owned(),
+        ));
+    }
+
+    Header {
+        banner: Banner::Wordmark,
+        crumbs: Vec::new(),
+        strap: "register a database once, then back it up and copy it".to_owned(),
+        lines,
+    }
+}
+
+/// The one leaf that is not on the home screen.
+///
+/// **Setup is not a command somebody browses to.** It is the whole of the first screen of a
+/// machine that has not been set up, and it is gone from every screen afterwards — so it has
+/// a `Leaf` for what `Flow::Run` needs and no place in [`HOME`]. Putting it on the menu would
+/// be offering to set up a machine that is already set up, which is the one thing the owner
+/// said must never happen.
+const SETUP: Leaf = Leaf {
+    title: "Set up this machine",
+    blurb: "finds PostgreSQL 18 or installs it, then makes sloop's database and its tables",
+    command: "sloop setup",
+    job: Job::Setup,
+    under: "This machine",
+    run_it: "Set it up",
+};
+
 const HOME: &[Shelf] = &[
     Shelf(
         "DATABASES",
@@ -525,7 +600,8 @@ impl Screen {
     #[must_use]
     pub const fn cursor(&self) -> usize {
         match self {
-            Self::FirstRun { cursor }
+            Self::Setup { cursor, .. }
+            | Self::FirstRun { cursor }
             | Self::Started { cursor, .. }
             | Self::Home { cursor }
             | Self::Doing { cursor, .. } => *cursor,
@@ -536,7 +612,8 @@ impl Screen {
     /// Remember where the highlight was left.
     pub const fn point_at(&mut self, index: usize) {
         match self {
-            Self::FirstRun { cursor }
+            Self::Setup { cursor, .. }
+            | Self::FirstRun { cursor }
             | Self::Started { cursor, .. }
             | Self::Home { cursor }
             | Self::Doing { cursor, .. } => *cursor = index,
@@ -587,6 +664,14 @@ impl Screen {
     #[must_use]
     pub fn troubled(self, said: String) -> Self {
         match self {
+            // **Setup is re-runnable, so a failure stays on it.** Every step it takes asks
+            // before it acts — the role only when there is no such role, the database only
+            // when there is no such database — so running it again after a failure carries on
+            // from wherever it stopped rather than making a mess.
+            Self::Setup { cursor, .. } => Self::Setup {
+                cursor,
+                trouble: Some(said),
+            },
             Self::Doing {
                 leaf,
                 answers,
@@ -606,7 +691,7 @@ impl Screen {
     #[must_use]
     pub fn crumbs(&self) -> Vec<&'static str> {
         match self {
-            Self::FirstRun { .. } | Self::Home { .. } => Vec::new(),
+            Self::Setup { .. } | Self::FirstRun { .. } | Self::Home { .. } => Vec::new(),
             Self::NewProject { .. } => vec!["New project"],
             Self::Started { .. } => vec!["New project", "Done"],
             Self::Doing { leaf, .. } => vec![leaf.under, leaf.title],
@@ -617,6 +702,8 @@ impl Screen {
     #[must_use]
     pub fn header(&self, shell: &Shell, world: &dyn Doing) -> Header {
         match self {
+            Self::Setup { trouble, .. } => setup_header(trouble.as_deref()),
+
             Self::FirstRun { .. } => Header {
                 banner: Banner::Wordmark,
                 crumbs: Vec::new(),
@@ -711,6 +798,24 @@ impl Screen {
     #[must_use]
     pub fn face(&self, world: &dyn Doing) -> Face {
         match self {
+            Self::Setup { trouble, .. } => Face::Menu(Menu::under(
+                "SET UP",
+                if trouble.is_some() {
+                    "Try again — nothing that already worked is done twice."
+                } else {
+                    "One step, and then everything else works."
+                },
+                vec![Item::new(
+                    if trouble.is_some() {
+                        "Carry on setting up this machine"
+                    } else {
+                        "Set up this machine"
+                    },
+                    "finds PostgreSQL 18 or installs it, then makes sloop's database, its \
+                     role and its tables",
+                )],
+            )),
+
             Self::FirstRun { .. } => Face::Menu(Menu::under(
                 "GET STARTED",
                 "Let's start a project.",
@@ -779,6 +884,15 @@ impl Screen {
     #[must_use]
     pub fn chose(&self, shell: &Shell, world: &dyn Doing, index: usize) -> Flow {
         match self {
+            // **Out of the alternate screen, and that is the point.** Setup finds or
+            // installs a PostgreSQL, makes a database and runs migrations, and says what it
+            // is doing as it goes. Inside the alternate screen every one of those lines would
+            // vanish on the next redraw; `Flow::Run` hands the terminal back first, so they
+            // land in the scrollback the user keeps — and so the one question Setup can ask,
+            // for the superuser password of a PostgreSQL it did not install, is asked the
+            // same way it is asked from a shell.
+            Self::Setup { .. } => Flow::Run(SETUP, Box::default()),
+
             Self::FirstRun { .. } => Flow::To(Screen::NewProject {
                 at: shell.cwd.display().to_string(),
                 trouble: None,

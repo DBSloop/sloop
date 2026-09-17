@@ -141,7 +141,20 @@ fn menu(cli: &Cli, locations: &Locations) -> Outcome<Exit> {
 
     let global = machine.global().to_path_buf();
     let resolution = machine.resolution().clone();
-    let holds = ui::flow::Doing::databases(&machine).len();
+
+    // **Asked, not assumed, and asked without a prompt.** A machine that has been set up has
+    // a record in `~/.sloop` naming its PostgreSQL, and reading it is the whole question —
+    // which is how the owner's rule holds: a set-up machine is never asked anything about
+    // setup, because nothing is left to ask.
+    let set_up = crate::registry::store::Store::open(&global)?.is_some();
+
+    // Nothing is registered anywhere on a machine with no registry to read. Asked only when
+    // there is one, so a machine before Setup does not fail on the way to being told so.
+    let holds = if set_up {
+        ui::flow::Doing::databases(&machine).len()
+    } else {
+        0
+    };
 
     let mut shell = ui::screen::Shell {
         home: locations.home_dir()?,
@@ -156,6 +169,7 @@ fn menu(cli: &Cli, locations: &Locations) -> Outcome<Exit> {
         // one on its own is an ordinary session — somebody with a global registry and no
         // project has already started, and so has somebody standing in a fresh project.
         fresh: resolution.registry_dir().is_none() && holds == 0,
+        set_up,
         holds,
         cwd: machine.cwd().to_path_buf(),
         global: global.clone(),

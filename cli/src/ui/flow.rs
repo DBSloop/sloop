@@ -63,6 +63,8 @@ pub enum Job {
     KeyImport,
     /// `doctor`
     Doctor,
+    /// `setup` — the one job that runs before there is a registry to read.
+    Setup,
 }
 
 /// The names answers are filed under.
@@ -403,7 +405,11 @@ impl Job {
     /// free: drop an answer and the questions that hung off it were never asked.
     fn plan(self, answers: &Answers, known: &[String], world: &dyn Doing) -> Vec<Step> {
         match self {
-            Self::DbList | Self::KeyExport | Self::KeyImport => Vec::new(),
+            // Setup asks nothing here. The one question it can have — the superuser
+            // password of a PostgreSQL it did not install — belongs to the command itself,
+            // asked on the real terminal, because that is the only place rule 3 has one
+            // implementation.
+            Self::Setup | Self::DbList | Self::KeyExport | Self::KeyImport => Vec::new(),
 
             Self::DbAdd => registering(answers),
             Self::DbCreate => making(),

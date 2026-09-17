@@ -205,6 +205,9 @@ fn shell(fresh: bool) -> Shell {
         found_by: "nothing named a project".to_owned(),
         holds: if fresh { 0 } else { 2 },
         fresh,
+        // Every test in this file is about a machine that has been through Setup. The one
+        // that is about a machine that has not says so by name.
+        set_up: true,
     }
 }
 
@@ -433,6 +436,7 @@ fn starting_a_project_creates_the_registry_and_keeps_the_summary() {
         found_by: "nothing named a project".to_owned(),
         holds: 0,
         fresh: true,
+        set_up: true,
     };
 
     let mut scripted = Scripted::doing(vec![
@@ -483,6 +487,7 @@ fn the_directory_box_keeps_what_was_typed() {
         found_by: "nothing named a project".to_owned(),
         holds: 0,
         fresh: true,
+        set_up: true,
     };
 
     let mut scripted = Scripted::doing(vec![
@@ -1182,4 +1187,136 @@ fn a_required_box_refuses_a_blank_and_says_so_on_the_spot() {
         trouble.is_some_and(|said| said.contains("cannot be left blank")),
         "the box did not say why"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// R19c5 — the Setup screen
+// ---------------------------------------------------------------------------------------
+
+/// A machine that has not been set up, for the tests that are about one.
+fn unset_up() -> Shell {
+    Shell {
+        set_up: false,
+        ..shell(true)
+    }
+}
+
+/// **Setup replaces `Init` as the first screen, and it outranks everything.** `R19c` moved
+/// sloop's state into a PostgreSQL of its own, so a machine without one has no registry to
+/// read — a fresh machine and a machine with a full registry both get Setup first if they
+/// have not been through it.
+#[test]
+fn a_machine_that_is_not_set_up_opens_on_setup_whatever_else_is_true() {
+    assert!(matches!(unset_up().opening(), Screen::Setup { .. }));
+
+    // Even with databases registered and a project in play — which cannot really happen,
+    // and is exactly why it must not depend on being impossible.
+    let settled_but_not_set_up = Shell {
+        set_up: false,
+        ..shell(false)
+    };
+    assert!(matches!(
+        settled_but_not_set_up.opening(),
+        Screen::Setup { .. }
+    ));
+}
+
+/// **The owner's rule, in one assertion: a machine that is set up is never asked again.**
+/// Not on the first screen, not on the home screen, not anywhere in the tree.
+#[test]
+fn a_machine_that_is_set_up_is_never_offered_setup_again() {
+    assert!(matches!(shell(false).opening(), Screen::Home { .. }));
+    assert!(matches!(shell(true).opening(), Screen::FirstRun { .. }));
+
+    // And `Set up` is on no menu anywhere: the home screen lists every command sloop has,
+    // and Setup is deliberately not one of them.
+    let mut scripted = Scripted::doing(vec![Does::Quit]);
+    walk(
+        &mut shell(false),
+        &mut scripted,
+        &mut Bench::default(),
+        &mut Curtain::default(),
+    )
+    .expect("a settled session should draw");
+
+    for screen in &scripted.listed {
+        for item in screen {
+            assert!(
+                !item.to_lowercase().contains("set up"),
+                "a set-up machine was offered {item}"
+            );
+        }
+    }
+}
+
+/// One thing to do, plus the way out. The same shape the first run has, for the same reason:
+/// a menu with no way out is a trap, and Esc does that anyway.
+#[test]
+fn the_setup_screen_offers_one_thing_and_says_what_it_will_do() {
+    let mut scripted = Scripted::doing(vec![Does::Quit]);
+    walk(
+        &mut unset_up(),
+        &mut scripted,
+        &mut Bench::default(),
+        &mut Curtain::default(),
+    )
+    .expect("a machine that is not set up should draw");
+
+    assert_eq!(
+        scripted.listed,
+        vec![vec!["Set up this machine".to_owned(), QUIT.to_owned()]]
+    );
+}
+
+/// Choosing it runs the real thing, on the real terminal.
+///
+/// **`Flow::Run` and not `Flow::To`**, which is what hands the terminal back before Setup
+/// starts talking — its step-by-step output would otherwise be wiped by the next redraw, and
+/// the one question it can ask could not be asked at all.
+#[test]
+fn choosing_setup_runs_it_outside_the_alternate_screen() {
+    let shell = unset_up();
+    let screen = shell.opening();
+
+    let flow = screen.chose(&shell, &Bench::default(), 0);
+    match flow {
+        crate::ui::screen::Flow::Run(leaf, _) => {
+            assert_eq!(leaf.job, crate::ui::flow::Job::Setup);
+            assert_eq!(leaf.command, "sloop setup");
+        }
+        other => panic!("setup should run rather than ask: {other:?}"),
+    }
+}
+
+/// **Re-runnable after a failure, which is the other half of the `Done when`.** A failed
+/// Setup stays on the Setup screen with what went wrong, rather than dropping into a menu
+/// that cannot work or out of the session altogether.
+#[test]
+fn a_failed_setup_stays_on_the_setup_screen_and_says_why() {
+    let screen = unset_up().opening();
+    let troubled = screen.troubled("the cluster would not start".to_owned());
+
+    let Screen::Setup { trouble, .. } = &troubled else {
+        panic!("a failed setup left the setup screen: {troubled:?}");
+    };
+    assert_eq!(trouble.as_deref(), Some("the cluster would not start"));
+
+    // And it offers to carry on rather than to start again, because every step it takes
+    // asks before it acts.
+    let crate::ui::screen::Face::Menu(menu) = troubled.face(&Bench::default()) else {
+        panic!("the setup screen should be a menu");
+    };
+    assert!(
+        menu.sections[0].items[0].title.contains("Carry on"),
+        "{}",
+        menu.sections[0].items[0].title
+    );
+}
+
+/// Setup is the root of the tree it opens: nothing is behind it, so there is no breadcrumb
+/// and no `← Back` into a menu that would not work.
+#[test]
+fn setup_is_a_root_with_nothing_behind_it() {
+    let screen = unset_up().opening();
+    assert!(screen.crumbs().is_empty());
 }
