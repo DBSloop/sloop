@@ -341,6 +341,27 @@ impl Run {
         self
     }
 
+    /// Fail the test if it exited with `code`.
+    ///
+    /// For a claim shaped "it got past the thing that would have stopped it": what matters
+    /// is that the run was *not* refused, and pinning the code it did produce would be
+    /// pinning something the machine decides.
+    pub fn expect_not_code(&self, code: i32) -> &Self {
+        assert_ne!(
+            self.code(),
+            Some(code),
+            "`sloop {}` should not have exited {code}
+--- stdout ---
+{}
+--- stderr ---
+{}",
+            self.shown,
+            self.stdout(),
+            self.stderr()
+        );
+        self
+    }
+
     /// Fail the test if the output contains `text`.
     pub fn expect_silent_about(&self, text: &str) -> &Self {
         assert!(
@@ -351,4 +372,29 @@ impl Run {
         );
         self
     }
+}
+
+/// Is there a PostgreSQL client on this machine at all?
+///
+/// **A test that wants exit `3` has to say it needs one.** A connection that is *refused* is
+/// exit `3`; a machine with no `psql` cannot refuse a connection, it can only fail to start
+/// one, which is exit `2` and a different promise. That difference is what kept CI red on
+/// Linux and macOS for twelve commits while passing on Windows, whose runner happens to ship
+/// PostgreSQL — the tests meant "given a client" and never said so.
+///
+/// `PATH` only. sloop itself also looks where a package manager hides them, so a machine with
+/// `psql` off `PATH` skips something it could have run — which is a visible skip rather than a
+/// false pass, and CI installs a client so it never happens there.
+#[must_use]
+pub fn a_postgres_client_is_installed() -> bool {
+    let name = if cfg!(windows) { "psql.exe" } else { "psql" };
+
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|directory| directory.join(name).is_file())
+    })
+}
+
+/// Say why an assertion is not being made, so a skip is something somebody can see.
+pub fn skipping(what: &str) {
+    eprintln!("skipping {what}: this machine has no psql, so a connection cannot be refused");
 }

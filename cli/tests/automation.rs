@@ -14,7 +14,7 @@ mod support;
 
 use std::time::Duration;
 
-use support::Sandbox;
+use support::{Sandbox, a_postgres_client_is_installed, skipping};
 
 /// Long enough for a real command on a slow machine, short enough that a hung test is a
 /// failed test rather than a build nobody can cancel.
@@ -51,9 +51,8 @@ fn two_runs_against_one_database_produce_one_success_and_one_seven() {
     let sandbox = with_one("lock-race");
     let store = sandbox.global_dir();
 
-    // `backup` is the command the rule was written for. Both are pointed at a server that is
-    // not there, so whichever takes the lock fails to connect — which is exit 3, and is
-    // still "this run started". The one that is refused gets 7 without contacting anything.
+    // `backup` is the command the rule was written for. The one that is refused gets 7
+    // without contacting anything.
     let held = sloop_lib_lock(&store, "orders");
 
     let refused = sandbox.sloop(&["backup", "orders"]);
@@ -64,8 +63,10 @@ fn two_runs_against_one_database_produce_one_success_and_one_seven() {
 
     drop(held);
 
-    // With the lock free, the same command gets past it and fails on the connection instead.
-    sandbox.sloop(&["backup", "orders"]).expect_code(3);
+    // With the lock free, the same command gets past it. **Not** which code it then fails
+    // with: the server is not there either way, and whether that is a refused connection or
+    // a missing client is the machine's business and not what this test is about.
+    sandbox.sloop(&["backup", "orders"]).expect_not_code(7);
 }
 
 /// Take the lock the way another process would, using the binary's own directory layout.
@@ -110,9 +111,9 @@ fn two_databases_run_at_the_same_time() {
 
     let held = sloop_lib_lock(&sandbox.global_dir(), "orders");
 
-    // `orders` is locked; `app` is not, so it gets as far as the connection.
+    // `orders` is locked; `app` is not, so it gets past the lock and on with its run.
     sandbox.sloop(&["backup", "orders"]).expect_code(7);
-    sandbox.sloop(&["backup", "app"]).expect_code(3);
+    sandbox.sloop(&["backup", "app"]).expect_not_code(7);
 
     drop(held);
 }
@@ -230,8 +231,14 @@ fn the_exit_codes_are_what_automation_was_promised() {
         .sloop(&["backup", "no-such-database"])
         .expect_code(2);
 
-    // 3 — the server could not be reached.
-    sandbox.sloop(&["db", "test", "orders"]).expect_code(3);
+    // 3 — the server could not be reached. It takes a client to be refused by a server: with
+    // no `psql` at all the run cannot reach a server to be refused *by*, and sloop says so
+    // and exits 2, which is a different promise and is checked above.
+    if a_postgres_client_is_installed() {
+        sandbox.sloop(&["db", "test", "orders"]).expect_code(3);
+    } else {
+        skipping("the exit 3 half of the contract");
+    }
 
     // 7 — somebody else has it.
     let held = sloop_lib_lock(&sandbox.global_dir(), "orders");

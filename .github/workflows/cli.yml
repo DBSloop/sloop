@@ -67,6 +67,30 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+
+      # **The client, so every runner tests the same thing.** `R17`'s contract says a server
+      # that cannot be reached is exit 3 — and being *refused* by a server needs a client to
+      # be refused with. The Windows runner happens to ship PostgreSQL and the other two do
+      # not, so without this the same assertion passed on one platform and skipped on two,
+      # which is exactly how a matrix stops meaning anything. The client only; the servers
+      # are the `postgres`, `mysql` and `mariadb` jobs below.
+      - name: A PostgreSQL client, on the runners that have none
+        if: runner.os != 'Windows'
+        working-directory: .
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install libpq
+            echo "$(brew --prefix libpq)/bin" >> "$GITHUB_PATH"
+          else
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Every runner has one, so nothing below quietly skips
+        working-directory: .
+        shell: bash
+        run: psql --version
+
       - run: cargo test --all-features
 
   msrv:
