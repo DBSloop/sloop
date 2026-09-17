@@ -54,8 +54,7 @@ pub fn install(global: &Path, asked: &Installing<'_>) -> Outcome<Exit> {
         ));
     }
 
-    let workspace = install::home(global).join("download");
-    let read = reader(&workspace);
+    let read = reader();
 
     let engine = match asked.engine {
         Some(named) => engine_named(named)?,
@@ -87,6 +86,20 @@ pub fn install(global: &Path, asked: &Installing<'_>) -> Outcome<Exit> {
 
     let port = install::port::choose(engine.default_port(), &install::record::ports(global))?;
     announce(&build, global, port);
+
+    // **The one `--dry-run` stop, at the moment this stops reading and starts changing
+    // something.** Everything above it is reading: the index, which versions exist, which of
+    // them was asked for, whether one is already installed, which port is free. Nothing below
+    // it is — so a rehearsal has done every check that makes it worth having and has left
+    // four hundred megabytes on the other end of the wire.
+    if crate::report::would(&format!(
+        "install {} into {} on port {port}",
+        build.describe(),
+        install::home_for(global, build.engine, &build.version).display()
+    )) {
+        return Ok(Exit::Success);
+    }
+
     if !asked.yes && !confirmed("Download and install it now?")? {
         return Err(Failure::new(Exit::Usage, "nothing was installed").hint(instead(engine)));
     }
@@ -156,13 +169,19 @@ fn instead(engine: Engine) -> String {
 /// **The same download path as the archive, on purpose.** There is one place in sloop that
 /// reaches the network and this is it, so an index cannot quietly acquire a second one — and
 /// `cargo tree` still shows nothing that could speak HTTP.
-fn reader(workspace: &Path) -> impl Fn(&str) -> Outcome<String> + use<'_> {
+///
+/// **Into the system's temporary directory rather than the store**, because an index is not
+/// part of an install. It is nine kilobytes, read once and deleted — and putting it under
+/// `<global>/servers/` meant a `--dry-run` that changed nothing still left a directory
+/// behind, which is not what a rehearsal promises.
+fn reader() -> impl Fn(&str) -> Outcome<String> {
     move |url: &str| {
-        std::fs::create_dir_all(workspace).map_err(|error| {
-            Failure::usage(format!("could not create {}: {error}", workspace.display()))
-        })?;
+        let into: PathBuf = std::env::temp_dir().join(format!(
+            "sloop-index-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
 
-        let into: PathBuf = workspace.join("index.json");
         acquire::download(url, &into)?;
         let text = std::fs::read_to_string(&into).map_err(|error| {
             Failure::usage(format!("could not read {}: {error}", into.display()))

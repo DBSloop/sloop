@@ -188,6 +188,11 @@ pub fn run(global: &Path, build: &Build) -> Outcome<Installed> {
     let password = raise(&installed)?;
     record::remember(global, &installed, &password)?;
 
+    // The archive is gone, so the directory it came down into has nothing left to hold.
+    // `remove_dir` and not `remove_dir_all`: it goes only if it is empty, so a half-finished
+    // download from another run is never swept up by a run that happened to succeed.
+    let _ = std::fs::remove_dir(workspace(global));
+
     Ok(installed)
 }
 
