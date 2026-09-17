@@ -86,6 +86,26 @@ jobs:
             sudo apt-get install -y postgresql-client
           fi
 
+      # The Windows runner ships PostgreSQL and does not put it on `PATH`; sloop finds it
+      # anyway, because its own search looks where the installer puts things. The tests
+      # cannot look there — they are outside the binary — so `PATH` is where they have to be
+      # told, and this is the one line that tells them.
+      - name: The Windows runner already has one; put it where the tests can see it
+        if: runner.os == 'Windows'
+        working-directory: .
+        shell: bash
+        run: |
+          if [ -n "$PGBIN" ] && [ -x "$PGBIN/psql.exe" ]; then
+            echo "$PGBIN" >> "$GITHUB_PATH"
+          else
+            for bin in "/c/Program Files/PostgreSQL"/*/bin; do
+              if [ -x "$bin/psql.exe" ]; then
+                echo "$bin" >> "$GITHUB_PATH"
+                break
+              fi
+            done
+          fi
+
       - name: Every runner has one, so nothing below quietly skips
         working-directory: .
         shell: bash
