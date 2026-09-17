@@ -4,14 +4,15 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{Qualified, Reason, Resolution, Scope, World, normalize, resolve};
+use super::{Qualified, Reason, Registries, Resolution, Scope, World, file, normalize, resolve};
 
-/// A world made of three lists.
+/// A world made of three lists, and the line the walk stops at.
 #[derive(Default)]
 struct Fake {
     directories: Vec<PathBuf>,
     projects: Vec<PathBuf>,
     named: Vec<(String, PathBuf)>,
+    home: Option<PathBuf>,
 }
 
 impl Fake {
@@ -33,6 +34,12 @@ impl Fake {
         self.named.push((name.to_owned(), PathBuf::from(path)));
         self
     }
+
+    /// The user's home directory, which the walk up the tree stops at.
+    fn home(mut self, path: &str) -> Self {
+        self.home = Some(PathBuf::from(path));
+        self
+    }
 }
 
 impl World for Fake {
@@ -49,6 +56,10 @@ impl World for Fake {
             .iter()
             .find(|(known, _)| known == name)
             .map(|(_, path)| path.clone())
+    }
+
+    fn boundary(&self) -> Option<&Path> {
+        self.home.as_deref()
     }
 }
 
@@ -402,4 +413,210 @@ fn normalising_leaves_a_drive_prefix_alone() {
 
     let above_the_drive = normalize(Path::new(r"C:\.."));
     assert_eq!(above_the_drive, PathBuf::from(r"C:\"));
+}
+
+// ---------------------------------------------------------------------------------------
+// The walk stops at the home directory
+// ---------------------------------------------------------------------------------------
+
+/// The whole reason the boundary exists: `~/.sloop` is the global store, and a walk that
+/// looked at `~` would find it and call the global store a project.
+#[test]
+fn the_global_store_is_never_mistaken_for_a_project() {
+    let world = Fake::default().home("/home/me").project("/home/me");
+    let resolved = resolve(&at("/home/me"), &world, false, None, None).unwrap();
+
+    assert_eq!(project_of(&resolved), None);
+    assert_eq!(resolved.reason, Reason::NoProject);
+}
+
+/// `%TEMP%` on Windows sits under `%USERPROFILE%`, and this is the defect that found the
+/// rule: a walk from a directory under home ran straight past home into the real store.
+#[test]
+fn a_directory_under_home_does_not_reach_the_store_above_it() {
+    let world = Fake::default()
+        .home("/home/me")
+        .project("/home/me")
+        .dir("/home/me/scratch/work");
+    let resolved = resolve(&at("/home/me/scratch/work"), &world, false, None, None).unwrap();
+
+    assert_eq!(project_of(&resolved), None);
+    assert_eq!(resolved.reason, Reason::NoProject);
+}
+
+/// The boundary stops the walk; it does not stop a real project on the way to it.
+#[test]
+fn a_real_project_under_home_still_wins() {
+    let world = Fake::default()
+        .home("/home/me")
+        .project("/home/me")
+        .project("/home/me/code/app")
+        .dir("/home/me/code/app/src");
+    let resolved = resolve(&at("/home/me/code/app/src"), &world, false, None, None).unwrap();
+
+    assert_eq!(project_of(&resolved), Some("/home/me/code/app".to_owned()));
+    assert_eq!(resolved.reason, Reason::WalkUp);
+}
+
+/// Above home there is nothing to find either — otherwise `/home`, or the `Users` folder on
+/// Windows, would be a project for every account on the machine.
+#[test]
+fn nothing_above_home_is_a_project() {
+    let world = Fake::default()
+        .home("/home/me")
+        .project("/home")
+        .dir("/home/me/work");
+    let resolved = resolve(&at("/home/me/work"), &world, false, None, None).unwrap();
+
+    assert_eq!(project_of(&resolved), None);
+}
+
+/// A project outside the home folder is untouched by the rule, and the walk above it still
+/// runs to the root.
+#[test]
+fn a_project_outside_the_home_folder_is_found_as_before() {
+    let world = Fake::default()
+        .home("/home/me")
+        .project("/srv/app")
+        .dir("/srv/app/db");
+    let resolved = resolve(&at("/srv/app/db"), &world, false, None, None).unwrap();
+
+    assert_eq!(project_of(&resolved), Some("/srv/app".to_owned()));
+}
+
+/// `-C` walks up too, so it obeys the same line. Pointing it at the home directory names
+/// no project rather than naming the global store.
+#[test]
+fn the_flag_cannot_reach_past_the_boundary_either() {
+    let world = Fake::default().home("/home/me").project("/home/me");
+    let failure = resolve(&at("/work"), &world, false, Some("/home/me"), None)
+        .expect_err("home is not a project");
+
+    assert_eq!(failure.exit().code(), 2);
+}
+
+// ---------------------------------------------------------------------------------------
+// Local first, and no other project's
+// ---------------------------------------------------------------------------------------
+
+/// A registry holding one database under each name.
+fn holding(names: &[&str]) -> file::Registry {
+    let mut registry = file::Registry::default();
+    for name in names {
+        registry.insert(
+            (*name).to_owned(),
+            file::Database {
+                engine: crate::engine::Engine::Postgres,
+                host: "h".to_owned(),
+                port: 5432,
+                database: "d".to_owned(),
+                user: "a".to_owned(),
+                password: crate::secret::Route::Keyring,
+            },
+        );
+    }
+    registry
+}
+
+/// Both stores, as a command sees them: this project's and the global one.
+fn both(project: &[&str], global: &[&str]) -> Registries {
+    let world = Fake::default().home("/home/me").project("/home/me/app");
+    let resolution = resolve(&at("/home/me/app"), &world, false, None, None).unwrap();
+
+    Registries {
+        project: Some((PathBuf::from("/home/me/app/.sloop"), holding(project))),
+        global: (PathBuf::from("/home/me/.sloop"), holding(global)),
+        resolution,
+    }
+}
+
+/// **The order every picker in the tool inherits.** `backup`, `restore`, `mirror`, `sync`,
+/// `drop` and the menu all list what `all` yields, so this is where "local first" is either
+/// true or not — and a name that sorts last proves it is the search order and not the
+/// alphabet.
+#[test]
+fn everything_lists_this_project_before_the_global_store() {
+    let registries = both(&["zulu"], &["alpha"]);
+
+    let listed: Vec<(Scope, &str)> = registries
+        .all()
+        .map(|(scope, name, _)| (scope, name))
+        .collect();
+
+    assert_eq!(listed, [(Scope::Project, "zulu"), (Scope::Global, "alpha")]);
+}
+
+/// Within a scope the names are alphabetical, because the registry is a `BTreeMap` and a
+/// picker somebody has to scan should not be in insertion order.
+#[test]
+fn inside_a_scope_the_names_are_still_in_order() {
+    let registries = both(&["beta", "alpha"], &["delta", "charlie"]);
+
+    let listed: Vec<&str> = registries.all().map(|(_, name, _)| name).collect();
+
+    assert_eq!(listed, ["alpha", "beta", "charlie", "delta"]);
+}
+
+/// A project entry shadows a global one of the same name — the near one answers, and the far
+/// one is listed after it so that somebody can work out why.
+#[test]
+fn a_shadowed_name_is_listed_second_and_never_first() {
+    let registries = both(&["orders"], &["orders"]);
+
+    let listed: Vec<Scope> = registries.all().map(|(scope, _, _)| scope).collect();
+    assert_eq!(listed, [Scope::Project, Scope::Global]);
+
+    let (scope, _) = registries.find("orders").expect("it is registered twice");
+    assert_eq!(scope, Scope::Project);
+}
+
+/// `--global` narrows it to one store, and the project's databases are then not listed at
+/// all — which is the same rule read from the other end.
+#[test]
+fn the_global_flag_lists_only_the_global_store() {
+    let world = Fake::default().home("/home/me").project("/home/me/app");
+    let resolution = resolve(&at("/home/me/app"), &world, true, None, None).unwrap();
+
+    let registries = Registries {
+        project: None,
+        global: (PathBuf::from("/home/me/.sloop"), holding(&["alpha"])),
+        resolution,
+    };
+
+    let listed: Vec<&str> = registries.all().map(|(_, name, _)| name).collect();
+    assert_eq!(listed, ["alpha"]);
+}
+
+/// The route the walk does not cover: a pointer file in the index, written by an older
+/// sloop, naming the home directory. This machine's index really did hold one.
+#[test]
+fn an_indexed_project_that_names_the_home_directory_is_refused() {
+    let world = Fake::default()
+        .home("/home/me")
+        .project("/home/me")
+        .name("me", "/home/me");
+
+    for from in [
+        resolve(&at("/work"), &world, false, Some("me"), None),
+        resolve(&at("/work"), &world, false, None, Some("me")),
+    ] {
+        let failure = from.expect_err("the home directory is not a project");
+        assert_eq!(failure.exit().code(), 2);
+        assert!(
+            failure.message().contains("home directory"),
+            "{}",
+            failure.message()
+        );
+    }
+}
+
+/// An index entry naming a real project is untouched by that check.
+#[test]
+fn an_indexed_project_somewhere_else_still_resolves() {
+    let world = Fake::default()
+        .home("/home/me")
+        .name("app", "/home/me/code/app");
+    let resolved = resolve(&at("/work"), &world, false, Some("app"), None).unwrap();
+
+    assert_eq!(project_of(&resolved), Some("/home/me/code/app".to_owned()));
 }

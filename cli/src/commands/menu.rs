@@ -46,11 +46,12 @@ impl Machine {
         environment: Option<&str>,
         password_command: Option<&str>,
     ) -> Outcome<Self> {
-        let store = locations.global_dir()?;
+        let store = crate::registry::adopt::global(locations)?;
+        let home = locations.home_dir()?;
         let cwd = std::env::current_dir().map_err(|error| {
             Failure::usage(format!("cannot read the working directory: {error}"))
         })?;
-        let resolution = resolve(&cwd, &Disk::new(&store), global, project, environment)?;
+        let resolution = resolve(&cwd, &Disk::new(&store, home), global, project, environment)?;
 
         Ok(Self {
             global: store,
@@ -111,13 +112,20 @@ impl Doing for Machine {
         let Ok(registries) = self.open() else {
             return Vec::new();
         };
-        let mut names: Vec<String> = registries
-            .all()
-            .map(|(_, name, _)| name.to_owned())
-            .collect();
-        // The iteration is scope by scope; a menu wants one list somebody can scan.
-        names.sort_unstable();
-        names.dedup();
+
+        // **This project's, then the global store's, and no other project's.** The order is
+        // `Registries::all`'s already — sorting the two scopes together would throw it away,
+        // and a picker that offers `staging` above the `staging` you are standing in is a
+        // picker that runs the wrong command. Names within a scope are alphabetical because
+        // the registry is a `BTreeMap`; the scopes stay in search order.
+        let mut names: Vec<String> = Vec::new();
+        for (_, name, _) in registries.all() {
+            // A project entry shadows a global one of the same name, so the far one is not
+            // a second choice — it is the same choice, resolving somewhere else.
+            if !names.iter().any(|seen| seen == name) {
+                names.push(name.to_owned());
+            }
+        }
         names
     }
 

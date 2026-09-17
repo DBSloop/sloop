@@ -1,7 +1,7 @@
 //! `sloop backups list` and `sloop backups prune` — what has been taken, and what goes.
 //!
 //! **Both commands read both stores.** A project's backups live beside the project and the
-//! global store's live in the config directory, and somebody asking what they have does not
+//! global store's live in `~/.sloop`, and somebody asking what they have does not
 //! want to be told about only half of it. The search order comes from `R2`'s resolution, so
 //! `--global` narrows this exactly as it narrows everything else.
 //!

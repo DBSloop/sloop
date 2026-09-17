@@ -151,6 +151,21 @@ pub fn note(line: &str) {
     }
 }
 
+/// Something the user has to know happened, on standard error, whatever was asked for.
+///
+/// **Never silenced, and it is not commentary.** [`note`] is what a run says about the work
+/// it is doing, and `--quiet` and `--json` are how somebody turns that off. This is for the
+/// handful of things that happen *once* and move the user's data — today, the global store
+/// being taken over from the path an older sloop kept it at. A scheduled `--json` run is
+/// exactly the run that would relocate it, and a relocation nobody was told about is the
+/// same as one that did not happen.
+///
+/// Standard error, so a `--json` consumer's stdout is still nothing but the document.
+pub fn notice(line: &str) {
+    log(line);
+    anstream::eprintln!("{line}");
+}
+
 /// Something that went wrong, on standard error.
 ///
 /// **Never silenced.** `--quiet` removes the commentary of a run that is working; a run that

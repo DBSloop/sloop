@@ -230,7 +230,9 @@ fn global_ignores_a_project_that_is_right_here() {
 
     run.expect_said(&sandbox.global_dir().display().to_string());
     run.expect_said("--global");
-    run.expect_silent_about(".sloop —");
+    // The project's own registry, named in full: the global store is `~/.sloop` now, so
+    // ".sloop" alone is a substring of the right answer as well as the wrong one.
+    run.expect_silent_about(&project.join(".sloop").display().to_string());
 }
 
 #[test]
@@ -444,4 +446,272 @@ fn a_project_path_with_spaces_in_it_survives_the_round_trip() {
 fn git_or_skip() -> Option<String> {
     let found = Command::new("git").arg("--version").output().ok()?;
     found.status.success().then(|| "git".to_owned())
+}
+
+// =======================================================================================
+// R19b — the global store is `~/.sloop`, and local comes first
+// =======================================================================================
+
+/// Add a database to whichever store `where_` resolves to, with no password to fetch.
+fn register(sandbox: &Sandbox, where_: &Path, args: &[&str]) {
+    let mut all = args.to_vec();
+    all.extend_from_slice(&["--url", "postgres://a@h/d", "--env", "PW"]);
+    sandbox.sloop_in(where_, &all).expect_code(0);
+}
+
+#[test]
+fn the_global_store_is_the_dot_sloop_in_the_home_directory() {
+    let sandbox = Sandbox::new("home-store");
+    register(&sandbox, sandbox.work(), &["db", "add", "orders"]);
+
+    // Not `%APPDATA%\sloop`, not `~/.config/sloop`, not `~/Library/Application Support`.
+    assert!(
+        sandbox.global_dir().join("registry.toml").is_file(),
+        "the registry should be at {}",
+        sandbox.global_dir().display()
+    );
+    assert!(
+        !sandbox.legacy_dir().exists(),
+        "nothing should have been written to {}",
+        sandbox.legacy_dir().display()
+    );
+}
+
+/// The defect `R18a` found, from the inside: the global store sits in the home directory
+/// now, and a walk up the tree that reached it would call it a project — from the home
+/// directory itself, and from every directory under it.
+#[test]
+fn the_global_store_is_never_mistaken_for_a_project() {
+    let sandbox = Sandbox::new("home-not-project");
+    register(&sandbox, sandbox.work(), &["db", "add", "orders"]);
+    assert!(sandbox.global_dir().is_dir(), "the store should exist now");
+
+    let deep = sandbox.make_dir("one/two/three");
+    for standing_in in [sandbox.home(), sandbox.work(), deep.as_path()] {
+        let run = sandbox.sloop_in(standing_in, &["db", "list"]);
+        run.expect_code(0);
+        // No project was resolved, from any of the three: the global store is the only
+        // place a bare name is looked for.
+        run.expect_said("looked for in the global store");
+        run.expect_silent_about("this project, then");
+    }
+
+    // And nothing went on to treat the store as a project directory.
+    assert!(
+        !sandbox.global_dir().join(".sloop").exists(),
+        "a .sloop appeared inside the global store"
+    );
+}
+
+/// A real project under the home directory is still a project. The boundary stops the walk
+/// at home; it does not stop it before it.
+#[test]
+fn a_project_under_the_home_directory_still_resolves_to_itself() {
+    let sandbox = Sandbox::new("project-under-home");
+    let project = sandbox.make_dir("code/app");
+    sandbox.sloop_in(&project, &["init"]).expect_code(0);
+
+    let inside = sandbox.make_dir("code/app/src");
+    let run = sandbox.sloop_in(&inside, &["db", "list"]);
+    run.expect_code(0);
+    run.expect_said(&project.join(".sloop").display().to_string());
+}
+
+/// Leave a store at the old path: let sloop write a real one, then move it there.
+///
+/// Hand-written TOML would be a second opinion about the file format; what has to be picked
+/// up is a store somebody actually has. The project index goes in it too, because the whole
+/// directory is what moves and a registry that arrived without its pointers would be a
+/// migration that lost half the store.
+fn leave_a_store_at_the_old_path(sandbox: &Sandbox, name: &str) {
+    let project = sandbox.make_dir("indexed");
+    sandbox.sloop_in(&project, &["init"]).expect_code(0);
+    register(sandbox, sandbox.work(), &["db", "add", name]);
+
+    let written = sandbox.global_dir();
+    assert!(
+        written.join("projects").join("indexed").is_file(),
+        "the store should hold a registry and an index by now"
+    );
+
+    let old = sandbox.legacy_dir();
+    if let Some(parent) = old.parent() {
+        std::fs::create_dir_all(parent).expect("creatable");
+    }
+    std::fs::rename(&written, &old).expect("movable");
+}
+
+#[test]
+fn an_older_store_is_moved_once_and_said_so() {
+    let sandbox = Sandbox::new("adopt");
+    leave_a_store_at_the_old_path(&sandbox, "orders");
+    let old = sandbox.legacy_dir();
+
+    let first = sandbox.sloop(&["db", "list"]);
+    first.expect_code(0);
+    first.expect_said(&format!(
+        "Moved the global store from {} to {}",
+        old.display(),
+        sandbox.global_dir().display()
+    ));
+    // Moved, not copied: one store, and the databases in it are the ones that were there.
+    first.expect_said("orders");
+    assert!(!old.exists(), "{} should be gone", old.display());
+
+    // The index came with it, which is only provable by using it.
+    sandbox
+        .sloop(&["-C", "indexed", "db", "list"])
+        .expect_code(0)
+        .expect_said("this project, then the global store");
+
+    // Once. A second run has nothing left to move and says nothing about moving.
+    let second = sandbox.sloop(&["db", "list"]);
+    second.expect_code(0);
+    second.expect_said("orders");
+    second.expect_silent_about("Moved the global store");
+}
+
+/// An empty directory at the old path is not a store, and announcing a migration that
+/// migrated nothing is worse than staying quiet.
+#[test]
+fn an_empty_directory_at_the_old_path_is_left_alone() {
+    let sandbox = Sandbox::new("adopt-empty");
+    std::fs::create_dir_all(sandbox.legacy_dir()).expect("creatable");
+
+    let run = sandbox.sloop(&["db", "list"]);
+    run.expect_code(0);
+    run.expect_silent_about("Moved the global store");
+}
+
+/// Both at once — which only happens if something recreated the old path after the move.
+/// It is said rather than ignored, because the alternative is somebody registering
+/// databases into a store nothing reads.
+#[test]
+fn a_store_at_the_old_path_is_never_read_alongside_the_new_one() {
+    let sandbox = Sandbox::new("adopt-both");
+    leave_a_store_at_the_old_path(&sandbox, "stale");
+    let old = sandbox.legacy_dir();
+
+    // A store at the new path as well: the move already happened once, and this is the
+    // machine where something put the old directory back afterwards. Made before the next
+    // run, so that run has a new store to find and nothing to move onto it.
+    std::fs::create_dir_all(sandbox.global_dir()).expect("creatable");
+    register(&sandbox, sandbox.work(), &["db", "add", "current"]);
+    assert!(sandbox.global_dir().is_dir() && old.is_dir(), "both, now");
+
+    let run = sandbox.sloop(&["db", "list"]);
+    run.expect_code(0);
+    run.expect_said("current");
+    run.expect_said(&format!("{} also holds a sloop store", old.display()));
+    run.expect_silent_about("stale");
+    assert!(
+        old.exists(),
+        "the old store is left where it is, not merged"
+    );
+}
+
+/// Local first, and no other project's: the rule the owner asked for, seen from outside.
+#[test]
+fn a_listing_puts_this_project_first_and_no_other_project_at_all() {
+    let sandbox = Sandbox::new("local-first");
+    let mine = sandbox.make_dir("mine");
+    let theirs = sandbox.make_dir("theirs");
+    sandbox.sloop_in(&mine, &["init"]).expect_code(0);
+    sandbox.sloop_in(&theirs, &["init"]).expect_code(0);
+
+    // A name that sorts last, in the project — so being printed first can only be the
+    // search order and never the alphabet.
+    register(&sandbox, &mine, &["db", "add", "zulu"]);
+    register(&sandbox, &theirs, &["db", "add", "not-mine"]);
+    register(&sandbox, &mine, &["--global", "db", "add", "alpha"]);
+
+    let run = sandbox.sloop_in(&mine, &["db", "list"]);
+    run.expect_code(0);
+    run.expect_silent_about("not-mine");
+
+    let said = run.said();
+    let project = said.find("zulu").expect("the project's database is listed");
+    let global = said.find("alpha").expect("the global database is listed");
+    assert!(
+        project < global,
+        "this project's databases come first:\n{said}"
+    );
+}
+
+/// The other half of "never treated as a project": the route that would make one. `~/.sloop`
+/// is the global store, so `init` in the home directory would create the store and then
+/// record it in itself.
+#[test]
+fn init_refuses_the_home_directory() {
+    let sandbox = Sandbox::new("init-home");
+
+    let run = sandbox.sloop_in(sandbox.home(), &["init"]);
+    run.expect_code(2);
+    run.expect_said("home directory");
+    assert!(
+        !sandbox.global_dir().exists(),
+        "init created the global store while calling it a project"
+    );
+
+    // And by name, from somewhere else, which is the same refusal read from the flag.
+    sandbox
+        .sloop(&["-C", &sandbox.home().display().to_string(), "init"])
+        .expect_code(2)
+        .expect_said("home directory");
+}
+
+/// A stale pointer naming the home directory — the exact entry this machine's index was
+/// found holding after the `R18a` defect. It is refused rather than handing back the global
+/// store dressed as a project.
+#[test]
+fn an_indexed_project_naming_the_home_directory_is_refused() {
+    let sandbox = Sandbox::new("stale-pointer");
+    register(&sandbox, sandbox.work(), &["db", "add", "orders"]);
+
+    let pointer = sandbox.pointer("me");
+    std::fs::create_dir_all(pointer.parent().expect("a file has a parent")).expect("creatable");
+    std::fs::write(&pointer, sandbox.home().display().to_string()).expect("writable");
+
+    sandbox
+        .sloop(&["-C", "me", "db", "list"])
+        .expect_code(2)
+        .expect_said("home directory");
+
+    sandbox
+        .command(sandbox.work(), &["db", "list"])
+        .env("SLOOP_PROJECT", "me")
+        .run()
+        .expect_code(2)
+        .expect_said("home directory");
+}
+
+/// **The move survives `--json` and `--quiet`, and stdout stays the document.**
+///
+/// A scheduled run is exactly the run that would relocate the store, and one nobody was told
+/// about is the same as one that did not happen. It goes on standard error, so a `--json`
+/// consumer reading standard output is unaffected.
+#[test]
+fn the_move_is_reported_even_to_a_run_that_asked_for_silence() {
+    for flag in ["--json", "--quiet"] {
+        let sandbox = Sandbox::new("adopt-quiet");
+        leave_a_store_at_the_old_path(&sandbox, "orders");
+
+        let run = sandbox.sloop(&[flag, "db", "list"]);
+        run.expect_code(0);
+        assert!(
+            run.stderr().contains("Moved the global store"),
+            "`sloop {flag} db list` said nothing about the move\n--- stderr ---\n{}",
+            run.stderr()
+        );
+        assert!(
+            !run.stdout().contains("Moved the global store"),
+            "the move landed on standard output under {flag}\n--- stdout ---\n{}",
+            run.stdout()
+        );
+        if flag == "--json" {
+            let parsed: serde_json::Value =
+                serde_json::from_str(&run.stdout()).expect("stdout should be one JSON document");
+            assert_eq!(parsed["ok"], serde_json::Value::Bool(true));
+        }
+    }
 }

@@ -5,10 +5,17 @@
 //! registered a project in the real `%APPDATA%\sloop`. A test that can reach the machine
 //! it is running on will eventually change it.
 //!
-//! So the sandbox hands the child process a `HOME`, an `APPDATA` and an `XDG_CONFIG_HOME`
-//! of its own, all inside a temporary directory, and runs it in a working directory of its
-//! own. Those three variables are the only inputs `Locations` has, so the global store
-//! lands inside the sandbox on all three platforms with nothing mocked.
+//! So the sandbox hands the child process a home directory of its own — `USERPROFILE` and
+//! `HOME`, plus the `APPDATA` and `XDG_CONFIG_HOME` an older store would have been under —
+//! all inside a temporary directory. Those variables are the only inputs `Locations` has, so
+//! the global store lands inside the sandbox on all three platforms with nothing mocked.
+//!
+//! **The working directory sits inside that home directory, and that is the containment.**
+//! `R19b` stops the walk up the tree at the home directory, so a run started anywhere under
+//! the sandbox's home can no longer walk out of the sandbox at all. It is not a precaution:
+//! `%TEMP%` on Windows sits under `%USERPROFILE%`, and a `.sloop` left in the real home
+//! directory by a harness whose `cd` had failed made every one of these tests resolve to it
+//! and write into it. [`Sandbox::new`] now asserts the containment rather than assuming it.
 //!
 //! Temporary directories are made by hand rather than with `tempfile`, because a
 //! four-crate dependency for twenty lines is not a trade this project makes.
@@ -52,13 +59,50 @@ impl Sandbox {
         let root = std::fs::canonicalize(&root).unwrap_or(root);
 
         let home = root.join("home");
-        let work = root.join("work");
+        let work = home.join("work");
 
         for dir in [&home, &work] {
             std::fs::create_dir_all(dir).expect("a temporary directory should be creatable");
         }
 
-        Self { root, home, work }
+        let sandbox = Self { root, home, work };
+        sandbox.check_containment();
+        sandbox
+    }
+
+    /// Fail loudly, here, if a run could reach outside the sandbox.
+    ///
+    /// The walk up the tree stops at the home directory, so a working directory inside the
+    /// sandbox's home can never resolve to a project outside it. That holds only while the
+    /// working directory really is inside the home directory — so it is checked rather than
+    /// assumed, and the panic says why, because the alternative is a test suite that silently
+    /// reads and writes the machine it is running on.
+    fn check_containment(&self) {
+        assert!(
+            self.home.starts_with(&self.root),
+            "the sandbox home {} is not inside the sandbox {}",
+            self.home.display(),
+            self.root.display()
+        );
+        assert!(
+            self.work.starts_with(&self.home),
+            "the sandbox working directory {} is not inside the sandbox home {}, so a run \
+             started in it can walk out of the sandbox and into the real home directory",
+            self.work.display(),
+            self.home.display()
+        );
+
+        // Nothing between the working directory and the boundary may already be a project,
+        // or a test would resolve to it without having asked for it.
+        let mut dir = self.work.as_path();
+        while dir != self.home {
+            assert!(
+                !dir.join(".sloop").exists(),
+                "{} already holds a .sloop, so a fresh sandbox is not fresh",
+                dir.display()
+            );
+            dir = dir.parent().expect("work is under home, so it has parents");
+        }
     }
 
     /// The working directory the commands run in unless told otherwise.
@@ -67,9 +111,26 @@ impl Sandbox {
         &self.work
     }
 
-    /// Where the global store will be, following the same rule the binary follows.
+    /// The sandbox's home directory — where the global store goes, and the line the walk
+    /// up the tree stops at.
+    #[must_use]
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
+    /// Where the global store will be, following the same rule the binary follows:
+    /// `~/.sloop`, on all three platforms.
     #[must_use]
     pub fn global_dir(&self) -> PathBuf {
+        self.home.join(".sloop")
+    }
+
+    /// Where a store written by an older sloop would be, so a test can leave one there.
+    ///
+    /// The same three conventions the binary looks in, computed from the same variables the
+    /// sandbox hands the child.
+    #[must_use]
+    pub fn legacy_dir(&self) -> PathBuf {
         if cfg!(target_os = "macos") {
             self.home
                 .join("Library")
@@ -77,7 +138,7 @@ impl Sandbox {
                 .join("sloop")
         } else {
             // Linux reads XDG_CONFIG_HOME, Windows reads APPDATA, and the sandbox points
-            // both at the same place.
+            // both at the home directory.
             self.home.join("sloop")
         }
     }
@@ -121,8 +182,10 @@ impl Sandbox {
         command
             .args(args)
             .current_dir(cwd)
-            // The three variables the store location is computed from.
+            // Every variable the store location is computed from — the home directory the
+            // store lives in, and the three an older store would have been found under.
             .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
             .env("APPDATA", &self.home)
             .env("XDG_CONFIG_HOME", &self.home)
             // **The backup key goes in the sandbox too.** A registry with no keypair gets

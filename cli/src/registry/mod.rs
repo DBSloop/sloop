@@ -4,9 +4,20 @@
 //! --global             the global store, full stop
 //! -C <path|name>       that project
 //! SLOOP_PROJECT        the same, from the environment
-//! walk up from cwd     the nearest .sloop, the way git finds .git
+//! walk up from cwd     the nearest .sloop, the way git finds .git — stopping at ~
 //! otherwise            the global store
 //! ```
+//!
+//! **Local is the default.** Without `--global`, a run works on the project's own `.sloop`,
+//! and every listing shows that project's databases before the global store's and no other
+//! project's at all. That falls out of [`Resolution::search_order`], which is the one place
+//! the order is decided.
+//!
+//! **The walk stops at the home directory**, and that is not a detail. The global store is
+//! `~/.sloop`; a walk that ran past `~` would find it from anywhere under the home folder
+//! and treat the global store as a project — reading the right databases for the wrong
+//! reason, and writing a project pointer into a store that is not a project. `~/.sloop` is
+//! only ever the global store.
 //!
 //! Once a project is in play, a bare name is looked for in the project **first** and the
 //! global store second, so the nearer answer wins — the rule that makes a repository's
@@ -16,6 +27,7 @@
 //! the world — is there a `.sloop` here, and does this name point anywhere — arrive through
 //! [`World`] rather than straight off the disk.
 
+pub mod adopt;
 pub mod file;
 pub mod locations;
 pub mod projects;
@@ -38,7 +50,7 @@ use locations::PROJECT_DIR;
 pub enum Scope {
     /// The `.sloop` beside the code.
     Project,
-    /// The one in the user's config directory.
+    /// The one in the user's home directory, at `~/.sloop`.
     Global,
 }
 
@@ -363,7 +375,7 @@ impl Registries {
     }
 }
 
-/// The two questions resolution asks of the world outside the process.
+/// The questions resolution asks of the world outside the process.
 pub trait World {
     /// Is this a directory?
     fn is_directory(&self, path: &Path) -> bool;
@@ -371,6 +383,12 @@ pub trait World {
     fn is_project(&self, dir: &Path) -> bool;
     /// Where does this project name point?
     fn project_named(&self, name: &str) -> Option<PathBuf>;
+    /// The directory the walk up the tree must not reach: the user's home.
+    ///
+    /// `None` means "keep going to the root", which is only right when there is no home
+    /// directory to find — an implementor that returns it because the answer was awkward
+    /// has switched the rule off.
+    fn boundary(&self) -> Option<&Path>;
 }
 
 /// Which registry to read, given the flags, the environment and the working directory.
@@ -432,6 +450,22 @@ fn named(cwd: &Path, world: &dyn World, argument: &str, reason: Reason) -> Outco
     }
 
     if let Some(project) = world.project_named(argument) {
+        // **The index is checked against the same line the walk stops at.** A pointer is a
+        // file somebody's older sloop wrote, and one naming the home directory would hand
+        // back the global store dressed as a project — which is exactly the entry this
+        // machine's index was found holding. The walk closes the route that creates one;
+        // this closes the route that uses one that already exists.
+        if let Some(home) = world.boundary()
+            && !can_be_a_project(&project, home)
+        {
+            return Err(Failure::usage(format!(
+                "{source} says {argument}, which points at {} — that is the home directory, and \
+                 {PROJECT_DIR} in it is the global store",
+                project.display()
+            ))
+            .hint("use --global to work on the global store, or point it at a project"));
+        }
+
         return Ok(Resolution {
             project: Some(project),
             reason,
@@ -446,15 +480,40 @@ fn named(cwd: &Path, world: &dyn World, argument: &str, reason: Reason) -> Outco
     )))
 }
 
-/// The nearest project at or above `start`, the way git finds `.git`.
+/// Can this directory hold a project at all?
+///
+/// **No, if it is the home directory or anywhere above it.** At `~` itself a `.sloop` *is*
+/// the global store, so a project there would be the same directory read under two sets of
+/// rules. Above `~` a project would be one the walk can never reach, because the walk stops
+/// at the home directory — a registry that exists and is never found is worse than one that
+/// was refused.
+#[must_use]
+pub fn can_be_a_project(dir: &Path, home: &Path) -> bool {
+    !home.starts_with(dir)
+}
+
+/// The nearest project at or above `start`, the way git finds `.git` — and no further than
+/// the home directory.
+///
+/// **The home directory is where it stops, and it is not looked at.** `~/.sloop` is the
+/// global store, so a walk that examined `~` would find it and call it a project; a walk
+/// that went above `~` would do the same from any directory on the machine that happens to
+/// sit under a home folder. Everything at or above home resolves to the global store, which
+/// is what it already was.
 fn walk_up(start: &Path, world: &dyn World) -> Option<PathBuf> {
+    let boundary = world.boundary();
     let mut candidate = Some(start);
+
     while let Some(dir) = candidate {
+        if boundary.is_some_and(|home| !can_be_a_project(dir, home)) {
+            return None;
+        }
         if world.is_project(dir) {
             return Some(dir.to_path_buf());
         }
         candidate = dir.parent();
     }
+
     None
 }
 
@@ -485,14 +544,22 @@ pub(crate) fn normalize(path: &Path) -> PathBuf {
 /// The real world: the filesystem, and the index in the global store.
 pub struct Disk {
     global: PathBuf,
+    home: PathBuf,
 }
 
 impl Disk {
-    /// Look at the real disk, with the project index in `global`.
+    /// Look at the real disk, with the project index in `global` and the walk stopping at
+    /// `home`.
+    ///
+    /// Both are passed in rather than worked out here. `global` is `home/.sloop` today, so
+    /// one could be derived from the other — but the two answers come from
+    /// [`locations::Locations`], where the environment is read, and deriving a path from a
+    /// path is how the two would one day disagree.
     #[must_use]
-    pub fn new(global: impl Into<PathBuf>) -> Self {
+    pub fn new(global: impl Into<PathBuf>, home: impl Into<PathBuf>) -> Self {
         Self {
             global: global.into(),
+            home: home.into(),
         }
     }
 }
@@ -508,5 +575,9 @@ impl World for Disk {
 
     fn project_named(&self, name: &str) -> Option<PathBuf> {
         projects::read(&self.global, name)
+    }
+
+    fn boundary(&self) -> Option<&Path> {
+        Some(&self.home)
     }
 }

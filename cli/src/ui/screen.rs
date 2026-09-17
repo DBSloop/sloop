@@ -59,6 +59,9 @@ pub enum Flow {
 pub struct Shell {
     /// The global store.
     pub global: PathBuf,
+    /// The user's home directory: the line the walk up the tree stops at, and so the one
+    /// directory `Init` cannot be pointed at.
+    pub home: PathBuf,
     /// Where `sloop` was run.
     pub cwd: PathBuf,
     /// The registry this session is reading.
@@ -1091,5 +1094,5 @@ fn start_project(shell: &Shell, given: &str) -> Outcome<Initialised> {
         )));
     }
 
-    crate::commands::init::create(&target, &shell.global)
+    crate::commands::init::create(&target, &shell.global, &shell.home)
 }

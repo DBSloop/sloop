@@ -198,7 +198,8 @@ impl Asking for Scripted {
 
 fn shell(fresh: bool) -> Shell {
     Shell {
-        global: PathBuf::from("/global"),
+        global: PathBuf::from("/home/me/.sloop"),
+        home: PathBuf::from("/home/me"),
         cwd: PathBuf::from("/work"),
         working_in: "the global store".to_owned(),
         found_by: "nothing named a project".to_owned(),
@@ -444,12 +445,18 @@ fn every_leaf_names_a_command_that_could_be_pasted() {
 /// and leaves something to print once the terminal has been handed back.
 #[test]
 fn starting_a_project_creates_the_registry_and_keeps_the_summary() {
-    let here = std::env::temp_dir().join(format!("sloop-ui-{}", std::process::id()));
-    let global = here.join("global");
+    // Laid out the way a real machine is: the global store in the home directory, and the
+    // working directory under it. `Init` refuses the home directory itself, so a fixture
+    // that put the two the other way round would be testing a shape that cannot exist.
+    let home = std::env::temp_dir().join(format!("sloop-ui-{}", std::process::id()));
+    let here = home.join("work");
+    let global = home.join(".sloop");
     std::fs::create_dir_all(&global).expect("a temporary directory");
+    std::fs::create_dir_all(&here).expect("a temporary directory");
 
     let mut shell = Shell {
         global,
+        home: home.clone(),
         cwd: here.clone(),
         working_in: "the global store".to_owned(),
         found_by: "nothing named a project".to_owned(),
@@ -481,19 +488,25 @@ fn starting_a_project_creates_the_registry_and_keeps_the_summary() {
         "the session still thinks it is a first run after init"
     );
 
-    let _ = std::fs::remove_dir_all(&here);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// The directory box comes pre-filled with where sloop was run, and coming back to it
 /// finds what was typed still typed.
 #[test]
 fn the_directory_box_keeps_what_was_typed() {
-    let here = std::env::temp_dir().join(format!("sloop-ui-typed-{}", std::process::id()));
-    let global = here.join("global");
+    // Laid out the way a real machine is: the global store in the home directory, and the
+    // working directory under it. `Init` refuses the home directory itself, so a fixture
+    // that put the two the other way round would be testing a shape that cannot exist.
+    let home = std::env::temp_dir().join(format!("sloop-ui-typed-{}", std::process::id()));
+    let here = home.join("work");
+    let global = home.join(".sloop");
     std::fs::create_dir_all(&global).expect("a temporary directory");
+    std::fs::create_dir_all(&here).expect("a temporary directory");
 
     let mut shell = Shell {
         global,
+        home: home.clone(),
         cwd: here.clone(),
         working_in: "the global store".to_owned(),
         found_by: "nothing named a project".to_owned(),
@@ -530,7 +543,7 @@ fn the_directory_box_keeps_what_was_typed() {
     );
     assert!(!here.join(".sloop").is_dir(), "a registry was made anyway");
 
-    let _ = std::fs::remove_dir_all(&here);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// A directory that is not there is said on the screen, not thrown at the session.

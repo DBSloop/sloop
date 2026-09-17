@@ -93,9 +93,9 @@ fn run(cli: &Cli) -> Outcome<Exit> {
                 return Err(Failure::usage("--global has nothing to initialise")
                     .hint("the global store appears on its own; sloop init starts a project"));
             }
-            let global = locations.global_dir()?;
+            let global = registry::adopt::global(&locations)?;
             let target = init_target(cli.project.as_deref(), &global)?;
-            commands::init::run(&target, &global)?;
+            commands::init::run(&target, &global, &locations.home_dir()?)?;
             Ok(Exit::Success)
         }
 
@@ -126,6 +126,7 @@ fn menu(cli: &Cli, locations: &Locations) -> Outcome<Exit> {
     let holds = ui::flow::Doing::databases(&machine).len();
 
     let mut shell = ui::screen::Shell {
+        home: locations.home_dir()?,
         working_in: resolution
             .registry_dir()
             .unwrap_or_else(|| global.clone())
@@ -163,8 +164,8 @@ fn menu(cli: &Cli, locations: &Locations) -> Outcome<Exit> {
 /// enough to read in one go, which is the only way the two commands that *don't* read a
 /// registry stay visible in it.
 fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome<Exit> {
-    let global = locations.global_dir()?;
-    let world = Disk::new(&global);
+    let global = registry::adopt::global(locations)?;
+    let world = Disk::new(&global, locations.home_dir()?);
     let cwd = working_directory()?;
     let resolution = resolve(
         &cwd,

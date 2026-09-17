@@ -1,8 +1,14 @@
 //! Where the stores live, on each operating system.
 //!
-//! The paths are not guessed from a crate — they are the three the owner named, and they
-//! are computed from the environment so a test can ask for all three from one machine.
-//! A path this tool cannot work out is a failure with a sentence, never a panic.
+//! **One path, on all three:** `~/.sloop`, in the user's home directory, the way `~/.claude`
+//! sits in theirs. `C:\Users\<name>\.sloop` on Windows, `/home/<name>/.sloop` on Linux,
+//! `/Users/<name>/.sloop` on macOS. It replaced three platform conventions — `%APPDATA%\sloop`,
+//! `~/.config/sloop` and `~/Library/Application Support/sloop` — and a store left in one of
+//! those is moved here once, by [`super::adopt`], rather than quietly ignored.
+//!
+//! The paths are not guessed from a crate — they are computed from the environment so a test
+//! can ask for all three from one machine. A path this tool cannot work out is a failure with
+//! a sentence, never a panic.
 
 use std::path::{Path, PathBuf};
 
@@ -16,11 +22,11 @@ pub const PROJECT_DIR: &str = ".sloop";
 /// from every host: the macOS path has to be verifiable without a Mac.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
-    /// `$XDG_CONFIG_HOME/sloop`, or `~/.config/sloop`.
+    /// Home from `HOME`. An older store at `$XDG_CONFIG_HOME/sloop` or `~/.config/sloop`.
     Linux,
-    /// `~/Library/Application Support/sloop`.
+    /// Home from `HOME`. An older store at `~/Library/Application Support/sloop`.
     MacOs,
-    /// `%APPDATA%\sloop`.
+    /// Home from `USERPROFILE`. An older store at `%APPDATA%\sloop`.
     Windows,
 }
 
@@ -36,6 +42,14 @@ impl Platform {
             Self::Linux
         }
     }
+
+    /// The variable a user would set to fix a missing home directory.
+    const fn home_variable(self) -> &'static str {
+        match self {
+            Self::Windows => "USERPROFILE",
+            Self::Linux | Self::MacOs => "HOME",
+        }
+    }
 }
 
 /// Everything outside the process that decides where the global store is.
@@ -43,6 +57,7 @@ impl Platform {
 pub struct Locations {
     platform: Platform,
     home: Option<PathBuf>,
+    userprofile: Option<PathBuf>,
     xdg_config_home: Option<PathBuf>,
     appdata: Option<PathBuf>,
 }
@@ -60,6 +75,7 @@ impl Locations {
         Self {
             platform: Platform::current(),
             home: var_path("HOME"),
+            userprofile: var_path("USERPROFILE"),
             xdg_config_home: var_path("XDG_CONFIG_HOME"),
             appdata: var_path("APPDATA"),
         }
@@ -84,6 +100,14 @@ impl Locations {
         self
     }
 
+    /// Set `USERPROFILE`.
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_userprofile(mut self, home: impl Into<PathBuf>) -> Self {
+        self.userprofile = Some(home.into());
+        self
+    }
+
     /// Set `XDG_CONFIG_HOME`.
     #[cfg(test)]
     #[must_use]
@@ -103,50 +127,73 @@ impl Locations {
     /// The global store: the registry used when no project is in play.
     ///
     /// Normalised on the way out. The value arrives from an environment variable, and a
-    /// shell that hands over `C:/Users/me/AppData/Roaming` produces a working but
-    /// half-and-half path once something is joined onto it. It works; it reads like a bug.
+    /// shell that hands over `C:/Users/me` produces a working but half-and-half path once
+    /// something is joined onto it. It works; it reads like a bug.
     pub fn global_dir(&self) -> Outcome<PathBuf> {
-        self.raw_global_dir().map(|path| super::normalize(&path))
+        Ok(super::normalize(&self.home_dir()?.join(PROJECT_DIR)))
     }
 
-    fn raw_global_dir(&self) -> Outcome<PathBuf> {
-        match self.platform {
+    /// The user's home directory — and so the line the walk up the tree stops at.
+    ///
+    /// **Both facts come from here on purpose.** With the global store at `~/.sloop`, a
+    /// `git`-style walk that ran past the home directory would find the global store and
+    /// treat it as a project, from anywhere under the home folder. The boundary and the
+    /// store are the same answer, so they are computed in one place rather than two.
+    pub fn home_dir(&self) -> Outcome<PathBuf> {
+        Ok(super::normalize(self.raw_home()?))
+    }
+
+    fn raw_home(&self) -> Outcome<&Path> {
+        // Windows first reads `USERPROFILE`, because a Git Bash shell exports `HOME` as
+        // `/c/Users/me` — an MSYS path a native Windows binary cannot open. `HOME` stays as
+        // the fallback for a shell that sets only that.
+        let ordered: [&Option<PathBuf>; 2] = match self.platform {
+            Platform::Windows => [&self.userprofile, &self.home],
+            Platform::Linux | Platform::MacOs => [&self.home, &self.userprofile],
+        };
+
+        ordered
+            .into_iter()
+            .find_map(|value| value.as_deref())
+            .ok_or_else(|| {
+                let variable = self.platform.home_variable();
+                Failure::new(
+                    Exit::Usage,
+                    format!("{variable} is not set, so there is nowhere to keep the global store"),
+                )
+                .hint(format!(
+                    "set {variable}, or work inside a project created with `sloop init`"
+                ))
+            })
+    }
+
+    /// Where a store written by an older sloop would be, if this platform had one there.
+    ///
+    /// `None` when the environment does not say — a Windows machine with no `APPDATA` has
+    /// no old store to find, which is a fact rather than a failure. Nothing here touches
+    /// the disk; whether the directory exists is [`super::adopt`]'s question.
+    #[must_use]
+    pub fn legacy_dir(&self) -> Option<PathBuf> {
+        let path = match self.platform {
             Platform::Linux => {
                 // The XDG spec says a relative `XDG_CONFIG_HOME` must be ignored, and it
-                // is worth honouring: a relative one would put the store wherever the
-                // command happened to be run from.
-                if let Some(base) = self.xdg_config_home.as_deref().filter(rooted) {
-                    return Ok(base.join("sloop"));
+                // is worth honouring: a relative one would name a directory that follows
+                // the working directory around.
+                match self.xdg_config_home.as_deref().filter(rooted) {
+                    Some(base) => base.join("sloop"),
+                    None => self.raw_home().ok()?.join(".config").join("sloop"),
                 }
-                Ok(self.home()?.join(".config").join("sloop"))
             }
-            Platform::MacOs => Ok(self
-                .home()?
+            Platform::MacOs => self
+                .raw_home()
+                .ok()?
                 .join("Library")
                 .join("Application Support")
-                .join("sloop")),
-            Platform::Windows => self
-                .appdata
-                .clone()
-                .map(|base| base.join("sloop"))
-                .ok_or_else(|| {
-                    Failure::new(
-                        Exit::Usage,
-                        "APPDATA is not set, so there is nowhere to keep the global store",
-                    )
-                    .hint("set APPDATA, or work inside a project created with `sloop init`")
-                }),
-        }
-    }
+                .join("sloop"),
+            Platform::Windows => self.appdata.as_deref()?.join("sloop"),
+        };
 
-    fn home(&self) -> Outcome<&Path> {
-        self.home.as_deref().ok_or_else(|| {
-            Failure::new(
-                Exit::Usage,
-                "HOME is not set, so there is nowhere to keep the global store",
-            )
-            .hint("set HOME, or work inside a project created with `sloop init`")
-        })
+        Some(super::normalize(&path))
     }
 }
 
@@ -161,7 +208,7 @@ fn rooted(path: &&Path) -> bool {
 }
 
 /// A variable that is set and not empty. An empty variable is how a shell says "unset",
-/// and treating `HOME=` as a real path produces a store at `/.config/sloop`.
+/// and treating `HOME=` as a real path produces a store at `/.sloop`.
 fn var_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key)
         .filter(|value| !value.is_empty())
@@ -175,93 +222,155 @@ mod tests {
     use super::{Locations, Platform};
 
     fn global(locations: &Locations) -> String {
-        locations
-            .global_dir()
-            .expect("these fixtures all have what they need")
-            .to_string_lossy()
-            .replace('\\', "/")
+        slashes(
+            &locations
+                .global_dir()
+                .expect("these fixtures all have what they need"),
+        )
+    }
+
+    fn legacy(locations: &Locations) -> String {
+        slashes(
+            &locations
+                .legacy_dir()
+                .expect("these fixtures all have what they need"),
+        )
+    }
+
+    fn slashes(path: &std::path::Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
     }
 
     #[test]
-    fn linux_uses_xdg_config_home_when_it_is_absolute() {
+    fn every_platform_keeps_the_global_store_in_the_home_directory() {
+        assert_eq!(
+            global(&Locations::new(Platform::Linux).with_home("/home/me")),
+            "/home/me/.sloop"
+        );
+        assert_eq!(
+            global(&Locations::new(Platform::MacOs).with_home("/Users/me")),
+            "/Users/me/.sloop"
+        );
+        assert_eq!(
+            global(&Locations::new(Platform::Windows).with_userprofile(r"C:\Users\me")),
+            "C:/Users/me/.sloop"
+        );
+    }
+
+    /// The store used to follow `XDG_CONFIG_HOME`, and no longer does. The variable still
+    /// decides where an *old* store is looked for, which is a different question.
+    #[test]
+    fn xdg_config_home_no_longer_moves_the_store() {
         let locations = Locations::new(Platform::Linux)
             .with_home("/home/me")
             .with_xdg_config_home("/home/me/cfg");
-        assert_eq!(global(&locations), "/home/me/cfg/sloop");
+
+        assert_eq!(global(&locations), "/home/me/.sloop");
+        assert_eq!(legacy(&locations), "/home/me/cfg/sloop");
     }
 
     #[test]
-    fn linux_falls_back_to_dot_config() {
-        let locations = Locations::new(Platform::Linux).with_home("/home/me");
-        assert_eq!(global(&locations), "/home/me/.config/sloop");
+    fn appdata_no_longer_moves_the_store_either() {
+        let locations = Locations::new(Platform::Windows)
+            .with_userprofile(r"C:\Users\me")
+            .with_appdata(PathBuf::from(r"C:\Users\me\AppData\Roaming"));
+
+        assert_eq!(global(&locations), "C:/Users/me/.sloop");
+        assert_eq!(legacy(&locations), "C:/Users/me/AppData/Roaming/sloop");
+    }
+
+    /// A Git Bash shell exports `HOME` as an MSYS path a Windows binary cannot open, and
+    /// exports `USERPROFILE` as the real one. The real one has to win.
+    #[test]
+    fn windows_prefers_userprofile_to_a_shell_provided_home() {
+        let locations = Locations::new(Platform::Windows)
+            .with_home("/c/Users/me")
+            .with_userprofile(r"C:\Users\me");
+        assert_eq!(global(&locations), "C:/Users/me/.sloop");
     }
 
     #[test]
-    fn linux_ignores_a_relative_xdg_config_home() {
+    fn windows_falls_back_to_home_when_userprofile_is_not_set() {
+        let locations = Locations::new(Platform::Windows).with_home(r"C:\Users\me");
+        assert_eq!(global(&locations), "C:/Users/me/.sloop");
+    }
+
+    #[test]
+    fn the_old_macos_store_is_the_one_apple_puts_there() {
+        let locations = Locations::new(Platform::MacOs).with_home("/Users/me");
+        assert_eq!(
+            legacy(&locations),
+            "/Users/me/Library/Application Support/sloop"
+        );
+    }
+
+    #[test]
+    fn the_old_linux_store_ignores_a_relative_xdg_config_home() {
         // A relative value would follow the working directory around, which is exactly
-        // what a global store must not do.
+        // what a store must not do.
         let locations = Locations::new(Platform::Linux)
             .with_home("/home/me")
             .with_xdg_config_home("cfg");
-        assert_eq!(global(&locations), "/home/me/.config/sloop");
+        assert_eq!(legacy(&locations), "/home/me/.config/sloop");
     }
 
     #[test]
-    fn macos_uses_application_support() {
-        let locations = Locations::new(Platform::MacOs).with_home("/Users/me");
-        assert_eq!(
-            global(&locations),
-            "/Users/me/Library/Application Support/sloop"
-        );
-    }
-
-    #[test]
-    fn macos_ignores_xdg_config_home() {
-        let locations = Locations::new(Platform::MacOs)
-            .with_home("/Users/me")
-            .with_xdg_config_home("/Users/me/cfg");
-        assert_eq!(
-            global(&locations),
-            "/Users/me/Library/Application Support/sloop"
-        );
-    }
-
-    #[test]
-    fn windows_uses_appdata() {
-        let locations = Locations::new(Platform::Windows)
-            .with_appdata(PathBuf::from(r"C:\Users\me\AppData\Roaming"));
-        assert_eq!(global(&locations), "C:/Users/me/AppData/Roaming/sloop");
+    fn with_nothing_in_the_environment_there_is_no_old_store_to_find() {
+        for platform in [Platform::Linux, Platform::MacOs, Platform::Windows] {
+            assert_eq!(Locations::new(platform).legacy_dir(), None);
+        }
     }
 
     /// Windows only, because that is the only place the defect exists: a Git Bash shell
-    /// exports `APPDATA` with forward slashes, and joining onto it gives a path that opens
-    /// fine and reads like a bug.
+    /// exports these variables with forward slashes, and joining onto one gives a path that
+    /// opens fine and reads like a bug.
     #[cfg(windows)]
     #[test]
     fn a_store_path_never_comes_out_half_and_half() {
-        let locations =
-            Locations::new(Platform::Windows).with_appdata("C:/Users/me/AppData/Roaming");
-        let path = locations.global_dir().unwrap();
+        let locations = Locations::new(Platform::Windows)
+            .with_userprofile("C:/Users/me")
+            .with_appdata("C:/Users/me/AppData/Roaming");
 
-        assert!(
-            !path.to_string_lossy().contains('/'),
-            "mixed separators in {}",
-            path.display()
-        );
-        assert_eq!(global(&locations), "C:/Users/me/AppData/Roaming/sloop");
+        for path in [
+            locations.global_dir().unwrap(),
+            locations.home_dir().unwrap(),
+            locations.legacy_dir().unwrap(),
+        ] {
+            assert!(
+                !path.to_string_lossy().contains('/'),
+                "mixed separators in {}",
+                path.display()
+            );
+        }
+        assert_eq!(global(&locations), "C:/Users/me/.sloop");
     }
 
     #[test]
     fn a_missing_home_is_a_sentence_and_not_a_panic() {
-        for platform in [Platform::Linux, Platform::MacOs] {
+        for platform in [Platform::Linux, Platform::MacOs, Platform::Windows] {
             let failure = Locations::new(platform)
                 .global_dir()
-                .expect_err("no HOME, no store");
+                .expect_err("no home, no store");
             assert_eq!(failure.exit().code(), 2);
         }
-        let failure = Locations::new(Platform::Windows)
+    }
+
+    /// The Windows sentence has to name the variable a Windows user would set. `HOME` is
+    /// not one of them, and being told to set it is being told to do the wrong thing.
+    #[test]
+    fn the_sentence_names_the_variable_this_platform_reads() {
+        let windows = Locations::new(Platform::Windows)
             .global_dir()
-            .expect_err("no APPDATA, no store");
-        assert_eq!(failure.exit().code(), 2);
+            .expect_err("no home, no store");
+        assert!(
+            windows.message().contains("USERPROFILE"),
+            "{}",
+            windows.message()
+        );
+
+        let linux = Locations::new(Platform::Linux)
+            .global_dir()
+            .expect_err("no home, no store");
+        assert!(linux.message().contains("HOME"), "{}", linux.message());
     }
 }

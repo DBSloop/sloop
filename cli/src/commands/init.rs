@@ -54,8 +54,8 @@ pub struct Initialised {
 }
 
 /// Create the registry, register the name, and say what happened.
-pub fn run(target: &Path, global: &Path) -> Outcome<()> {
-    announce(&create(target, global)?, global);
+pub fn run(target: &Path, global: &Path, home: &Path) -> Outcome<()> {
+    announce(&create(target, global, home)?, global);
     Ok(())
 }
 
@@ -75,11 +75,30 @@ pub fn announce(report: &Initialised, global: &Path) {
 
 /// Do the work. Kept apart from the printing so the behaviour can be checked without
 /// reading a screen.
-pub fn create(target: &Path, global: &Path) -> Outcome<Initialised> {
+pub fn create(target: &Path, global: &Path, home: &Path) -> Outcome<Initialised> {
     if !target.is_dir() {
         return Err(
             Failure::usage(format!("{} is not a directory", target.display()))
                 .hint("sloop init works on a directory that already exists"),
+        );
+    }
+
+    // **Not the home directory, and not above it.** `~/.sloop` is the global store, so this
+    // would create the global store and then record it in itself as a project; higher up it
+    // would create a project the walk can never find, because the walk stops at the home
+    // directory. Refusing is the whole of R19b's "never treated as a project" from the side
+    // that makes one.
+    if !crate::registry::can_be_a_project(target, home) {
+        let why = if target == home {
+            format!("it is the home directory, and {PROJECT_DIR} in it is the global store")
+        } else {
+            "it is above the home directory, which is where sloop stops looking for a project"
+                .to_owned()
+        };
+        return Err(
+            Failure::usage(format!("{} cannot be a project: {why}", target.display())).hint(
+                "the global store needs no init — run sloop init in the project it belongs to",
+            ),
         );
     }
 

@@ -44,6 +44,9 @@ impl World for Nowhere {
     fn project_named(&self, _name: &str) -> Option<PathBuf> {
         None
     }
+    fn boundary(&self) -> Option<&Path> {
+        None
+    }
 }
 
 /// `--global`, so the store is the one directory below and nothing walks up out of it.
