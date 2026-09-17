@@ -447,13 +447,14 @@ fn build() -> Option<Cluster> {
         .arg(&data)
         .arg("-o")
         .arg(format!(
-            "-p {port} -c listen_addresses=127.0.0.1{}",
-            // The same Debian default the product works around: their `initdb` points the
-            // socket at `/var/run/postgresql`, which the runner user may not write to.
+            "-p {port}{} -c listen_addresses=127.0.0.1",
+            // The same reason the product turns it off: nothing connects over it, Debian
+            // points it at a directory the runner may not write to, and macOS caps the path
+            // at about 104 bytes — which `/var/folders/…/T/` is past on its own.
             if cfg!(windows) {
-                String::new()
+                ""
             } else {
-                format!(" -c unix_socket_directories={}", data.display())
+                " -c unix_socket_directories="
             }
         ))
         .arg("-l")

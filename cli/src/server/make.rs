@@ -258,9 +258,9 @@ fn start(server: &Server) -> Outcome<()> {
         .arg(data)
         .arg("-o")
         .arg(format!(
-            "-p {} -c listen_addresses={LOOPBACK}{}",
+            "-p {}{} -c listen_addresses={LOOPBACK}",
             server.port,
-            socket_directory(data)
+            no_unix_socket()
         ))
         .arg("-l")
         .arg(data.join("server.log"))
@@ -296,21 +296,25 @@ fn start(server: &Server) -> Outcome<()> {
     Ok(())
 }
 
-/// Where the cluster puts its unix socket, as an extra `postgres` option.
+/// Turn the unix socket off, as an extra `postgres` option.
 ///
-/// **Debian and Ubuntu patch this default and it breaks a cluster sloop makes.** Their
-/// `initdb` writes `unix_socket_directories = '/var/run/postgresql'` into `postgresql.conf`,
-/// a directory that exists for the `postgres` system user and that nobody else may write to —
-/// so the postmaster dies at startup with a permission error, on the one platform where the
-/// package manager is the normal way to get PostgreSQL. sloop's own cluster keeps its socket
-/// in its own data directory, which is a directory sloop already owns.
+/// **sloop's cluster answers on `127.0.0.1` and nowhere else**, which [`LOOPBACK`] already
+/// says is the whole design — so the unix socket is a file nothing ever connects to, and two
+/// platforms make it actively harmful.
 ///
-/// Empty on Windows, which has no unix sockets and refuses the setting outright.
-fn socket_directory(data: &Path) -> String {
+/// Debian and Ubuntu patch the default to `/var/run/postgresql`, a directory belonging to the
+/// `postgres` system user that nobody else may write to, so the postmaster dies at startup on
+/// the one platform where the package manager is the normal way to get PostgreSQL. And a
+/// socket *path* is capped at about 104 bytes on macOS — `/var/folders/…/T/` plus a data
+/// directory is past that before sloop has written a character — so pointing it at the data
+/// directory trades one failure for another.
+///
+/// No socket, no path, no permission. Empty on Windows, which has no unix sockets at all.
+fn no_unix_socket() -> &'static str {
     if cfg!(windows) {
-        String::new()
+        ""
     } else {
-        format!(" -c unix_socket_directories={}", data.display())
+        " -c unix_socket_directories="
     }
 }
 

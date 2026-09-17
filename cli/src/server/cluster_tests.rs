@@ -106,8 +106,12 @@ fn cluster(global: &Path, port: u16) -> Option<super::Ready> {
             stop(&bin, &data);
             assert!(
                 asked == Asked::ByLookingAround,
-                "{BIN_DIR_VAR} named a PostgreSQL that cannot build a cluster: {}",
-                why.message()
+                "{BIN_DIR_VAR} named a PostgreSQL that cannot build a cluster: {}
+{}",
+                why.message(),
+                // The hint carries the end of the server log, which is the only thing that
+                // says *why* — and on a CI runner the directory is gone before anybody looks.
+                why.hint_text().unwrap_or("no hint")
             );
             eprintln!(
                 "skipping the sloop-cluster tests: this machine cannot host a database: {}",
