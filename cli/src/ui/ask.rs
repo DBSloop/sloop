@@ -93,6 +93,13 @@ impl Terminal {
     ///
     /// **Built as one string and written once.** A screen drawn in twenty writes flickers
     /// on every keystroke, and a menu that flickers reads as a menu that is struggling.
+    ///
+    /// **And it is never blanked first, which is the other half of that.** Clearing the
+    /// screen and then drawing it leaves a real, visible empty frame in between — the
+    /// terminal paints the blank, then paints the text — so every arrow key made the whole
+    /// menu blink. Instead every line is overwritten where it already is and erased to the
+    /// right edge as it goes ([`erase_line`]), and only the rows *below* the new frame are
+    /// cleared. Nothing is ever blank, so there is nothing to flicker.
     fn paint(&self, screen: &Screenful<'_>) -> Outcome<()> {
         let mut drawn = String::new();
         for line in self.header.lines() {
@@ -132,16 +139,52 @@ impl Terminal {
         let _ = write!(drawn, "\r\n  {}\r\n", paint::dim(&help(screen.filter)));
 
         let mut out = std::io::stderr();
-        crossterm::queue!(
-            out,
-            crossterm::cursor::Hide,
-            crossterm::cursor::MoveTo(0, 0),
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
-        )
-        .map_err(|error| drawing(&error))?;
-        write!(out, "{drawn}").map_err(|error| drawing(&error))?;
+        write!(out, "{}", redrawn_in_place(&drawn, "\r\n", true))
+            .map_err(|error| drawing(&error))?;
         out.flush().map_err(|error| drawing(&error))
     }
+}
+
+/// A frame that replaces the one already on screen without ever blanking it.
+///
+/// **One string, cursor movement included.** `queue!` against standard error is not buffered,
+/// so each of its commands would reach the terminal as its own write and the frame would
+/// arrive in pieces. Everything goes into the string instead — which is also where the
+/// colours already are, so this carries no assumption the rest of the drawing did not already
+/// make.
+///
+/// Home, then every line overwritten where it already is and erased to the right edge as it
+/// goes, then the rows below the new frame cleared. There is no moment at which the screen is
+/// empty, which is the whole of the fix: `Clear(All)` followed by a redraw paints a real blank
+/// frame first, and that is what made every arrow key blink the menu.
+fn redrawn_in_place(drawn: &str, ending: &str, hide_cursor: bool) -> String {
+    let erase = ansi(crossterm::terminal::Clear(
+        crossterm::terminal::ClearType::UntilNewLine,
+    ));
+
+    format!(
+        "{}{}{}{}",
+        if hide_cursor {
+            ansi(crossterm::cursor::Hide)
+        } else {
+            String::new()
+        },
+        ansi(crossterm::cursor::MoveTo(0, 0)),
+        drawn.replace(ending, &format!("{erase}{ending}")),
+        ansi(crossterm::terminal::Clear(
+            crossterm::terminal::ClearType::FromCursorDown
+        )),
+    )
+}
+
+/// One `crossterm` command, as the characters that perform it.
+///
+/// Taken from `crossterm` rather than written out by hand, so there is still exactly one
+/// place in this program that knows how a terminal spells "move the cursor".
+fn ansi(command: impl crossterm::Command) -> String {
+    let mut written = String::new();
+    let _ = command.write_ansi(&mut written);
+    written
 }
 
 /// Everything one drawing of a list needs to know.
@@ -163,18 +206,20 @@ impl Asking for Terminal {
         self.drawn = drawn.lines().count();
         self.header.clone_from(&drawn);
 
-        let mut out = std::io::stderr();
-        crossterm::execute!(
-            out,
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
-            crossterm::cursor::MoveTo(0, 0),
-        )
-        .map_err(|error| drawing(&error))?;
-
+        // Overwritten in place and cleared below, not blanked and redrawn — the same reason
+        // as [`Terminal::paint`], and it matters here too: this runs on every move between
+        // screens, and a blank frame between two menus is the same blink.
+        //
         // Through `crossterm`, not through `report`: this is inside the alternate screen,
         // where nothing survives and nothing should be logged. What is worth keeping is
         // printed after the screen has been handed back.
-        writeln!(out, "{drawn}\n").map_err(|error| drawing(&error))?;
+        let mut out = std::io::stderr();
+        write!(
+            out,
+            "{}",
+            redrawn_in_place(&format!("{drawn}\n\n"), "\n", false)
+        )
+        .map_err(|error| drawing(&error))?;
         out.flush().map_err(|error| drawing(&error))
     }
 

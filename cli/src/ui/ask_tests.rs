@@ -207,3 +207,84 @@ fn an_item_starts_further_in_than_the_heading_above_it() {
         "the way out belongs to no section and sits at the headings' column"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// The menu does not blink
+// ---------------------------------------------------------------------------------------
+
+use super::redrawn_in_place;
+
+/// What the terminal is actually told to do, so the sequences below read as themselves.
+const HOME: &str = "\u{1b}[1;1H";
+const ERASE_LINE: &str = "\u{1b}[K";
+const ERASE_BELOW: &str = "\u{1b}[J";
+const ERASE_EVERYTHING: &str = "\u{1b}[2J";
+
+/// **The defect, named.** Blanking the screen and then drawing it leaves a real empty frame
+/// in between — the terminal paints the blank, then paints the text — so every arrow key
+/// made the whole menu blink. A frame that clears everything is the bug; this is the test
+/// that would have caught it.
+#[test]
+fn a_frame_never_blanks_the_screen() {
+    let frame = redrawn_in_place("one\r\ntwo\r\n", "\r\n", true);
+
+    assert!(
+        !frame.contains(ERASE_EVERYTHING),
+        "the frame blanks the screen, which is what makes it blink: {frame:?}"
+    );
+}
+
+/// Overwriting in place only works if each line erases its own tail: the frame before it may
+/// have been wider, and what is left of it would stay on screen.
+#[test]
+fn every_line_erases_to_the_right_edge() {
+    let frame = redrawn_in_place("one\r\ntwo\r\n", "\r\n", true);
+
+    assert_eq!(
+        frame.matches(ERASE_LINE).count(),
+        2,
+        "one erase per line, and no more: {frame:?}"
+    );
+    assert!(frame.contains(&format!("one{ERASE_LINE}\r\n")), "{frame:?}");
+    assert!(frame.contains(&format!("two{ERASE_LINE}\r\n")), "{frame:?}");
+}
+
+/// Home first, so the frame lands on top of the one already there, and the rows below it
+/// cleared last, so a frame that has become shorter leaves nothing behind.
+#[test]
+fn a_frame_starts_at_the_top_and_clears_what_is_left_under_it() {
+    let frame = redrawn_in_place("only\r\n", "\r\n", true);
+
+    let home = frame.find(HOME).expect("it goes home first");
+    let text = frame.find("only").expect("it draws the line");
+    let below = frame.find(ERASE_BELOW).expect("it clears below itself");
+
+    assert!(
+        home < text,
+        "the cursor moves home before drawing: {frame:?}"
+    );
+    assert!(
+        text < below,
+        "it clears below itself after drawing, not before: {frame:?}"
+    );
+}
+
+/// The list hides the cursor while it draws; the header does not, because a text box is
+/// about to want it back.
+#[test]
+fn only_the_list_hides_the_cursor() {
+    let hidden = redrawn_in_place("x\r\n", "\r\n", true);
+    let shown = redrawn_in_place("x\n", "\n", false);
+
+    assert!(hidden.contains("\u{1b}[?25l"), "{hidden:?}");
+    assert!(!shown.contains("\u{1b}[?25l"), "{shown:?}");
+}
+
+/// A header's lines end in `\n` rather than `\r\n`, and they have to be erased too.
+#[test]
+fn the_header_erases_its_lines_as_well() {
+    let frame = redrawn_in_place("a\nb\n", "\n", false);
+
+    assert_eq!(frame.matches(ERASE_LINE).count(), 2, "{frame:?}");
+    assert!(!frame.contains(ERASE_EVERYTHING), "{frame:?}");
+}
