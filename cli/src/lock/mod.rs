@@ -102,9 +102,26 @@ pub fn take(store: &Path, label: &str, doing: &str) -> Outcome<Held> {
 
     match file.try_lock() {
         Ok(()) => {}
+
         // **Held by somebody else, which is not a failure of this run.** Exit 7 says so, and
         // says it the same way every time, because a scheduler reads the number.
-        Err(_) => return Err(refused(&path, label)),
+        Err(std::fs::TryLockError::WouldBlock) => return Err(refused(&path, label)),
+
+        // **And this is not that.** It used to be — every error was reported as "another
+        // sloop run is working on this", including a filesystem that cannot lock and a file
+        // that cannot be reached. Exit 7 tells a scheduler the run did not start and the
+        // next one will be fine, so saying it about something that will still be true in an
+        // hour sends somebody looking for a process that was never there.
+        Err(std::fs::TryLockError::Error(error)) => {
+            return Err(Failure::new(
+                Exit::Failure,
+                format!("could not lock {}: {error}", path.display()),
+            )
+            .hint(
+                "this is not another run holding it — the lock itself could not be taken. A \
+                 filesystem that does not support locking is the usual reason",
+            ));
+        }
     }
 
     // Written only once the lock is ours, so whoever reads it is reading the holder's.

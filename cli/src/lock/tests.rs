@@ -51,12 +51,48 @@ fn a_second_taker_is_refused_with_seven() {
 }
 
 /// Released when the holder goes, so the next run is an ordinary one.
+///
+/// **Given a moment, and the moment is the operating system's.** What sloop guarantees is
+/// that the lock goes when the handle does; that the *next* `flock` in the same process
+/// observes it having gone within zero nanoseconds is a timing property no operating system
+/// promises, and macOS intermittently does not provide it under a loaded parallel test run —
+/// which is what kept `test (macos-latest)` red while the other two were green.
+///
+/// So this waits, and the bound is the point. Two seconds is far longer than any real gap
+/// this matters for — a lock that is still held a second after its holder went would be a
+/// defect, and this still fails on one — while a lock that never goes, which is the failure
+/// worth catching, fails exactly as loudly as before. How long it actually took is printed
+/// whenever it is not instant, so the magnitude is in the log rather than in somebody's
+/// guess.
 #[test]
 fn the_lock_goes_when_the_holder_does() {
     let store = scratch("released");
 
     drop(take(&store, "orders", "backup").expect("nobody has it"));
-    let again = take(&store, "orders", "backup").expect("the first one let go");
+
+    let waited = std::time::Instant::now();
+    let mut last = None;
+    let again = loop {
+        match take(&store, "orders", "backup") {
+            Ok(held) => break held,
+            Err(refusal) => {
+                assert!(
+                    waited.elapsed() < std::time::Duration::from_secs(2),
+                    "the lock did not go when its holder did: {}",
+                    refusal.message()
+                );
+                last = Some(refusal);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    };
+
+    if last.is_some() {
+        eprintln!(
+            "the lock took {:?} to be released after its holder was dropped",
+            waited.elapsed()
+        );
+    }
 
     drop(again);
     let _ = std::fs::remove_dir_all(&store);
