@@ -394,11 +394,20 @@ fn binaries() -> Option<PathBuf> {
 
 /// A port this test binary can have to itself.
 ///
-/// Derived from the process id, because `cargo test` runs the eleven test binaries at once
-/// and two of them on one port would each see the other's databases.
-fn port() -> u16 {
-    let spread = u16::try_from(std::process::id() % 2000).unwrap_or(0);
-    51000 + spread
+/// **Asked of the operating system, not derived from the process id.** Deriving it was wrong
+/// and CI caught it: `cargo test` runs eleven test binaries at once, `pid % 2000` is not
+/// unique across them, and the loser got `could not bind IPv4 address "127.0.0.1": Address
+/// already in use` — a whole binary's tests failing for a reason that had nothing to do with
+/// what they were testing.
+///
+/// Binding port 0 makes the kernel hand back one that is free *now*, and the listener is
+/// dropped before PostgreSQL is told to take it. That is a race in principle — something else
+/// could take it in between — which is why the caller retries rather than trusting it once.
+fn a_free_port() -> Option<u16> {
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
+    let port = taken.local_addr().ok()?.port();
+    drop(taken);
+    Some(port)
 }
 
 /// Build the cluster, run Setup against a template database, and hand it back.
@@ -415,7 +424,6 @@ fn build() -> Option<Cluster> {
 
     let data = std::env::temp_dir().join(format!("sloop-test-cluster-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&data);
-    let port = port();
 
     let initialised = Command::new(bin.join(exe("initdb")))
         .arg("-D")
@@ -440,36 +448,54 @@ fn build() -> Option<Cluster> {
         return None;
     }
 
-    let mut starting = Command::new(bin.join(exe("pg_ctl")));
-    detach(&mut starting);
-    let started = starting
-        .arg("-D")
-        .arg(&data)
-        .arg("-o")
-        .arg(format!(
-            "-p {port}{} -c listen_addresses=127.0.0.1",
-            // The same reason the product turns it off: nothing connects over it, Debian
-            // points it at a directory the runner may not write to, and macOS caps the path
-            // at about 104 bytes — which `/var/folders/…/T/` is past on its own.
-            if cfg!(windows) {
-                ""
-            } else {
-                " -c unix_socket_directories="
-            }
-        ))
-        .arg("-l")
-        .arg(data.join("server.log"))
-        .arg("--timeout=60")
-        .args(["-w", "start"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        // Every stream to null: on Windows the postmaster inherits whatever handles it is
-        // given and holds them for as long as it runs, so an inherited stderr keeps the
-        // parent's pipe from ever reaching end of file.
-        .stderr(Stdio::null())
-        .status();
+    // **Tried a few times, because a free port can stop being free.** The kernel hands one
+    // back that nothing holds *now*; between that and `pg_ctl` taking it, another of the
+    // eleven test binaries running beside this one can get there first. Losing that race is
+    // ordinary and retrying costs nothing.
+    let mut port = 0;
+    let mut started = false;
+    for _ in 0..8 {
+        let Some(candidate) = a_free_port() else {
+            break;
+        };
+        port = candidate;
 
-    if !started.is_ok_and(|status| status.success()) {
+        let mut starting = Command::new(bin.join(exe("pg_ctl")));
+        detach(&mut starting);
+        let outcome = starting
+            .arg("-D")
+            .arg(&data)
+            .arg("-o")
+            .arg(format!(
+                "-p {port}{} -c listen_addresses=127.0.0.1",
+                // The same reason the product turns it off: nothing connects over it, Debian
+                // points it at a directory the runner may not write to, and macOS caps the
+                // path at about 104 bytes — which `/var/folders/…/T/` is past on its own.
+                if cfg!(windows) {
+                    ""
+                } else {
+                    " -c unix_socket_directories="
+                }
+            ))
+            .arg("-l")
+            .arg(data.join("server.log"))
+            .arg("--timeout=60")
+            .args(["-w", "start"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            // Every stream to null: on Windows the postmaster inherits whatever handles it is
+            // given and holds them for as long as it runs, so an inherited stderr keeps the
+            // parent's pipe from ever reaching end of file.
+            .stderr(Stdio::null())
+            .status();
+
+        if outcome.is_ok_and(|status| status.success()) {
+            started = true;
+            break;
+        }
+    }
+
+    if !started {
         // The log, not a path to it: on a runner the directory is gone before anybody looks.
         let log = std::fs::read_to_string(data.join("server.log")).unwrap_or_default();
         eprintln!(
