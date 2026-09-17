@@ -95,8 +95,15 @@ fn mysql_is_proved_by_a_signature_and_never_by_a_checksum() {
                 // rather than failing a user's install.
                 assert!(
                     keys.iter()
-                        .any(|(key, _)| *key == "BCA43417C3B485DD128EC6D4B7B3B788A8D3785C"),
+                        .any(|key| key.fingerprint == "BCA43417C3B485DD128EC6D4B7B3B788A8D3785C"),
                     "Oracle's current release-engineering key should be accepted"
+                );
+                // And the key itself, not only its fingerprint. A fingerprint is what you
+                // compare a key against; on its own it can never verify anything, which the
+                // first real run of this found out the expensive way.
+                assert!(
+                    keys.iter().all(|key| !key.armored.is_empty()),
+                    "a carried fingerprint with no key behind it cannot check a signature"
                 );
             }
             other => panic!("MySQL must not be proved by {other:?}"),

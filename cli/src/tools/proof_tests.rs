@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use super::{Proof, holds, is_hex_sha256, not_checkable_here};
+use super::{Keyring, Proof, holds, is_hex_sha256, mentions, not_checkable_here};
 
 /// A real file on disk, removed when it goes out of scope.
 struct File(PathBuf);
@@ -232,5 +232,118 @@ fn every_proof_says_what_it_checked_against() {
         }
         .describe(),
         "MySQL Release Engineering's GPG signature"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// The carried keys
+// ---------------------------------------------------------------------------------------
+
+/// **Every carried key is the key its fingerprint says it is, and `gpg` is what says so.**
+///
+/// The fingerprints were in this source before the key material was — they came from
+/// Oracle's own documentation, in an earlier pass that carried nothing else — so asking `gpg`
+/// to agree with them is a real cross-check rather than a tautology. It is the whole of what
+/// makes bytes committed to this repository safe to trust as a trust anchor.
+#[test]
+fn every_carried_key_is_the_key_its_fingerprint_says_it_is() {
+    let Some(gpg) = super::gpg() else {
+        eprintln!("skipping: this machine has no gpg to ask");
+        return;
+    };
+
+    for key in crate::tools::catalogue::MYSQL_KEYS {
+        let workspace = std::env::temp_dir().join(format!(
+            "sloop-key-{}-{:?}-{}",
+            std::process::id(),
+            std::thread::current().id(),
+            &key.fingerprint[..8]
+        ));
+        let _ = std::fs::remove_dir_all(&workspace);
+        std::fs::create_dir_all(&workspace).expect("a temporary directory");
+
+        // `Keyring::beside` wants the path of a file in the directory it should work in; the
+        // file itself is never opened here, only its parent is used.
+        let keyring = Keyring::beside(&workspace.join("archive.zip"), &gpg, &[*key])
+            .expect("the carried key should import");
+
+        let said = keyring
+            .run(&gpg, &["--list-keys", "--with-colons"])
+            .expect("gpg should list what it just imported");
+        assert!(said.ok, "{}", said.told);
+
+        let fingerprints: Vec<&str> = said
+            .told
+            .lines()
+            .filter_map(|line| line.strip_prefix("fpr:"))
+            .filter_map(|rest| rest.split(':').find(|field| !field.is_empty()))
+            .collect();
+
+        assert!(
+            fingerprints.first() == Some(&key.fingerprint),
+            "{} says its fingerprint is {} and gpg read {:?}",
+            key.named,
+            key.fingerprint,
+            fingerprints
+        );
+
+        drop(keyring);
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+}
+
+/// Each carried key really is an armoured public key and not, say, a fetch that 404'd into
+/// the file — which is the shape a broken refresh of these would take.
+#[test]
+fn each_carried_key_is_an_armoured_public_key() {
+    for key in crate::tools::catalogue::MYSQL_KEYS {
+        assert!(
+            key.armored
+                .starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----"),
+            "{} does not start with the armour header",
+            key.named
+        );
+        assert!(
+            key.armored
+                .trim_end()
+                .ends_with("-----END PGP PUBLIC KEY BLOCK-----"),
+            "{} does not end with the armour footer",
+            key.named
+        );
+        assert!(
+            key.fingerprint.len() == 40
+                && key
+                    .fingerprint
+                    .chars()
+                    .all(|character| character.is_ascii_hexdigit()),
+            "{} is not a 40-digit hex fingerprint: {}",
+            key.named,
+            key.fingerprint
+        );
+        assert!(
+            !key.named.is_empty(),
+            "a key with no name cannot appear in a refusal that makes sense"
+        );
+    }
+}
+
+/// **A fingerprint is looked for however `gpg` spaced it.** Older builds print it in
+/// four-character groups and newer ones run it together; reading only one spelling would mean
+/// silently accepting a signature without ever confirming whose it was.
+#[test]
+fn a_fingerprint_is_recognised_spaced_or_run_together() {
+    let key = "BCA43417C3B485DD128EC6D4B7B3B788A8D3785C";
+
+    assert!(mentions(&format!("using RSA key {key}"), key));
+    assert!(mentions(
+        "Primary key fingerprint: BCA4 3417 C3B4 85DD 128E  C6D4 B7B3 B788 A8D3 785C",
+        key
+    ));
+    assert!(
+        !mentions(
+            "using RSA key 0000000000000000000000000000000000000000",
+            key
+        ),
+        "somebody else's key must not read as this one"
     );
 }

@@ -25,15 +25,6 @@
 //! dropped to something weaker: what is being protected here is the guarantee, and rule 0d
 //! does not license weakening that.
 
-//! **Nothing in the binary reaches this module yet**, so the whole of it is allowed to sit
-//! unread — the same way `secret` was allowed to in `R3`, and for the same reason. It is the
-//! half of `R19d` that had to be settled before anything else could be built: which of three
-//! things each publisher actually gives, and what sloop does when that is a signature rather
-//! than a hash. The catalogue that picks a version and the screen that offers one are what
-//! will call it. Until then its reader is `proof_tests`, which writes real files and hashes
-//! them for real.
-#![allow(dead_code)]
-
 #[cfg(test)]
 #[path = "proof_tests.rs"]
 mod tests;
@@ -43,6 +34,22 @@ use std::process::{Command, Stdio};
 
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
+
+/// One public key sloop will accept a signature from.
+///
+/// **The fingerprint and the key together, because either alone is useless.** The key is what
+/// `gpg` needs in order to check anything at all; the fingerprint is what says *which* key,
+/// so that a good signature by somebody else's key is refused exactly as a wrong hash is. A
+/// test asks `gpg` for each carried key's own fingerprint and fails if the two have drifted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Key {
+    /// The long fingerprint, as `gpg` prints it with the spaces taken out.
+    pub fingerprint: &'static str,
+    /// Whose it is, for the sentence that says what was checked against what.
+    pub named: &'static str,
+    /// The key itself, ASCII-armoured, as the publisher publishes it.
+    pub armored: &'static str,
+}
 
 /// What sloop will accept as proof that an archive is the one it asked for.
 ///
@@ -69,13 +76,13 @@ pub enum Proof {
     Signed {
         /// Where the `.asc` is.
         signature_url: String,
-        /// Whose signature it may be, as `(fingerprint, name)`.
+        /// Whose signature it may be.
         ///
         /// **A list because publishers rotate keys**, and an archive signed with last year's
         /// is still that publisher's archive. Any one of them is enough and **nothing else
         /// is**: a good signature by a key that is not on this list is refused exactly as a
         /// wrong hash is, which is the whole attack this prevents.
-        keys: &'static [(&'static str, &'static str)],
+        keys: &'static [Key],
     },
 }
 
@@ -88,7 +95,7 @@ impl Proof {
             Self::Published { from, .. } => format!("the SHA-256 {from} publishes"),
             Self::Signed { keys, .. } => format!(
                 "{}'s GPG signature",
-                keys.first().map_or("the publisher", |(_, named)| *named)
+                keys.first().map_or("the publisher", |key| key.named)
             ),
         }
     }
@@ -181,18 +188,20 @@ fn size_of(archive: &Path) -> Outcome<u64> {
         .map_err(|error| Failure::usage(format!("could not read {}: {error}", archive.display())))
 }
 
-/// Check a detached signature with the system `gpg`.
+/// Check a detached signature with the system `gpg`, against sloop's own keyring and nobody
+/// else's.
 ///
 /// **A good signature is not enough; it has to be the right key.** `gpg --verify` exits zero
 /// for any signature it can check, including one made by a key somebody added five minutes
-/// ago — so the long key id is required to appear in what it said, and a signature by
-/// anybody else is refused exactly as a wrong hash is.
-fn signature_holds(
-    archive: &Path,
-    signature_url: &str,
-    keys: &[(&str, &str)],
-    what: &str,
-) -> Outcome<()> {
+/// ago — so the keyring it checks against is built here, from the keys this build carries,
+/// and the fingerprint is still required to appear in what it said.
+///
+/// **In a directory of its own, thrown away afterwards.** The first real run of this created
+/// `~/.gnupg` on a machine that had never used `gpg`, which is sloop reaching into somebody's
+/// home directory to do its own bookkeeping — and worse, it would mean the check depended on
+/// whatever else was in there. `--homedir` on a temporary directory makes the keyring exactly
+/// the carried keys and nothing else, which is the property the refusal below rests on.
+fn signature_holds(archive: &Path, signature_url: &str, keys: &[Key], what: &str) -> Outcome<()> {
     let Some(gpg) = gpg() else {
         // The same sentence `checkable_here` lets a caller avoid reaching this at all. Said
         // again here because this is reachable on its own, and a caller that forgot to ask
@@ -203,40 +212,26 @@ fn signature_holds(
     let signature = archive.with_extension("asc");
     super::acquire::download(signature_url, &signature)?;
 
-    let said = Command::new(&gpg)
-        .arg("--verify")
-        .arg(&signature)
-        .arg(archive)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| Failure::usage(format!("could not run gpg: {error}")))?;
+    let keyring = Keyring::beside(archive, &gpg, keys)?;
+    let said = keyring.verify(&gpg, &signature, archive)?;
 
-    // `gpg` says everything on stderr, success included.
-    let told = format!(
-        "{}{}",
-        String::from_utf8_lossy(&said.stdout),
-        String::from_utf8_lossy(&said.stderr)
-    );
-
-    if !said.status.success() {
+    if !said.ok {
         return Err(wrong(what, "gpg would not verify it").hint(format!(
-            "gpg said: {}\n\nThe archive is still at {} — it has not been unpacked",
-            told.trim(),
-            archive.display()
+            "gpg said: {}\n\nNothing has been unpacked and nothing has been run",
+            said.told.trim()
         )));
     }
 
-    // **One of the listed keys, not just *a* key.** `gpg` prints the fingerprint with spaces
-    // on some versions and without on others, so both spellings are looked for.
-    if keys.iter().any(|(key, _)| mentions(&told, key)) {
+    // **One of the listed keys, not just *a* key.** The keyring holds only these, so this is
+    // belt and braces — and it is cheap belt and braces against the day somebody adds a key
+    // to the ring for a different reason.
+    if keys.iter().any(|key| mentions(&said.told, key.fingerprint)) {
         return Ok(());
     }
 
     let expected = keys
         .iter()
-        .map(|(key, named)| format!("{named} ({key})"))
+        .map(|key| format!("{} ({})", key.named, key.fingerprint))
         .collect::<Vec<_>>()
         .join(", or ");
 
@@ -244,24 +239,148 @@ fn signature_holds(
         wrong(what, &format!("it is signed, but not by {expected}")).hint(format!(
             "gpg said: {}\n\nA good signature by the wrong key is exactly what this check \
              exists to catch. Nothing has been unpacked",
-            told.trim()
+            said.told.trim()
         )),
     )
 }
 
-/// Does what `gpg` said name this fingerprint, spaced or not?
+/// A `gpg` home directory holding exactly the keys this build carries, deleted on the way out.
+///
+/// **It sits beside the archive, and that is a path-handling decision rather than a tidiness
+/// one.** The `gpg` on a Windows machine is as likely to be the MSYS build that Git for
+/// Windows ships as a native one, and the MSYS build does not read a `C:\` path as absolute —
+/// it prepends the working directory and then cannot find its own keyring. The first real run
+/// of this failed exactly there. Keeping the keyring next to the archive means every path
+/// handed to `gpg` is a bare name in its own working directory, which no build of it can
+/// misread.
+struct Keyring {
+    /// The directory `gpg` is run from: the one holding the archive.
+    working_in: std::path::PathBuf,
+    /// The keyring directory's name inside it.
+    named: String,
+}
+
+/// What `gpg` said, and whether it was happy.
+struct Said {
+    ok: bool,
+    told: String,
+}
+
+impl Keyring {
+    /// Make one beside `archive` and import every carried key into it.
+    fn beside(archive: &Path, gpg: &Path, keys: &[Key]) -> Outcome<Self> {
+        let working_in = archive
+            .parent()
+            .ok_or_else(|| Failure::usage("the archive is not in a directory"))?
+            .to_path_buf();
+        let named = format!(
+            "sloop-keyring-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        );
+
+        let home = working_in.join(&named);
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).map_err(|error| {
+            Failure::usage(format!("could not create {}: {error}", home.display()))
+        })?;
+
+        // `gpg` refuses a home directory anyone else can read, on the platforms that have
+        // such a notion. Best effort rather than required: it is a directory holding public
+        // keys for a few seconds.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let _ = std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700));
+        }
+
+        let keyring = Self { working_in, named };
+
+        for key in keys {
+            let file = format!("{}.asc", key.fingerprint);
+            std::fs::write(home.join(&file), key.armored)
+                .map_err(|error| Failure::usage(format!("could not write {file}: {error}")))?;
+
+            let said = keyring.run(gpg, &["--import", &format!("{}/{file}", keyring.named)])?;
+            if !said.ok {
+                return Err(Failure::new(
+                    Exit::Failure,
+                    format!("the {} key this sloop carries would not import", key.named),
+                )
+                .hint(said.told));
+            }
+        }
+
+        Ok(keyring)
+    }
+
+    /// Check a detached signature against it.
+    ///
+    /// Both files by name, because both are in the directory `gpg` is being run from: the
+    /// signature was downloaded beside the archive, and the archive is what this is about.
+    fn verify(&self, gpg: &Path, signature: &Path, archive: &Path) -> Outcome<Said> {
+        let name = |path: &Path| {
+            path.file_name()
+                .map(|named| named.to_string_lossy().into_owned())
+                .ok_or_else(|| Failure::usage("that is not a file name"))
+        };
+
+        self.run(gpg, &["--verify", &name(signature)?, &name(archive)?])
+    }
+
+    /// Run `gpg` against this keyring and nothing else.
+    fn run(&self, gpg: &Path, arguments: &[&str]) -> Outcome<Said> {
+        let said = Command::new(gpg)
+            .current_dir(&self.working_in)
+            .arg("--homedir")
+            .arg(&self.named)
+            .arg("--batch")
+            // No keyserver, no auto-retrieval, no network: the keys are the ones carried and
+            // there is no path by which this reaches for another.
+            .args(["--keyserver-options", "no-auto-key-retrieve"])
+            .args(arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| Failure::usage(format!("could not run gpg: {error}")))?;
+
+        // `gpg` says everything on stderr, success included.
+        Ok(Said {
+            ok: said.status.success(),
+            told: format!(
+                "{}{}",
+                String::from_utf8_lossy(&said.stdout),
+                String::from_utf8_lossy(&said.stderr)
+            ),
+        })
+    }
+}
+
+impl Drop for Keyring {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(self.working_in.join(&self.named));
+    }
+}
+
+/// Does what `gpg` said name this fingerprint, however it spaced it?
+///
+/// **The whitespace is taken out of what it said rather than put into the fingerprint**, and
+/// that is not the same thing. An earlier version built one spaced spelling — four-character
+/// groups, single spaces — and `gpg` prints a *wider* gap in the middle of
+/// `BCA4 3417 C3B4 85DD 128E  C6D4 …`, so the one spelling it looked for was not one `gpg`
+/// produces. A build that printed only that form would have had a good signature by exactly
+/// the right key refused. Removing the spacing matches every form at once.
 fn mentions(told: &str, key: &str) -> bool {
     if told.contains(key) {
         return true;
     }
 
-    let spaced = key
-        .as_bytes()
-        .chunks(4)
-        .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
-        .collect::<Vec<_>>()
-        .join(" ");
-    told.contains(&spaced)
+    let run_together: String = told
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    run_together.contains(key)
 }
 
 /// Where the system's `gpg` is, if it has one.

@@ -49,7 +49,7 @@ use crate::failure::Outcome;
 
 use crate::engine::Engine;
 
-use super::proof::Proof;
+use super::proof::{Key, Proof};
 
 /// One row of the engine screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,21 +246,33 @@ pub fn postgres_builds() -> Vec<Build> {
 /// assumed.
 const MYSQL_CDN: &str = "https://cdn.mysql.com/Downloads";
 
-/// Oracle's release-engineering key, and the older ones it replaced.
+/// Oracle's release-engineering keys, **carried whole** — the fingerprint and the key itself.
+///
+/// **The key material, not just its fingerprint, and the first real run is what settled
+/// that.** An earlier pass carried the fingerprints alone, and `gpg --verify` answered
+/// *"Can't check signature: No public key"* about an archive that was signed by exactly the
+/// fingerprint in the list. A fingerprint is what you compare a key *against*; it is not a
+/// key, so on its own it can never verify anything.
 ///
 /// **Carried rather than fetched from a keyserver.** The key *is* the trust anchor: fetching
 /// it over the same network as the archive would prove nothing, and a keyserver that is down
-/// would stop an install that is otherwise perfectly verifiable. Sloop imports these into a
-/// keyring of its own for the check and never touches the user's.
-pub const MYSQL_KEYS: &[(&str, &str)] = &[
-    (
-        "BCA43417C3B485DD128EC6D4B7B3B788A8D3785C",
-        "MySQL Release Engineering",
-    ),
-    (
-        "A4A9406876FCBD3C456770C88C718D3B5072E1F5",
-        "MySQL Release Engineering (2022)",
-    ),
+/// would stop an install that is otherwise perfectly verifiable. It is exactly the posture
+/// `releases`'s pinned SHA-256 takes, and it is reviewable the same way — the bytes are in
+/// the repository beside this line.
+///
+/// **A list because publishers rotate keys**, and an archive signed with last year's is still
+/// Oracle's archive. Any one of them is enough and nothing else is.
+pub const MYSQL_KEYS: &[Key] = &[
+    Key {
+        fingerprint: "BCA43417C3B485DD128EC6D4B7B3B788A8D3785C",
+        named: "MySQL Release Engineering",
+        armored: include_str!("keys/mysql-2023.asc"),
+    },
+    Key {
+        fingerprint: "859BE8D7C586F538430B19C2467B942D3A79BD29",
+        named: "MySQL Release Engineering (2022)",
+        armored: include_str!("keys/mysql-2022.asc"),
+    },
 ];
 
 /// The MySQL series this build knows about, newest first.
