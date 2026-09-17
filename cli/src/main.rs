@@ -13,6 +13,7 @@ mod crypt;
 mod engine;
 mod exit;
 mod failure;
+mod install;
 mod lock;
 mod registry;
 mod report;
@@ -30,7 +31,7 @@ use std::process::ExitCode;
 
 use clap::Parser as _;
 
-use crate::cli::{BackupsCommand, Cli, Command, DbCommand, KeyCommand};
+use crate::cli::{BackupsCommand, Cli, Command, DbCommand, KeyCommand, ServerCommand};
 use crate::consent::Consent;
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
@@ -115,6 +116,14 @@ fn run(cli: &Cli) -> Outcome<Exit> {
             server::announce(&settled.ready);
             server::announce_own(&settled);
             Ok(Exit::Success)
+        }
+
+        // **Before `uses_registry`, because a machine with no registry can still install a
+        // server.** This is the command somebody reaches for on a fresh machine, and failing
+        // it with "run `sloop setup`" would be refusing to help for the wrong reason.
+        Some(Command::Server { command }) => {
+            let global = registry::adopt::global(&locations)?;
+            server_command(&global, command, cli.yes)
         }
 
         // **Before `uses_registry`, because reset is what removes the registry.** Opening
@@ -418,6 +427,21 @@ impl<'a> World<'a> {
             global: self.global,
             consent: self.consent,
         }
+    }
+}
+
+/// Hand a `server` subcommand its arguments.
+fn server_command(global: &Path, command: &ServerCommand, yes: bool) -> Outcome<Exit> {
+    match command {
+        ServerCommand::Install { engine, version } => commands::server::install(
+            global,
+            &commands::server::Installing {
+                engine: engine.as_deref(),
+                version: version.as_deref(),
+                yes,
+            },
+        ),
+        ServerCommand::List => commands::server::list(global),
     }
 }
 

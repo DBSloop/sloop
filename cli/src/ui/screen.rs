@@ -567,14 +567,24 @@ const HOME: &[Shelf] = &[
     ),
     Shelf(
         "THIS MACHINE",
-        &[Leaf {
-            title: "Check my setup",
-            blurb: "what sloop can find on this machine, and what it cannot",
-            command: "sloop doctor",
-            job: Job::Doctor,
-            under: "This machine",
-            run_it: "Check this machine",
-        }],
+        &[
+            Leaf {
+                title: "Install a database server",
+                blurb: "picks an engine and a version, then downloads, installs and starts it",
+                command: "sloop server install",
+                job: Job::ServerInstall,
+                under: "This machine",
+                run_it: "Choose one to install",
+            },
+            Leaf {
+                title: "Check my setup",
+                blurb: "what sloop can find on this machine, and what it cannot",
+                command: "sloop doctor",
+                job: Job::Doctor,
+                under: "This machine",
+                run_it: "Check this machine",
+            },
+        ],
     ),
 ];
 

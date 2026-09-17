@@ -755,6 +755,49 @@ fn extract_server(archive: &Path, into: &Path) -> Outcome<()> {
     )
 }
 
+/// Unpack a whole archive, dropping the one directory the project wrapped it in.
+///
+/// **`R19d`'s installs, where the answer is "all of it".** The two above take four programs
+/// out of a third of a gigabyte because that is all a dump needs; a *server* needs the
+/// programs, the libraries, the share directory its bootstrap reads its templates out of and
+/// the plugins it loads at startup — so naming members would be naming the ones today's
+/// release happens to have, and a list one name short is a server that will not come up.
+///
+/// `--strip-components=1` because every one of these projects wraps everything in a single
+/// directory named after the release: `mysql-8.4.11-winx64/`, `mariadb-11.4.4-winx64/`.
+/// Keeping it would put the server one level deeper than the record says it is.
+pub fn unpack_whole(archive: &Path, into: &Path) -> Outcome<()> {
+    let archiver = system_archiver();
+
+    let status = Command::new(&archiver)
+        .current_dir(into)
+        .arg("-xf")
+        .arg(archive)
+        .arg("--strip-components=1")
+        .stdin(Stdio::null())
+        .status()
+        .map_err(|error| {
+            Failure::new(
+                Exit::Usage,
+                format!("could not run {}: {error}", archiver.display()),
+            )
+            .hint(
+                "unpacking the archive needs the system's own tar, which Windows 10 and later \
+                 include",
+            )
+        })?;
+
+    if !status.success() {
+        return Err(Failure::new(
+            Exit::Usage,
+            format!("could not unpack {}", archive.display()),
+        )
+        .hint("nothing has been started"));
+    }
+
+    Ok(())
+}
+
 /// The system's own archiver, on the members named.
 fn unpack(archive: &Path, into: &Path, strip: &str, members: &[&str]) -> Outcome<()> {
     let archiver = system_archiver();

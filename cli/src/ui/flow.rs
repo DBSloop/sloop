@@ -65,6 +65,8 @@ pub enum Job {
     Doctor,
     /// `setup` — the one job that runs before there is a registry to read.
     Setup,
+    /// `server install` — install a database server on this machine.
+    ServerInstall,
 }
 
 /// The names answers are filed under.
@@ -409,7 +411,17 @@ impl Job {
             // password of a PostgreSQL it did not install — belongs to the command itself,
             // asked on the real terminal, because that is the only place rule 3 has one
             // implementation.
-            Self::Setup | Self::DbList | Self::KeyExport | Self::KeyImport => Vec::new(),
+            // `server install` asks nothing here either, and for a reason of its own:
+            // resolving which versions exist means reading an index, reading an index means
+            // `curl`, and `curl` writes its progress to a terminal the menu is holding. So
+            // engine, version and the confirmation are all the command's own questions, on
+            // the terminal it has been handed — which is also what lets the engine list show
+            // MongoDB and SQL Server as rows nobody can choose, the way `R19d` asked.
+            Self::Setup
+            | Self::ServerInstall
+            | Self::DbList
+            | Self::KeyExport
+            | Self::KeyImport => Vec::new(),
 
             Self::DbAdd => registering(answers),
             Self::DbCreate => making(),

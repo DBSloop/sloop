@@ -101,7 +101,14 @@ pub enum Origin {
     /// The machine's own PostgreSQL 18, used as it stands. sloop never starts, stops or
     /// reconfigures it — it is somebody else's server and sloop is a guest on it.
     Machines,
-    /// A cluster sloop created, under the global store, on [`SLOOPS_PORT`].
+    /// A cluster sloop created, under the global store, on a port sloop chose — so it is
+    /// sloop's to start and stop.
+    ///
+    /// Two of these exist and they are not the same thing. Sloop's own state cluster is on
+    /// [`SLOOPS_PORT`] and is written down in `server.toml`; a server somebody installed
+    /// from `R19d`'s menu is written down in `servers.toml` and holds *their* databases,
+    /// which is why `reset` names the files it destroys one by one rather than sweeping the
+    /// store.
     Sloops,
 }
 

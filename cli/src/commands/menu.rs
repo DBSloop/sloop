@@ -181,10 +181,26 @@ impl Doing for Machine {
             return self.set_up();
         }
 
+        // **Also before the registries, and for the same reason.** Installing a server is the
+        // command somebody reaches for on a machine that has nothing on it yet, and refusing
+        // it with "run `sloop setup`" would be declining to help for the wrong reason.
+        if matches!(job, Job::ServerInstall) {
+            return commands::server::install(
+                &self.global,
+                &commands::server::Installing {
+                    engine: None,
+                    version: None,
+                    yes: false,
+                },
+            );
+        }
+
         let registries = self.open()?;
 
         match job {
-            Job::Setup => unreachable!("handled above, before the registries are opened"),
+            Job::Setup | Job::ServerInstall => {
+                unreachable!("handled above, before the registries are opened")
+            }
             Job::DbAdd => self.add(registries, answers),
             Job::DbCreate => self.create(registries, answers),
             Job::DbList => Ok(commands::db::list(&self.context(registries))),

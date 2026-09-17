@@ -281,6 +281,17 @@ pub enum Command {
         superuser_password_stdin: bool,
     },
 
+    /// Install a database server on this machine, or see the ones sloop installed.
+    ///
+    /// Engine, then version, then one confirmation — instead of finding the project's
+    /// website and following its installation instructions. The archive is downloaded by
+    /// the system's own curl, proved against whatever that project publishes to prove it
+    /// with, and started on a port that collides with nothing already here.
+    Server {
+        #[command(subcommand)]
+        command: ServerCommand,
+    },
+
     /// Put this machine back to the moment sloop was installed.
     ///
     /// Removes sloop's own database and everything it knows. A PostgreSQL that sloop
@@ -294,6 +305,24 @@ pub enum Command {
     ///
     /// Everything `reset` does, and then sloop itself.
     Uninstall,
+}
+
+/// `sloop server …` — the database servers on this machine, as opposed to the databases on
+/// them.
+#[derive(Debug, Subcommand)]
+pub enum ServerCommand {
+    /// Download, install, configure and start a database server.
+    Install {
+        /// postgres, mysql or mariadb. Left out, it is asked for.
+        engine: Option<String>,
+
+        /// Which version, as the project writes it. Left out, the ones available are listed.
+        #[arg(long, value_name = "VERSION")]
+        version: Option<String>,
+    },
+
+    /// Every server sloop has installed here, and how to reach each one.
+    List,
 }
 
 /// `sloop db …` — everything that touches the registry.
@@ -844,6 +873,7 @@ impl Command {
             Self::Mirror { .. } => "mirror",
             Self::Sync { .. } => "sync",
             Self::Key { command } => command.path(),
+            Self::Server { command } => command.path(),
             Self::Setup { .. } => "setup",
             Self::Reset => "reset",
             Self::Uninstall => "uninstall",
@@ -863,6 +893,16 @@ impl DbCommand {
             Self::Rename { .. } => "db rename",
             Self::Remove { .. } => "db remove",
             Self::Drop { .. } => "db drop",
+        }
+    }
+}
+
+impl ServerCommand {
+    #[must_use]
+    pub fn path(&self) -> &'static str {
+        match self {
+            Self::Install { .. } => "server install",
+            Self::List => "server list",
         }
     }
 }
@@ -1077,6 +1117,7 @@ mod tests {
                 "sync",
                 "key",
                 "setup",
+                "server",
                 "reset",
                 "uninstall",
             ]

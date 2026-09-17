@@ -10,6 +10,7 @@ pub mod menu;
 pub mod mirror;
 pub mod reset;
 pub mod restore;
+pub mod server;
 pub mod sync;
 pub mod tables;
 

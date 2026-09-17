@@ -23,18 +23,29 @@
 //! covers that, and it is checked against Oracle's own key. A version that has aged out
 //! simply stops resolving, and the run says so rather than installing something else.
 //!
-//! **Nothing here opens a socket.** Reading the MariaDB index is `curl`, the same way the
-//! download is, and everything else is a table.
-
-//! **Nothing in the binary reaches this module yet**, for the same reason `proof` does not:
-//! the screen that walks engine → version → confirm is the next piece of `R19d` and is what
-//! will call both. Until then its reader is `catalogue_tests`, which feeds the two index
-//! readers the real shape of what the real endpoints return.
-#![allow(dead_code)]
+//! **The MariaDB index is read with `serde_json`, which is already in the graph.** An earlier
+//! pass read it by hand, on the reasoning that three fields were not worth a dependency —
+//! and running it against the real endpoint showed the document is not the shape that
+//! assumed: the SHA-256 is nested under `checksum` beside an MD5 and a SHA-1, and the
+//! download URL comes *after* that object rather than before it. A parser that cannot read
+//! the thing it parses is not a saving. `serde_json` has been in this graph since `R9`'s
+//! manifests and nothing in it can open a socket.
+//!
+//! **Nothing here opens a socket.** Reading the MariaDB index is done through a [`Reader`]
+//! the caller hands in — which in the running program is `curl`, the same way the download
+//! is, and in the tests is a table of the real shapes the real endpoints return. So the two
+//! index readers are exercised against reality without this module ever being the thing that
+//! reaches the network.
 
 #[cfg(test)]
 #[path = "catalogue_tests.rs"]
 mod tests;
+
+use std::fmt::Write as _;
+
+use serde::Deserialize;
+
+use crate::failure::Outcome;
 
 use crate::engine::Engine;
 
@@ -309,58 +320,209 @@ fn series_of(version: &str) -> Option<String> {
 /// MariaDB's own machine-readable index.
 ///
 /// **The one engine where "versions available" means what it sounds like.** Every file entry
-/// carries a `sha256sum`, so a version can be resolved now and still be proved — which is
-/// exactly what `R19d` asked for and what the other two cannot give.
+/// carries a SHA-256, so a version can be resolved now and still be proved — which is exactly
+/// what `R19d` asked for and what the other two cannot give.
 pub const MARIADB_INDEX: &str = "https://downloads.mariadb.org/rest-api/mariadb/";
 
-/// Pull the `file_name`, `sha256sum` and `file_download_url` out of one release's index.
+/// `/rest-api/mariadb/` — the majors.
+#[derive(Debug, Deserialize)]
+struct Majors {
+    #[serde(default)]
+    major_releases: Vec<MajorRow>,
+}
+
+/// One major, as the index writes it.
 ///
-/// Hand-read for the reason `releases::read_index` gives: three fields against a JSON
-/// dependency in the graph of a tool whose headline claim is about what is *not* in its
-/// graph. Anything that does not parse is simply not offered — and a file with no usable
-/// hash is dropped rather than offered unverified, which is the whole point.
+/// The field names are the index's, not sloop's — renaming them here to please a lint about a
+/// shared prefix would mean a `#[serde(rename)]` on each one saying what they are really
+/// called, which is the same three words in a less obvious place.
+#[allow(clippy::struct_field_names)]
+#[derive(Debug, Deserialize)]
+struct MajorRow {
+    release_id: String,
+    #[serde(default)]
+    release_status: Option<String>,
+    #[serde(default)]
+    release_support_type: Option<String>,
+}
+
+/// `/rest-api/mariadb/<major>/latest/` — one major's releases, keyed by version.
+#[derive(Debug, Deserialize)]
+struct Releases {
+    #[serde(default)]
+    releases: std::collections::HashMap<String, ReleaseRow>,
+}
+
+/// One release, and the files it publishes.
+#[derive(Debug, Deserialize)]
+struct ReleaseRow {
+    release_id: String,
+    #[serde(default)]
+    release_status: Option<String>,
+    #[serde(default)]
+    files: Vec<FileRow>,
+}
+
+/// One published file.
+///
+/// **The hash is in two places depending on which endpoint answered**, which is not a guess:
+/// the release endpoint nests it under `checksum`, beside an MD5 and a SHA-1. Both are read
+/// and neither is required, because a file with no usable hash is dropped rather than offered
+/// unverified.
+#[derive(Debug, Deserialize)]
+struct FileRow {
+    file_name: String,
+    #[serde(default)]
+    os: Option<String>,
+    #[serde(default)]
+    checksum: Option<Checksum>,
+    #[serde(default)]
+    sha256sum: Option<String>,
+    #[serde(default)]
+    file_download_url: Option<String>,
+}
+
+/// The checksums beside one file.
+#[derive(Debug, Deserialize)]
+struct Checksum {
+    #[serde(default)]
+    sha256sum: Option<String>,
+}
+
+impl FileRow {
+    /// The SHA-256, wherever this endpoint put it, and only if it really is one.
+    fn sha256(&self) -> Option<&str> {
+        self.checksum
+            .as_ref()
+            .and_then(|checksum| checksum.sha256sum.as_deref())
+            .or(self.sha256sum.as_deref())
+            .filter(|hash| super::proof::is_hex_sha256(hash))
+    }
+}
+
+/// Every stable major the index lists, newest first, with what kind of release it is.
+///
+/// **Majors rather than every version ever published.** Somebody picking a server out of a
+/// menu means "MariaDB 11.8", not a choice between 11.8.2 and 11.8.1 — and asking the index
+/// for every major's releases to fill one screen would be a dozen requests, eleven of whose
+/// answers get thrown away.
+#[must_use]
+pub fn read_mariadb_majors(json: &str) -> Vec<Choice> {
+    let Ok(read) = serde_json::from_str::<Majors>(json) else {
+        return Vec::new();
+    };
+
+    let mut majors: Vec<Choice> = read
+        .major_releases
+        .into_iter()
+        // Stable only: an alpha or an RC is not what somebody picking from a menu means by
+        // "the versions available".
+        .filter(|major| major.release_status.as_deref() == Some("Stable"))
+        .map(|major| Choice {
+            version: major.release_id,
+            note: major.release_support_type.unwrap_or_default(),
+            build: None,
+        })
+        .collect();
+
+    majors.sort_by(|left, right| newest_first(&left.version, &right.version));
+    majors.dedup_by(|left, right| left.version == right.version);
+    majors
+}
+
+/// Every release inside one major, newest first.
+#[must_use]
+pub fn read_mariadb_versions(json: &str) -> Vec<String> {
+    let Ok(read) = serde_json::from_str::<Releases>(json) else {
+        return Vec::new();
+    };
+
+    let mut versions: Vec<String> = read
+        .releases
+        .into_values()
+        .filter(|release| {
+            // Absent is fine and is what the release endpoint actually returns; anything that
+            // says it is not stable is skipped.
+            release.release_status.as_deref().unwrap_or("Stable") == "Stable"
+        })
+        .map(|release| release.release_id)
+        .collect();
+
+    versions.sort_by(|left, right| newest_first(left, right));
+    versions.dedup();
+    versions
+}
+
+/// The archives one release publishes for this platform, with the hash that proves each.
+///
+/// Anything that does not parse offers nothing, and **a file with no usable hash is dropped
+/// rather than offered unverified** — which is the one line in this module the guarantee
+/// rests on.
 #[must_use]
 pub fn read_mariadb_files(json: &str, platform: Platform, version: &str) -> Vec<Build> {
-    let mut builds = Vec::new();
+    let Ok(read) = serde_json::from_str::<Releases>(json) else {
+        return Vec::new();
+    };
 
-    for object in json.split('{').skip(1) {
-        let object = &object[..object.find('}').unwrap_or(object.len())];
+    let Some(release) = read
+        .releases
+        .into_values()
+        .find(|release| release.release_id == version)
+    else {
+        return Vec::new();
+    };
 
-        let Some(file_name) = field(object, "file_name") else {
-            continue;
-        };
-        // The binary tarball or zip, never a source tarball, a debug build or a directory.
-        if !is_a_server_archive(&file_name, platform) {
-            continue;
-        }
+    release
+        .files
+        .into_iter()
+        .filter(|file| is_a_server_archive(file, platform))
+        .filter_map(|file| {
+            let sha256 = file.sha256()?.to_owned();
+            let url = over_https(&file.file_download_url?);
 
-        let Some(sha256) =
-            field(object, "sha256sum").filter(|hash| super::proof::is_hex_sha256(hash))
-        else {
-            continue;
-        };
-        let Some(url) = field(object, "file_download_url") else {
-            continue;
-        };
+            Some(Build {
+                engine: Engine::Mariadb,
+                version: version.to_owned(),
+                file_name: file.file_name,
+                url,
+                proof: Proof::Published {
+                    sha256,
+                    from: "downloads.mariadb.org".to_owned(),
+                },
+            })
+        })
+        .collect()
+}
 
-        builds.push(Build {
-            engine: Engine::Mariadb,
-            version: version.to_owned(),
-            file_name,
-            url,
-            proof: Proof::Published {
-                sha256,
-                from: "downloads.mariadb.org".to_owned(),
-            },
-        });
-    }
-
-    builds
+/// The same address, over TLS.
+///
+/// **The index gives `http://` for its own downloads**, which is a real thing the real
+/// endpoint really returns — and `acquire::download` refuses anything that is not https at
+/// both ends of a redirect chain, deliberately. The host serves both, so the scheme is
+/// corrected rather than the refusal being relaxed: the archive is proved by its hash either
+/// way, and there is no reason for the bytes to cross the network in the clear on the way to
+/// being proved.
+fn over_https(url: &str) -> String {
+    url.strip_prefix("http://")
+        .map_or_else(|| url.to_owned(), |rest| format!("https://{rest}"))
 }
 
 /// Is this the binary server archive for this platform?
-fn is_a_server_archive(file_name: &str, platform: Platform) -> bool {
+///
+/// The name and, when the index says so, the `os` field beside it. Neither alone is enough:
+/// the names carry the platform for every build that matters and the field is what
+/// disambiguates the ones that do not.
+fn is_a_server_archive(file: &FileRow, platform: Platform) -> bool {
+    let file_name = &file.file_name;
+
     if file_name.contains("debug") || file_name.contains("-src") || file_name.ends_with('/') {
+        return false;
+    }
+    if file
+        .os
+        .as_deref()
+        .is_some_and(|named| named != platform.mariadb_os())
+    {
         return false;
     }
 
@@ -369,27 +531,6 @@ fn is_a_server_archive(file_name: &str, platform: Platform) -> bool {
         Platform::Linux => file_name.ends_with("x86_64.tar.gz") && file_name.contains("linux"),
         Platform::MacOs => file_name.ends_with(".tar.gz") && file_name.contains("macos"),
     }
-}
-
-/// Every version the index lists, newest first.
-#[must_use]
-pub fn read_mariadb_versions(json: &str) -> Vec<String> {
-    let mut versions: Vec<String> = Vec::new();
-
-    for object in json.split('{').skip(1) {
-        let object = &object[..object.find('}').unwrap_or(object.len())];
-        // Stable releases only: an alpha or an RC is not what somebody picking from a menu
-        // means by "the versions available".
-        if field(object, "release_status").is_some_and(|status| status != "Stable") {
-            continue;
-        }
-        if let Some(id) = field(object, "release_id").filter(|id| !versions.contains(id)) {
-            versions.push(id);
-        }
-    }
-
-    versions.sort_by(|left, right| newest_first(left, right));
-    versions
 }
 
 /// `11.4.4` above `10.11.2`, comparing numbers rather than text — otherwise `9` sorts above
@@ -403,11 +544,168 @@ fn newest_first(left: &str, right: &str) -> std::cmp::Ordering {
     parts(right).cmp(&parts(left))
 }
 
-/// One `"name": value` out of a flat JSON object, quotes stripped.
-fn field(object: &str, name: &str) -> Option<String> {
-    let key = format!("\"{name}\"");
-    let after = object.split_once(&key)?.1.split_once(':')?.1.trim();
-    let value = after.split(',').next()?.trim().trim_end_matches('}').trim();
-    let value = value.trim_matches('"');
-    (!value.is_empty() && value != "null").then(|| value.to_owned())
+// ---------------------------------------------------------------------------------------
+// Turning an engine into a list somebody can choose from
+// ---------------------------------------------------------------------------------------
+
+/// How an index is read: a URL in, the text out.
+///
+/// **A parameter rather than a call to `acquire::download`**, and the reason is the module
+/// header's: the resolution below is worth testing against the real shapes the real endpoints
+/// return, and a test that had to reach downloads.mariadb.org to do it would be a test that
+/// fails when somebody's wifi does. The running program passes a closure that shells out to
+/// `curl`; the tests pass one that hands back a string.
+pub type Reader<'a> = &'a dyn Fn(&str) -> Outcome<String>;
+
+/// One row of the version screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Choice {
+    /// What it is called: `18.6`, `8.4.11`, or — for MariaDB — a major such as `11.8`.
+    pub version: String,
+    /// The line under it, when there is something worth saying. Empty otherwise.
+    pub note: String,
+    /// The build, when it is already known.
+    ///
+    /// **`None` for MariaDB, which is the one engine that resolves late.** Its index lists
+    /// majors, and asking it for every major's files up front would be a dozen requests to
+    /// fill a screen where eleven of the answers get thrown away.
+    pub build: Option<Build>,
+}
+
+/// The versions of one engine this machine can be offered, newest first.
+///
+/// Empty is a real answer and not a failure: it is what a platform nothing is published for
+/// looks like, and the caller says so in the words that platform deserves.
+pub fn choices(engine: Engine, read: Reader<'_>) -> Outcome<Vec<Choice>> {
+    let from_builds = |builds: Vec<Build>| {
+        builds
+            .into_iter()
+            .map(|build| Choice {
+                version: build.version.clone(),
+                note: build.proof.describe(),
+                build: Some(build),
+            })
+            .collect()
+    };
+
+    match engine {
+        Engine::Postgres => Ok(from_builds(postgres_builds())),
+        Engine::Mysql => Ok(from_builds(mysql_builds())),
+        Engine::Mariadb => {
+            if Platform::here().is_none() {
+                return Ok(Vec::new());
+            }
+            Ok(read_mariadb_majors(&read(MARIADB_INDEX)?))
+        }
+    }
+}
+
+/// The build behind a choice, fetching the one index that resolves late.
+pub fn resolve(engine: Engine, choice: &Choice, read: Reader<'_>) -> Outcome<Build> {
+    if let Some(build) = &choice.build {
+        return Ok(build.clone());
+    }
+
+    let platform = Platform::here().ok_or_else(|| nothing_published(engine))?;
+    let json = read(&mariadb_latest(&choice.version))?;
+
+    // The release inside that major, and then its files. Both out of the one document, which
+    // is what the endpoint returns — so there is one request rather than two, and the version
+    // that gets installed is the one whose files were read in the same breath.
+    let version = read_mariadb_versions(&json)
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            crate::failure::Failure::new(
+                crate::exit::Exit::Failure,
+                format!(
+                    "downloads.mariadb.org lists no release in MariaDB {}",
+                    choice.version
+                ),
+            )
+            .hint("pick another version — nothing has been downloaded")
+        })?;
+
+    read_mariadb_files(&json, platform, &version)
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            crate::failure::Failure::new(
+                crate::exit::Exit::Failure,
+                format!(
+                    "downloads.mariadb.org publishes no {} archive for MariaDB {version} with a \
+                     checksum beside it",
+                    platform.mariadb_os()
+                ),
+            )
+            .hint(
+                "a file with no usable hash is never offered — see the release notes for that \
+                 version",
+            )
+        })
+}
+
+/// Where one major release's newest version and its files are listed.
+fn mariadb_latest(major: &str) -> String {
+    format!("{MARIADB_INDEX}{major}/latest/")
+}
+
+/// The one refusal for an engine this platform has nothing published for.
+fn nothing_published(engine: Engine) -> crate::failure::Failure {
+    crate::failure::Failure::new(
+        crate::exit::Exit::Usage,
+        format!(
+            "nobody publishes a {} archive for this machine",
+            named(engine)
+        ),
+    )
+    .hint("install it with this machine's own package manager instead")
+}
+
+/// What to say instead of a version list, when there is not one.
+///
+/// **Not a failure, and not silence either.** A Linux machine asking for PostgreSQL has a
+/// perfectly good answer — its package manager — and the whole reason this screen exists is
+/// that somebody should not have to go and find that out for themselves.
+#[must_use]
+pub fn why_nothing_is_offered(engine: Engine) -> String {
+    let mut said = String::new();
+
+    if Platform::here().is_none() {
+        let _ = write!(
+            said,
+            "Nobody publishes a {} archive for this machine.",
+            named(engine)
+        );
+        return said;
+    }
+
+    match engine {
+        Engine::Postgres => {
+            let _ = write!(
+                said,
+                "On this system the PostgreSQL to install is the one the rest of the system \
+                 expects, which is the package manager's. Installing a second one under \
+                 sloop's own directory would leave two servers and two sets of client \
+                 programs."
+            );
+        }
+        Engine::Mysql if Platform::here() == Some(Platform::MacOs) => {
+            let _ = write!(
+                said,
+                "Oracle names its macOS build after the macOS it was built on, which moves \
+                 every year, so there is no name sloop can resolve without guessing. \
+                 `brew install mysql` is the answer here."
+            );
+        }
+        Engine::Mysql | Engine::Mariadb => {
+            let _ = write!(
+                said,
+                "Nothing is published for this machine that sloop can prove it received \
+                 intact."
+            );
+        }
+    }
+
+    said
 }

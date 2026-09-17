@@ -95,15 +95,29 @@ pub fn sloops_own(global: &Path) -> Outcome<Ready> {
 /// a test nobody runs, and one that built on 5433 would collide with the cluster a developer's
 /// own `sloop setup` made.
 pub(super) fn with_binaries(global: &Path, bin: std::path::PathBuf, port: u16) -> Outcome<Ready> {
-    let data = super::data_dir(global);
-
-    let server = Server {
+    raise(Server {
         bin,
-        data: Some(data.clone()),
+        data: Some(super::data_dir(global)),
         port,
         superuser: SUPERUSER.to_owned(),
         origin: Origin::Sloops,
-    };
+    })
+}
+
+/// Bring a cluster up at the data directory a [`Server`] names, and hand back the password
+/// that opens it.
+///
+/// **One sequence, two callers.** Setup builds sloop's own state cluster with it and
+/// `R19d`'s menu builds the PostgreSQL somebody chose from a list with it — and the risky
+/// part is identical either way: `initdb`, then `pg_ctl`, then the password over a pipe,
+/// then `scram-sha-256`, then proving the connection. A second copy of that for the menu
+/// would be a second chance to leave a cluster on `trust`, which is the one mistake here
+/// that nobody would notice until somebody else did.
+pub(crate) fn raise(server: Server) -> Outcome<Ready> {
+    let data = server
+        .data
+        .clone()
+        .ok_or_else(|| Failure::usage("this server names no data directory to create"))?;
 
     // An existing cluster with no record beside it: `server.toml` was deleted, or a previous
     // Setup stopped between `initdb` and writing it. Nothing here can recover its password,
