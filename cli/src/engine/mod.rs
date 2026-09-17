@@ -82,6 +82,20 @@ impl Engine {
         }
     }
 
+    /// How it is written for a person.
+    ///
+    /// Not [`Engine::scheme`], which is the canonical lowercase spelling a URL and a config
+    /// field use. These are the names on the projects' own front pages, and they are what a
+    /// screen or a table of engines shows.
+    #[must_use]
+    pub const fn proper_name(self) -> &'static str {
+        match self {
+            Self::Postgres => "PostgreSQL",
+            Self::Mysql => "MySQL",
+            Self::Mariadb => "MariaDB",
+        }
+    }
+
     /// The scheme this engine uses in a URL.
     #[must_use]
     pub const fn scheme(self) -> &'static str {

@@ -540,9 +540,23 @@ pub fn run_sql(server: &Server, password: Option<&Secret>, sql: &str) -> Outcome
 
 /// Ask the server one question and hand back what it answered, with nothing around it.
 pub fn query(server: &Server, password: Option<&Secret>, sql: &str) -> Outcome<String> {
+    ask(server, &As::superuser(server), password, sql)
+}
+
+/// The same question, asked as somebody in particular.
+///
+/// **`R19c3` reads sloop's own tables as the role that owns them, not as the superuser.**
+/// Same connection, same rules about the password; the only thing that changes is who is on
+/// the other end of it.
+pub fn ask(
+    server: &Server,
+    as_who: &As<'_>,
+    password: Option<&Secret>,
+    sql: &str,
+) -> Outcome<String> {
     let (ok, said) = psql(
         server,
-        &As::superuser(server),
+        as_who,
         password,
         sql,
         &["--tuples-only", "--no-align"],
@@ -554,7 +568,31 @@ pub fn query(server: &Server, password: Option<&Secret>, sql: &str) -> Outcome<S
 
     Err(Failure::new(
         Exit::Connect,
-        format!("{} would not answer", server.url("postgres")),
+        format!("{} would not answer", server.url(as_who.database)),
+    )
+    .hint(said))
+}
+
+/// Run a whole script as somebody in particular — all of it, or none of it.
+///
+/// **`--single-transaction`, which is the half that matters.** A migration and the ledger row
+/// that records it go in together: a script that fails on its fourth statement leaves no
+/// trace of the first three, so the next run finds a database at the version it was at rather
+/// than at half of the next one.
+pub fn script(
+    server: &Server,
+    as_who: &As<'_>,
+    password: Option<&Secret>,
+    sql: &str,
+) -> Outcome<()> {
+    let (ok, said) = psql(server, as_who, password, sql, &["--single-transaction"])?;
+    if ok {
+        return Ok(());
+    }
+
+    Err(Failure::new(
+        Exit::Connect,
+        format!("{} refused a statement", server.url(as_who.database)),
     )
     .hint(said))
 }

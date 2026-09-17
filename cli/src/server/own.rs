@@ -1,9 +1,9 @@
 //! `sloop_database`, owned by `sloop_db_admin` — the database sloop keeps its own state in.
 //!
-//! **`R19c1` found a server; this puts sloop's own database on it.** What goes *inside* —
-//! the tables, the migrations — is `R19c3`. What is here is the database, the role that owns
-//! it, the password that role gets, and the one property that makes a second run ordinary:
-//! nothing is typed.
+//! **`R19c1` found a server; this puts sloop's own database on it.** What goes *inside* it —
+//! the tables and the migrations that create them — is [`super::schema`]. What is here is the
+//! database, the role that owns it, the password that role gets, and the one property that
+//! makes a second run ordinary: nothing is typed.
 //!
 //! **It runs as a guest wherever the server came from.** A cluster sloop made has one
 //! superuser and nothing else on it; the machine's own PostgreSQL 18 may have a hundred
@@ -59,6 +59,20 @@ impl Own {
             "postgres://{}@{LOOPBACK}:{}/{}",
             self.role, server.port, self.database
         )
+    }
+
+    /// Who a connection to it is made as, and to what.
+    ///
+    /// **Both halves together, because getting them crossed is silent.** Connecting as the
+    /// owning role to `postgres`, or as the superuser to `sloop_database`, both work and both
+    /// do the wrong thing — `R19c3` reads and writes sloop's tables as the role that owns
+    /// them, and this is the one place that pair is spelled.
+    #[must_use]
+    pub fn as_who(&self) -> make::As<'_> {
+        make::As {
+            role: &self.role,
+            database: &self.database,
+        }
     }
 
     /// What the role's password is filed under.

@@ -1,9 +1,10 @@
 //! The PostgreSQL 18 sloop keeps its own state in.
 //!
 //! **Gitea's shape, which the owner named.** sloop stops keeping its state in files and
-//! keeps it in a database of its own. This module is the first half of getting there: making
-//! sure there *is* a PostgreSQL 18 on the machine that sloop may use. What goes in it —
-//! `sloop_database`, the role, the schema — is `R19c2` and `R19c3`.
+//! keeps it in a database of its own. This module is how it gets there: finding or making a
+//! PostgreSQL 18 (`find`, `make`), putting `sloop_database` and the role that owns it on it
+//! (`own`), and creating the tables inside it (`schema`). What still moves onto those tables
+//! is `R19c4`.
 //!
 //! Three machines, three answers, and the third is the one the port number exists for:
 //!
@@ -31,6 +32,7 @@ pub mod find;
 pub mod make;
 pub mod own;
 pub mod record;
+pub mod schema;
 
 #[cfg(test)]
 mod tests;
@@ -181,13 +183,18 @@ pub struct Settled {
     pub own: own::Own,
     /// The password of the role that owns it.
     ///
-    /// **Nothing reads it yet, and that is the seam.** `R19c3` opens this database to create
-    /// its tables, and it opens it as the owning role rather than as the superuser — so the
-    /// password leaves Setup from here rather than being fetched again. It is allowed to sit
-    /// unread until then for the same reason `lock::Held::path` is: the value belongs to the
-    /// type, and the alternative is a caller that has to go and find it.
+    /// **This is what opens the tables**, and `set_up` has already used it: the migrations
+    /// run as the owning role rather than as the superuser, which is what keeps a bug in the
+    /// schema from reaching anything else on the server.
+    ///
+    /// It is handed back rather than dropped because `R19c4` reads and writes every registry
+    /// operation through this same connection, and fetching the password out of the keyring
+    /// again for each one would be work sloop has already done. Unread until then, for the
+    /// reason `record::forget` is: the value belongs to the type.
     #[allow(dead_code)]
     pub password: Secret,
+    /// What the schema run did: the version before, the version now, and what it applied.
+    pub schema: schema::Applied,
 }
 
 /// Find a PostgreSQL 18 sloop can use, making one if the machine has none.
@@ -225,10 +232,16 @@ pub fn set_up(global: &Path, asking: &make::Asking<'_>) -> Outcome<Settled> {
     let ready = ensure(global, asking)?;
     let (own, password) = own::ensure(global, &ready.server, &ready.password)?;
 
+    // The tables, and then the engines this build speaks. Both idempotent: a second run
+    // applies no migration and reconciles the same three rows onto themselves.
+    let applied = schema::migrate(&ready.server, &own, &password)?;
+    schema::reconcile_engines(&ready.server, &own, &password)?;
+
     Ok(Settled {
         ready,
         own,
         password,
+        schema: applied,
     })
 }
 
@@ -270,4 +283,5 @@ pub fn announce_own(settled: &Settled) {
             settled.own.role
         ))
     );
+    schema::announce(&settled.schema, &settled.own);
 }

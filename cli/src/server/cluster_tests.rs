@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use super::tests::Scratch;
-use super::{Origin, make, own, record};
+use super::{Origin, make, own, record, schema};
 
 /// A port per test, and none of them 5433: a developer running these should never collide
 /// with the cluster their own `sloop setup` made, and cargo runs these three at once.
@@ -26,6 +26,7 @@ const MADE_PORT: u16 = 55987;
 const AUTH_PORT: u16 = 55988;
 const AGAIN_PORT: u16 = 55989;
 const OWN_PORT: u16 = 55990;
+const SCHEMA_PORT: u16 = 55991;
 
 /// The variable that says which PostgreSQL to build the cluster out of, shared with the
 /// engine's own cluster tests so one machine sets one variable.
@@ -416,4 +417,283 @@ fn sloops_own_database_is_made_once_and_reopened_with_nothing_typed() {
 
     stop(&ready.server.bin, &data);
     let _ = std::fs::remove_dir_all(scratch.path());
+}
+
+// ---------------------------------------------------------------------------------------
+// R19c3 — the schema
+// ---------------------------------------------------------------------------------------
+
+/// The fingerprint of a database's whole shape: every table, every column, every type.
+///
+/// **Two databases that print the same string have the same schema**, which is how the
+/// "a release older" half of the `Done when` is checked — one migrated from nothing and one
+/// migrated forward from version 3 have to end up indistinguishable, not merely both
+/// working.
+fn shape_of(server: &super::Server, own: &own::Own, password: &crate::secret::Secret) -> String {
+    make::ask(
+        server,
+        &own.as_who(),
+        Some(password),
+        "SELECT table_name || '.' || column_name || ' ' || data_type
+           FROM information_schema.columns
+          WHERE table_schema = 'public'
+          ORDER BY table_name, column_name;",
+    )
+    .expect("the migrated database answers")
+}
+
+/// Every non-empty line of an answer, trimmed.
+fn rows(said: &str) -> Vec<&str> {
+    said.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// **The whole `Done when`: migrations that run forwards on an empty database and on one a
+/// release older, and every table reachable from a documented query.**
+///
+/// One test and one cluster, for the reason the `R19c2` one above gives: every step needs the
+/// state the step before it left, and a second `initdb` would be testing a different machine.
+#[test]
+fn the_schema_migrates_forwards_from_nothing_and_from_a_release_older() {
+    let scratch = Scratch::new("schema");
+    let global = scratch.path().to_path_buf();
+    let data = super::data_dir(&global);
+
+    if !super::tests::this_machine_can_keep_a_secret(&global) {
+        return;
+    }
+
+    let Some(ready) = cluster(&global, SCHEMA_PORT) else {
+        return;
+    };
+    record::write(&global, &ready.server, &ready.password).expect("it can keep a secret");
+
+    let (own, password) = match own::ensure(&global, &ready.server, &ready.password) {
+        Ok(made) => made,
+        Err(why) => {
+            stop(&ready.server.bin, &data);
+            panic!("sloop's own database could not be made: {}", why.message());
+        }
+    };
+
+    // Everything from here has a running cluster to tear down, and a panic in the middle of
+    // it would leave a postmaster holding the scratch directory open — on Windows that is a
+    // directory nothing can delete. Run the assertions, stop the server, then re-raise.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assertions(&ready.server, &own, &password, &ready.password);
+    }));
+
+    stop(&ready.server.bin, &data);
+    let _ = std::fs::remove_dir_all(scratch.path());
+
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// The assertions themselves, with the cluster running.
+///
+/// `password` opens sloop's own database as the role that owns it, which is how everything
+/// here reads and writes. `superuser` is needed for exactly one statement — `CREATE DATABASE`
+/// for the "a release older" copy — because making a database is not the owning role's to do.
+#[allow(clippy::too_many_lines)]
+fn assertions(
+    server: &super::Server,
+    own: &own::Own,
+    password: &crate::secret::Secret,
+    superuser: &crate::secret::Secret,
+) {
+    // 1. **From nothing.** An empty database gets every migration, in order, and lands on the
+    //    newest version this build knows.
+    let applied = schema::migrate(server, own, password).expect("an empty database migrates");
+    assert_eq!(applied.from, 0, "it was not empty to begin with");
+    assert_eq!(applied.to, 4);
+    assert_eq!(applied.ran, ["ledger", "registry", "history", "service"]);
+    assert!(applied.changed_anything());
+
+    // 2. Ten tables, and they are exactly the ten the module documents.
+    let said = make::ask(
+        server,
+        &own.as_who(),
+        Some(password),
+        "SELECT table_name FROM information_schema.tables
+          WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+          ORDER BY table_name;",
+    )
+    .expect("the migrated database answers");
+    let mut found = rows(&said);
+    found.sort_unstable();
+
+    let mut documented: Vec<&str> = schema::READINGS
+        .iter()
+        .map(|reading| reading.table)
+        .collect();
+    documented.sort_unstable();
+    assert_eq!(
+        found, documented,
+        "the database and the documentation disagree"
+    );
+
+    // 3. **Every `id` is a `BIGSERIAL`** — the owner's first sentence about this schema. In
+    //    the catalogue that is a `bigint` with a sequence behind it, on all ten tables.
+    let said = make::ask(
+        server,
+        &own.as_who(),
+        Some(password),
+        "SELECT table_name || ' ' || data_type || ' ' || coalesce(column_default, 'none')
+           FROM information_schema.columns
+          WHERE table_schema = 'public' AND column_name = 'id'
+          ORDER BY table_name;",
+    )
+    .expect("the migrated database answers");
+    let id_columns = rows(&said);
+    assert_eq!(id_columns.len(), 10, "a table has no id: {id_columns:?}");
+    for column in &id_columns {
+        assert!(column.contains("bigint"), "{column} is not a BIGSERIAL");
+        assert!(
+            column.contains("nextval"),
+            "{column} has no sequence behind it"
+        );
+    }
+
+    // 4. **Every table is reachable from a documented query.** Each one runs against the real
+    //    thing, so a renamed column fails here rather than sitting in a comment being wrong.
+    for reading in schema::READINGS {
+        make::ask(server, &own.as_who(), Some(password), reading.sql).unwrap_or_else(|why| {
+            panic!(
+                "the documented query for {} ({}) does not run: {}",
+                reading.table,
+                reading.purpose,
+                why.message()
+            )
+        });
+    }
+
+    // 5. The engines this build speaks are in the table, under their proper names — and
+    //    reconciling twice does not double them, because Setup is re-runnable.
+    schema::reconcile_engines(server, own, password).expect("the engines go in");
+    schema::reconcile_engines(server, own, password).expect("a second run is ordinary");
+    let said = make::ask(
+        server,
+        &own.as_who(),
+        Some(password),
+        "SELECT name || ' ' || display_name || ' ' || default_port
+           FROM engine WHERE supported ORDER BY name;",
+    )
+    .expect("the engine table answers");
+    assert_eq!(
+        rows(&said),
+        [
+            "mariadb MariaDB 3306",
+            "mysql MySQL 3306",
+            "postgres PostgreSQL 5432"
+        ]
+    );
+
+    // 6. **A second run applies nothing**, which is what makes Setup safe to run again.
+    let again = schema::migrate(server, own, password).expect("a second run is ordinary");
+    assert_eq!(again.from, 4);
+    assert_eq!(again.to, 4);
+    assert!(again.ran.is_empty(), "it ran {:?} a second time", again.ran);
+    assert!(!again.changed_anything());
+
+    let fresh_shape = shape_of(server, own, password);
+
+    // 7. **A database a release older.** This release is the only one that exists, so one is
+    //    built: the same runner through the first three migrations, which is exactly what a
+    //    machine that had them and not the fourth looks like.
+    let older = own::Own {
+        database: "sloop_database_older".to_owned(),
+        role: own.role.clone(),
+    };
+    make::run_sql(
+        server,
+        Some(superuser),
+        &format!(
+            "CREATE DATABASE \"{}\" OWNER \"{}\";",
+            older.database, older.role
+        ),
+    )
+    .expect("a second database can be made on sloop's own cluster");
+
+    let behind = schema::migrate_through(server, &older, password, &schema::MIGRATIONS[..3])
+        .expect("three of four migrations apply");
+    assert_eq!(behind.from, 0);
+    assert_eq!(behind.to, 3);
+    assert_eq!(behind.ran, ["ledger", "registry", "history"]);
+
+    // It really is a release behind: the fourth migration's tables are not there yet.
+    let said = make::ask(
+        server,
+        &older.as_who(),
+        Some(password),
+        "SELECT count(*) FROM information_schema.tables
+          WHERE table_schema = 'public' AND table_name = 'bandwidth_day';",
+    )
+    .expect("the older database answers");
+    assert_eq!(said.trim(), "0");
+
+    // 8. And the real `migrate` carries it forward — the one it is missing, not all four.
+    let caught_up = schema::migrate(server, &older, password).expect("it migrates forwards");
+    assert_eq!(caught_up.from, 3);
+    assert_eq!(caught_up.to, 4);
+    assert_eq!(caught_up.ran, ["service"]);
+
+    // 9. **Ending indistinguishable from one migrated from nothing.** Not "both work" —
+    //    identical, table for table and column for column.
+    assert_eq!(
+        shape_of(server, &older, password),
+        fresh_shape,
+        "a database brought forward is not the same shape as one built from scratch"
+    );
+
+    // 10. A migration edited after it shipped is refused by name, rather than being run again
+    //     over a schema that already has it.
+    make::script(
+        server,
+        &older.as_who(),
+        Some(password),
+        &format!(
+            "UPDATE schema_migration SET checksum = '{}' WHERE version = 2;",
+            "0".repeat(64)
+        ),
+    )
+    .expect("the ledger can be written to");
+
+    let refused = schema::migrate(server, &older, password)
+        .expect_err("a migration that has changed since it was applied is not run over");
+    assert_eq!(refused.exit().code(), 1);
+    assert!(
+        refused
+            .message()
+            .contains("migration 2 (registry) has changed"),
+        "{}",
+        refused.message()
+    );
+
+    // 11. And a database written by a newer sloop is never migrated by an older one.
+    make::script(
+        server,
+        &older.as_who(),
+        Some(password),
+        &format!(
+            "UPDATE schema_migration SET checksum = '{}' WHERE version = 2;
+             INSERT INTO schema_migration (version, name, checksum, applied_by)
+                  VALUES (99, 'from the future', '{}', '9.9.9');",
+            schema::MIGRATIONS[1].checksum(),
+            "1".repeat(64)
+        ),
+    )
+    .expect("the ledger can be written to");
+
+    let refused = schema::migrate(server, &older, password)
+        .expect_err("an older sloop never migrates a newer schema");
+    assert_eq!(refused.exit().code(), 2);
+    assert!(
+        refused.message().contains("schema version 99"),
+        "{}",
+        refused.message()
+    );
 }
