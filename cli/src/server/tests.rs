@@ -220,3 +220,99 @@ fn everything_sloop_installs_is_under_the_global_store() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// R19c2 — the record's half
+// ---------------------------------------------------------------------------------------
+
+/// Setup is re-runnable, and re-running it must not forget which database sloop's state is
+/// in. `write` is what a second Setup calls, and it used to overwrite the whole file.
+#[test]
+fn writing_the_server_again_keeps_the_database_it_already_knew() {
+    let scratch = Scratch::new("keeps-database");
+    let global = scratch.path();
+    if !this_machine_can_keep_a_secret(global) {
+        return;
+    }
+
+    let server = a_server();
+    let password = Secret::new("aPasswordNobodyShouldEverSee".to_owned());
+    record::write(global, &server, &password).expect("it can keep a secret");
+
+    let own = super::own::Own::sloops();
+    record::remember_database(global, &server, &own, &password).expect("it can keep a secret");
+    assert!(
+        record::database_route(global)
+            .expect("it reads back")
+            .is_some()
+    );
+
+    // Setup, run again.
+    record::write(global, &server, &password).expect("it can keep a secret");
+
+    assert!(
+        record::database_route(global)
+            .expect("it reads back")
+            .is_some(),
+        "re-running Setup forgot where sloop's state lives"
+    );
+}
+
+/// A machine that has a server but no database yet — every machine between `R19c1` and the
+/// first `R19c2` run, and every one where Setup stopped in between.
+#[test]
+fn a_record_without_a_database_section_is_not_an_error() {
+    let scratch = Scratch::new("no-database");
+    let global = scratch.path();
+    if !this_machine_can_keep_a_secret(global) {
+        return;
+    }
+
+    record::write(global, &a_server(), &Secret::new("whatever".to_owned()))
+        .expect("it can keep a secret");
+
+    assert_eq!(record::database_route(global).expect("it reads back"), None);
+}
+
+/// The names are the owner's, spelled once. A test rather than a comment because `R19c3`'s
+/// migrations and `R19c4`'s registry will both name them, and a typo in one of those is a
+/// second database nobody asked for.
+#[test]
+fn sloops_own_database_and_role_are_named_what_the_owner_asked_for() {
+    assert_eq!(super::own::DATABASE, "sloop_database");
+    assert_eq!(super::own::ROLE, "sloop_db_admin");
+
+    let own = super::own::Own::sloops();
+    let server = a_server();
+    assert_eq!(
+        own.url(&server),
+        "postgres://sloop_db_admin@127.0.0.1:5433/sloop_database"
+    );
+    // The key names the connection, so two clusters on one machine keep two passwords.
+    assert!(own.credential_key(&server).contains("5433"));
+}
+
+/// Rule 3, on the second password as well as the first.
+#[test]
+fn the_database_section_holds_a_route_and_never_a_password() {
+    let scratch = Scratch::new("database-route");
+    let global = scratch.path();
+    if !this_machine_can_keep_a_secret(global) {
+        return;
+    }
+
+    let server = a_server();
+    let secret = Secret::new("theRolePasswordNobodyShouldSee".to_owned());
+    record::write(global, &server, &Secret::new("superuser".to_owned()))
+        .expect("it can keep a secret");
+    record::remember_database(global, &server, &super::own::Own::sloops(), &secret)
+        .expect("it can keep a secret");
+
+    let written = std::fs::read_to_string(global.join(record::FILE)).expect("it was written");
+    assert!(
+        !written.contains("theRolePasswordNobodyShouldSee"),
+        "the role's password reached the file:\n{written}"
+    );
+    assert!(written.contains("sloop_database"), "{written}");
+    assert!(written.contains("sloop_db_admin"), "{written}");
+}

@@ -294,27 +294,13 @@ fn start(server: &Server) -> Outcome<()> {
 /// **Not `-c`.** An argument is in `ps` and in a shell's history, and rule 3 names `ps`
 /// output specifically. Standard input is in neither.
 fn set_superuser_password(server: &Server, password: &Secret) -> Outcome<()> {
-    // The generated alphabet has no quote in it, and this is what makes that a guarantee
-    // rather than an assumption: a password that could close the literal is refused before
-    // it is ever sent, so there is no SQL here somebody could steer.
-    if !password
-        .expose()
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric())
-    {
-        return Err(Failure::new(
-            Exit::Failure,
-            "the generated password is not the alphabet sloop generates",
-        ));
-    }
-
     let statement = format!(
-        "ALTER ROLE \"{}\" WITH PASSWORD '{}';",
+        "ALTER ROLE \"{}\" WITH PASSWORD {};",
         server.superuser,
-        password.expose()
+        literal(password)?
     );
 
-    let (status, said) = psql(server, None, &statement, &[])?;
+    let (status, said) = psql(server, &As::superuser(server), None, &statement, &[])?;
     if !status {
         return Err(Failure::new(
             Exit::Connect,
@@ -383,6 +369,7 @@ fn require_a_password_from_now_on(server: &Server, data: &Path) -> Outcome<()> {
 pub fn server_version(server: &Server, password: &Secret) -> Outcome<Option<Version>> {
     let (ok, said) = psql(
         server,
+        &As::superuser(server),
         Some(password),
         "SHOW server_version;",
         &["--tuples-only", "--no-align"],
@@ -412,6 +399,7 @@ pub fn server_version(server: &Server, password: &Secret) -> Outcome<Option<Vers
 /// from a server that is not listening.
 fn psql(
     server: &Server,
+    as_who: &As<'_>,
     password: Option<&Secret>,
     sql: &str,
     extra: &[&str],
@@ -420,8 +408,8 @@ fn psql(
     command
         .args(["-h", LOOPBACK])
         .args(["-p", &server.port.to_string()])
-        .args(["-U", &server.superuser])
-        .args(["-d", "postgres"])
+        .args(["-U", as_who.role])
+        .args(["-d", as_who.database])
         .args(["-v", "ON_ERROR_STOP=1"])
         .arg("--no-psqlrc")
         // **Rule 4, and it is not theoretical.** Asked for a password it has not been given,
@@ -486,4 +474,124 @@ fn generated() -> Outcome<Secret> {
 fn ran_nothing(program: &str, error: &str) -> Failure {
     Failure::new(Exit::Usage, format!("could not run {program}: {error}"))
         .hint("PostgreSQL 18's programs have to be runnable by the account sloop is running as")
+}
+
+/// Who a connection is made as, and to what.
+///
+/// **Its own type because the pair travels together and getting them crossed is silent.**
+/// Connecting as the owning role to `postgres`, or as the superuser to `sloop_database`,
+/// both work and both do the wrong thing.
+pub struct As<'a> {
+    /// The role to connect as.
+    pub role: &'a str,
+    /// The database to connect to.
+    pub database: &'a str,
+}
+
+impl<'a> As<'a> {
+    /// The superuser, on the database every server has.
+    ///
+    /// `postgres` rather than sloop's own: this is the connection used *before* sloop's own
+    /// database exists, and the one used to make it.
+    #[must_use]
+    pub fn superuser(server: &'a Server) -> Self {
+        Self {
+            role: &server.superuser,
+            database: "postgres",
+        }
+    }
+}
+
+/// A password as an SQL string literal, or a refusal.
+///
+/// **The alphabet guard, in the one place every statement carrying a password goes through.**
+/// The generated alphabet has no quote in it, and this is what makes that a guarantee rather
+/// than an assumption: a password that could close the literal is refused before it is ever
+/// sent, so there is no statement here that anybody could steer.
+pub fn literal(password: &Secret) -> Outcome<String> {
+    if password.expose().is_empty()
+        || !password
+            .expose()
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric())
+    {
+        return Err(Failure::new(
+            Exit::Failure,
+            "the generated password is not the alphabet sloop generates",
+        ));
+    }
+
+    Ok(format!("'{}'", password.expose()))
+}
+
+/// Run one statement as the superuser, and fail with what the server said.
+pub fn run_sql(server: &Server, password: Option<&Secret>, sql: &str) -> Outcome<()> {
+    let (ok, said) = psql(server, &As::superuser(server), password, sql, &[])?;
+    if ok {
+        return Ok(());
+    }
+
+    Err(Failure::new(
+        Exit::Connect,
+        format!("{} refused a statement", server.url("postgres")),
+    )
+    .hint(said))
+}
+
+/// Ask the server one question and hand back what it answered, with nothing around it.
+pub fn query(server: &Server, password: Option<&Secret>, sql: &str) -> Outcome<String> {
+    let (ok, said) = psql(
+        server,
+        &As::superuser(server),
+        password,
+        sql,
+        &["--tuples-only", "--no-align"],
+    )?;
+
+    if ok {
+        return Ok(said);
+    }
+
+    Err(Failure::new(
+        Exit::Connect,
+        format!("{} would not answer", server.url("postgres")),
+    )
+    .hint(said))
+}
+
+/// Does this role and password open this database?
+///
+/// **A wrong password is an answer, not an error.** It is what says a role has to be given a
+/// new one. A server that will not answer at all is a different thing and comes back as a
+/// failure, because acting on "the password is wrong" when the truth is "nothing is
+/// listening" would reset a password for no reason.
+pub fn connects_as(
+    server: &Server,
+    role: &str,
+    database: &str,
+    password: &Secret,
+) -> Outcome<bool> {
+    let (ok, said) = psql(
+        server,
+        &As { role, database },
+        Some(password),
+        "SELECT 1;",
+        &["--tuples-only", "--no-align"],
+    )?;
+
+    if ok {
+        return Ok(true);
+    }
+    if said.contains("password authentication failed")
+        || said.contains("no password supplied")
+        || said.contains("does not exist")
+    {
+        return Ok(false);
+    }
+
+    Err(Failure::new(
+        Exit::Connect,
+        format!("{} would not answer", server.url(database)),
+    )
+    .hint(said))
 }

@@ -23,7 +23,10 @@ use super::{Origin, Ready, Server, make};
 pub const FILE: &str = "server.toml";
 
 /// Bumped only when the shape below changes in a way an older sloop could misread.
-const VERSION: u32 = 1;
+///
+/// `2` added the `[database]` section. A `1` written by an older sloop still reads, because
+/// the section is optional and gets filled in the first time `R19c2` runs.
+const VERSION: u32 = 2;
 
 /// The account name the superuser password is filed under.
 ///
@@ -56,11 +59,105 @@ struct RawFile {
     /// `this machine's` or `sloop's`, so a later run knows whether the cluster is one it may
     /// start.
     origin: String,
+    /// sloop's own database on that server, once there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    database: Option<RawDatabase>,
+}
+
+/// Where sloop's own state lives on that server, and how to open it.
+///
+/// **The connection details, and nothing else.** They cannot live inside the database they
+/// open, which is the whole of the exception to *"no JSON, no local text file"* — and the
+/// password field is a route, so there is no spelling of a password this section accepts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDatabase {
+    name: String,
+    role: String,
+    password: String,
 }
 
 #[must_use]
 fn path(global: &Path) -> PathBuf {
     global.join(FILE)
+}
+
+/// The file as it stands, parsed — or `None` on a machine that has not been set up.
+///
+/// One reader, because there are three callers now and a second copy of "parse it and check
+/// the version" is a second chance for one of them to skip the check.
+fn read(global: &Path) -> Outcome<Option<RawFile>> {
+    let file = path(global);
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        return Ok(None);
+    };
+
+    let raw: RawFile = toml::from_str(&text).map_err(|error| {
+        Failure::usage(format!("{}: {error}", file.display())).hint(
+            "it is TOML, and sloop wrote it — if it has been edited by hand, that is where to look",
+        )
+    })?;
+
+    if raw.version > VERSION {
+        return Err(Failure::new(
+            Exit::Usage,
+            format!("{} was written by a newer sloop", file.display()),
+        )
+        .hint("upgrade sloop, or delete that file to set up again"));
+    }
+
+    Ok(Some(raw))
+}
+
+/// The route sloop's own database's password takes, if a previous run settled one.
+pub fn database_route(global: &Path) -> Outcome<Option<Route>> {
+    match read(global)?.and_then(|raw| raw.database) {
+        Some(database) => Ok(Some(Route::parse(&database.password)?)),
+        None => Ok(None),
+    }
+}
+
+/// Write down sloop's own database, and put the owning role's password where this machine
+/// keeps secrets.
+pub fn remember_database(
+    global: &Path,
+    server: &Server,
+    own: &super::own::Own,
+    password: &Secret,
+) -> Outcome<()> {
+    let route = crate::secret::keep_somewhere(
+        own.credential_key(server),
+        password,
+        &global.join(crate::registry::file::SEALED_FILE),
+    )?;
+
+    let mut raw = read(global)?.ok_or_else(|| {
+        Failure::usage(format!(
+            "{} is not there to write into",
+            path(global).display()
+        ))
+    })?;
+
+    raw.version = VERSION;
+    raw.database = Some(RawDatabase {
+        name: own.database.clone(),
+        role: own.role.clone(),
+        password: route.as_field(),
+    });
+
+    save(global, &raw)
+}
+
+/// Write the file, once, from one place.
+fn save(global: &Path, raw: &RawFile) -> Outcome<()> {
+    let text = toml::to_string_pretty(raw)
+        .map_err(|error| Failure::usage(format!("could not write {FILE}: {error}")))?;
+
+    std::fs::create_dir_all(global).map_err(|error| {
+        Failure::usage(format!("could not create {}: {error}", global.display()))
+    })?;
+    std::fs::write(path(global), text)
+        .map_err(|error| Failure::usage(format!("could not write {FILE}: {error}")))
 }
 
 /// Write down what Setup settled, and put the password where this machine keeps secrets.
@@ -83,18 +180,12 @@ pub fn write(global: &Path, server: &Server, password: &Secret) -> Outcome<()> {
             Origin::Sloops => "sloop",
         }
         .to_owned(),
+        // Kept, if a previous run had settled it. Writing the server record again — which is
+        // what re-running Setup does — must not forget which database sloop's state is in.
+        database: read(global).ok().flatten().and_then(|raw| raw.database),
     };
 
-    let text = toml::to_string_pretty(&raw)
-        .map_err(|error| Failure::usage(format!("could not write {FILE}: {error}")))?;
-
-    std::fs::create_dir_all(global).map_err(|error| {
-        Failure::usage(format!("could not create {}: {error}", global.display()))
-    })?;
-    std::fs::write(path(global), text)
-        .map_err(|error| Failure::usage(format!("could not write {FILE}: {error}")))?;
-
-    Ok(())
+    save(global, &raw)
 }
 
 /// The server a previous run settled on, started if it had stopped.
@@ -103,24 +194,10 @@ pub fn write(global: &Path, server: &Server, password: &Secret) -> Outcome<()> {
 /// a directory which is no longer there is `None` too, with a line saying so: an uninstalled
 /// PostgreSQL is a reason to set up again, not a reason to fail.
 pub fn reopen(global: &Path) -> Outcome<Option<Ready>> {
-    let file = path(global);
-    let Ok(text) = std::fs::read_to_string(&file) else {
+    let Some(raw) = read(global)? else {
         return Ok(None);
     };
-
-    let raw: RawFile = toml::from_str(&text).map_err(|error| {
-        Failure::usage(format!("{}: {error}", file.display())).hint(
-            "it is TOML, and sloop wrote it — if it has been edited by hand, that is where to look",
-        )
-    })?;
-
-    if raw.version > VERSION {
-        return Err(Failure::new(
-            Exit::Usage,
-            format!("{} was written by a newer sloop", file.display()),
-        )
-        .hint("upgrade sloop, or delete that file to set up again"));
-    }
+    let file = path(global);
 
     let server = Server {
         bin: PathBuf::from(&raw.bin),

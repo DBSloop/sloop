@@ -18,13 +18,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use super::tests::Scratch;
-use super::{Origin, make, record};
+use super::{Origin, make, own, record};
 
 /// A port per test, and none of them 5433: a developer running these should never collide
 /// with the cluster their own `sloop setup` made, and cargo runs these three at once.
 const MADE_PORT: u16 = 55987;
 const AUTH_PORT: u16 = 55988;
 const AGAIN_PORT: u16 = 55989;
+const OWN_PORT: u16 = 55990;
 
 /// The variable that says which PostgreSQL to build the cluster out of, shared with the
 /// engine's own cluster tests so one machine sets one variable.
@@ -306,5 +307,113 @@ fn a_cluster_that_is_already_there_is_never_initialised_over() {
         before
     );
 
+    let _ = std::fs::remove_dir_all(scratch.path());
+}
+
+// ---------------------------------------------------------------------------------------
+// R19c2 — the database, the role, and where its password lives
+// ---------------------------------------------------------------------------------------
+
+/// **The whole `Done when`: sloop reconnects on a second run with nothing typed, and neither
+/// password is in any file in plaintext.**
+///
+/// One test, because the second half is only meaningful against the state the first half
+/// left — and a second `initdb` of the same cluster would be testing a different machine.
+#[test]
+fn sloops_own_database_is_made_once_and_reopened_with_nothing_typed() {
+    let scratch = Scratch::new("own");
+    let global = scratch.path().to_path_buf();
+    let data = super::data_dir(&global);
+
+    if !super::tests::this_machine_can_keep_a_secret(&global) {
+        return;
+    }
+
+    let Some(ready) = cluster(&global, OWN_PORT) else {
+        return;
+    };
+    record::write(&global, &ready.server, &ready.password).expect("it can keep a secret");
+
+    // 1. The first run makes the role and the database, and the role's password opens it.
+    let (first, password) = match own::ensure(&global, &ready.server, &ready.password) {
+        Ok(made) => made,
+        Err(why) => {
+            stop(&ready.server.bin, &data);
+            panic!("sloop's own database could not be made: {}", why.message());
+        }
+    };
+
+    assert_eq!(first.database, own::DATABASE);
+    assert_eq!(first.role, own::ROLE);
+    assert_eq!(password.expose().chars().count(), 28);
+    assert!(password.expose().chars().all(|c| c.is_ascii_alphanumeric()));
+
+    // 2. It is a database, owned by that role, reached as that role — not as the superuser.
+    let opened = own::opens(&ready.server, &first, &password);
+    assert!(
+        opened.as_ref().is_ok_and(|yes| *yes),
+        "the owning role could not open it: {opened:?}"
+    );
+
+    // 3. **Neither password is in any file in plaintext.** Every file sloop wrote, checked
+    //    against both — the superuser's and the role's.
+    let secrets = [
+        ready.password.expose().to_owned(),
+        password.expose().to_owned(),
+    ];
+    for file in [
+        global.join(record::FILE),
+        global.join(crate::registry::file::SEALED_FILE),
+        data.join("pg_hba.conf"),
+        data.join("postgresql.conf"),
+        data.join("server.log"),
+    ] {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        for secret in &secrets {
+            assert!(
+                !text.contains(secret.as_str()),
+                "a password is in {}",
+                file.display()
+            );
+        }
+    }
+
+    // And what the record *does* hold for it is a route, which is the type that cannot be a
+    // password — `Route::parse` refuses anything that is not one of the four.
+    let route = record::database_route(&global)
+        .expect("the record reads back")
+        .expect("a route was written");
+    assert!(matches!(
+        route,
+        crate::secret::Route::Keyring | crate::secret::Route::EncryptedFile
+    ));
+
+    // 4. **A second run, with nothing typed.** Same role, same database, same password —
+    //    read back from wherever this machine keeps secrets rather than made again.
+    let (again, same) =
+        own::ensure(&global, &ready.server, &ready.password).expect("a second run is ordinary");
+
+    assert_eq!(again, first);
+    assert_eq!(
+        same.expose(),
+        password.expose(),
+        "the second run reset a password it should have read back"
+    );
+
+    // 5. And nothing was made twice: one database of that name, one role.
+    let databases = make::query(
+        &ready.server,
+        Some(&ready.password),
+        &format!(
+            "SELECT count(*) FROM pg_database WHERE datname = '{}';",
+            own::DATABASE
+        ),
+    )
+    .expect("the server answers");
+    assert_eq!(databases.trim(), "1");
+
+    stop(&ready.server.bin, &data);
     let _ = std::fs::remove_dir_all(scratch.path());
 }

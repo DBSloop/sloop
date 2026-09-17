@@ -29,6 +29,7 @@
 
 pub mod find;
 pub mod make;
+pub mod own;
 pub mod record;
 
 #[cfg(test)]
@@ -147,7 +148,7 @@ impl Server {
     }
 }
 
-/// A server, and the superuser password that opens it.
+/// A server, sloop's own database on it, and the two passwords that open them.
 ///
 /// The two travel together because neither is any use alone, and they are separate from
 /// [`Server`] so that the half which is written to a file cannot accidentally be the half
@@ -164,6 +165,29 @@ pub struct Ready {
     /// True when this run is what made it. The caller says so; `R19c5`'s screen will say
     /// more about it than a one-line report does.
     pub made_now: bool,
+}
+
+/// Everything Setup settled: where sloop's state lives, and how to open it.
+///
+/// **The two halves are separate because one of them is written to a file.** [`Server`] and
+/// [`own::Own`] are paths and names and can be printed; the passwords beside them cannot, and
+/// keeping them in a different type is what makes writing the wrong one an error rather than
+/// an oversight.
+#[derive(Debug)]
+pub struct Settled {
+    /// The server.
+    pub ready: Ready,
+    /// sloop's own database on it.
+    pub own: own::Own,
+    /// The password of the role that owns it.
+    ///
+    /// **Nothing reads it yet, and that is the seam.** `R19c3` opens this database to create
+    /// its tables, and it opens it as the owning role rather than as the superuser — so the
+    /// password leaves Setup from here rather than being fetched again. It is allowed to sit
+    /// unread until then for the same reason `lock::Held::path` is: the value belongs to the
+    /// type, and the alternative is a caller that has to go and find it.
+    #[allow(dead_code)]
+    pub password: Secret,
 }
 
 /// Find a PostgreSQL 18 sloop can use, making one if the machine has none.
@@ -192,6 +216,22 @@ pub fn ensure(global: &Path, asking: &make::Asking<'_>) -> Outcome<Ready> {
     Ok(made)
 }
 
+/// Find a PostgreSQL 18, and make sure sloop's own database is on it.
+///
+/// **The whole of Setup as it stands**, and re-runnable: a second call finds the server, the
+/// role and the database all already there, reads both passwords back from wherever this
+/// machine keeps secrets, proves the connection and returns — with nothing typed.
+pub fn set_up(global: &Path, asking: &make::Asking<'_>) -> Outcome<Settled> {
+    let ready = ensure(global, asking)?;
+    let (own, password) = own::ensure(global, &ready.server, &ready.password)?;
+
+    Ok(Settled {
+        ready,
+        own,
+        password,
+    })
+}
+
 /// Say what `ensure` settled, in the two lines a report wants.
 pub fn announce(ready: &Ready) {
     crate::say!(
@@ -214,4 +254,20 @@ pub fn announce(ready: &Ready) {
             style::dim(&format!("cluster at {}", data.display()))
         );
     }
+}
+
+/// Say where sloop's own state lives, once Setup has settled it.
+pub fn announce_own(settled: &Settled) {
+    crate::say!(
+        "{} {}",
+        style::heading("State:"),
+        style::paint(&settled.own.url(&settled.ready.server))
+    );
+    crate::say!(
+        "  {}",
+        style::dim(&format!(
+            "owned by {}, whose password is kept where this machine keeps secrets",
+            settled.own.role
+        ))
+    );
 }

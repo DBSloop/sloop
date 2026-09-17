@@ -105,14 +105,15 @@ fn run(cli: &Cli) -> Outcome<Exit> {
             superuser_password_stdin,
         }) => {
             let global = registry::adopt::global(&locations)?;
-            let ready = server::ensure(
+            let settled = server::set_up(
                 &global,
                 &server::make::Asking {
                     command: superuser_password_command.as_deref(),
                     stdin: *superuser_password_stdin,
                 },
             )?;
-            server::announce(&ready);
+            server::announce(&settled.ready);
+            server::announce_own(&settled);
             Ok(Exit::Success)
         }
 
