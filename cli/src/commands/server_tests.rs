@@ -141,3 +141,57 @@ fn without_a_terminal_a_missing_answer_names_the_flags_instead_of_asking() {
         "nothing should have been created on the way to refusing"
     );
 }
+
+/// **Every engine is on the screen, and the ones sloop does not speak say so.** This is
+/// `R19d`'s own line — *"the ones sloop does not yet speak, named as not yet supported"* —
+/// and the reason for it is that a menu which silently omits MongoDB reads as a tool that has
+/// never heard of it.
+#[test]
+fn the_engine_screen_lists_what_sloop_cannot_install_as_well_as_what_it_can() {
+    let rows = super::engine_rows();
+    assert_eq!(rows.len(), crate::tools::catalogue::ENGINES.len());
+
+    for listed in crate::tools::catalogue::ENGINES {
+        assert!(
+            rows.iter().any(|(_, line)| line.contains(listed.name)),
+            "{} is not on the screen",
+            listed.name
+        );
+    }
+
+    for (engine, line) in &rows {
+        if engine.is_none() {
+            assert!(
+                line.contains("not yet"),
+                "an unsupported row has to say so where somebody reads it: {line}"
+            );
+            assert!(
+                line.trim_start().starts_with("--"),
+                "an unsupported row must not carry a number anybody can type: {line}"
+            );
+        }
+    }
+}
+
+/// **The numbering counts only what can be chosen**, so nobody selects MongoDB by typing the
+/// position it happens to sit at.
+#[test]
+fn the_numbers_on_the_engine_screen_skip_the_rows_nobody_can_choose() {
+    let rows = super::engine_rows();
+
+    let numbered: Vec<&str> = rows
+        .iter()
+        .filter(|(engine, _)| engine.is_some())
+        .map(|(_, line)| line.split_whitespace().next().unwrap_or(""))
+        .collect();
+
+    assert_eq!(
+        numbered,
+        ["1.", "2.", "3."],
+        "three engines, numbered one to three whatever sits between them"
+    );
+
+    // And the engine behind each number is the one on that line.
+    let choosable: Vec<Engine> = rows.iter().filter_map(|(engine, _)| *engine).collect();
+    assert_eq!(choosable, Engine::ALL.to_vec());
+}

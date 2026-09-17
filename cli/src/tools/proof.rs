@@ -273,11 +273,12 @@ impl Keyring {
             .parent()
             .ok_or_else(|| Failure::usage("the archive is not in a directory"))?
             .to_path_buf();
-        let named = format!(
-            "sloop-keyring-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        );
+        // **Short, and that is a macOS constraint rather than a preference.** A unix socket
+        // path is capped at about 104 bytes there, and `gpg` puts its agent's socket inside
+        // its home directory — so a long name plus a long temporary directory is a keyring
+        // `gpg` cannot open. `server::make::no_unix_socket` documents the same cap for
+        // PostgreSQL, which is where this was learned the first time.
+        let named = format!("sloop-gpg-{}", std::process::id());
 
         let home = working_in.join(&named);
         let _ = std::fs::remove_dir_all(&home);
@@ -301,17 +302,42 @@ impl Keyring {
             std::fs::write(home.join(&file), key.armored)
                 .map_err(|error| Failure::usage(format!("could not write {file}: {error}")))?;
 
-            let said = keyring.run(gpg, &["--import", &format!("{}/{file}", keyring.named)])?;
-            if !said.ok {
+            keyring.run(gpg, &["--import", &format!("{}/{file}", keyring.named)])?;
+        }
+
+        // **What the keyring holds, not what `gpg` exited with.** On macOS the import prints
+        // `public key … imported` and *then* exits non-zero because it could not reach an
+        // agent it does not need — so a status check refuses a keyring that is perfectly
+        // correct. Asking what is in it is both more robust and a stronger check: the ring is
+        // proved to hold exactly the carried keys before any signature is checked against it.
+        let holding = keyring.fingerprints(gpg)?;
+        for key in keys {
+            if !holding.iter().any(|held| held == key.fingerprint) {
                 return Err(Failure::new(
                     Exit::Failure,
                     format!("the {} key this sloop carries would not import", key.named),
                 )
-                .hint(said.told));
+                .hint(format!(
+                    "gpg read {holding:?} out of the keyring, and {} is not among them",
+                    key.fingerprint
+                )));
             }
         }
 
         Ok(keyring)
+    }
+
+    /// Every fingerprint the keyring holds, as `gpg` reads them back.
+    fn fingerprints(&self, gpg: &Path) -> Outcome<Vec<String>> {
+        let said = self.run(gpg, &["--list-keys", "--with-colons"])?;
+
+        Ok(said
+            .told
+            .lines()
+            .filter_map(|line| line.strip_prefix("fpr:"))
+            .filter_map(|rest| rest.split(':').find(|field| !field.is_empty()))
+            .map(ToOwned::to_owned)
+            .collect())
     }
 
     /// Check a detached signature against it.
@@ -335,6 +361,11 @@ impl Keyring {
             .arg("--homedir")
             .arg(&self.named)
             .arg("--batch")
+            // **No agent.** Importing a public key and checking a detached signature need no
+            // secret key, so there is nothing for `gpg-agent` to do — and on macOS reaching
+            // for one is what breaks this, because the socket it would open lives inside the
+            // home directory and the path runs past the platform's cap.
+            .arg("--no-autostart")
             // No keyserver, no auto-retrieval, no network: the keys are the ones carried and
             // there is no path by which this reaches for another.
             .args(["--keyserver-options", "no-auto-key-retrieve"])

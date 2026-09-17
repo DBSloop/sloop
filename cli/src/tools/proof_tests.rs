@@ -253,12 +253,9 @@ fn every_carried_key_is_the_key_its_fingerprint_says_it_is() {
     };
 
     for key in crate::tools::catalogue::MYSQL_KEYS {
-        let workspace = std::env::temp_dir().join(format!(
-            "sloop-key-{}-{:?}-{}",
-            std::process::id(),
-            std::thread::current().id(),
-            &key.fingerprint[..8]
-        ));
+        // Short, for the reason `Keyring::beside` gives: on macOS the agent socket path is
+        // capped at about 104 bytes and it lives inside this directory.
+        let workspace = std::env::temp_dir().join(format!("sk-{}", &key.fingerprint[..8]));
         let _ = std::fs::remove_dir_all(&workspace);
         std::fs::create_dir_all(&workspace).expect("a temporary directory");
 
@@ -267,20 +264,12 @@ fn every_carried_key_is_the_key_its_fingerprint_says_it_is() {
         let keyring = Keyring::beside(&workspace.join("archive.zip"), &gpg, &[*key])
             .expect("the carried key should import");
 
-        let said = keyring
-            .run(&gpg, &["--list-keys", "--with-colons"])
+        let fingerprints = keyring
+            .fingerprints(&gpg)
             .expect("gpg should list what it just imported");
-        assert!(said.ok, "{}", said.told);
-
-        let fingerprints: Vec<&str> = said
-            .told
-            .lines()
-            .filter_map(|line| line.strip_prefix("fpr:"))
-            .filter_map(|rest| rest.split(':').find(|field| !field.is_empty()))
-            .collect();
 
         assert!(
-            fingerprints.first() == Some(&key.fingerprint),
+            fingerprints.first().map(String::as_str) == Some(key.fingerprint),
             "{} says its fingerprint is {} and gpg read {:?}",
             key.named,
             key.fingerprint,

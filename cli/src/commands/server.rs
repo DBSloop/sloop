@@ -259,34 +259,56 @@ fn named_version(choices: &[Choice], engine: Engine, wanted: &str) -> Outcome<Ch
     )))
 }
 
+/// The engine screen, as rows: what is drawn, and which of them can be chosen.
+///
+/// **Its own function so the thing `R19d` actually asked for is testable.** *"The ones sloop
+/// does not yet speak, named as not yet supported"* is a property of what is on the screen,
+/// and a screen that only exists inside a `say!` can be checked by looking at it once and
+/// never again.
+///
+/// Every listed engine gets a row. A supported one gets the next number; an unsupported one
+/// gets `--`, which is not a number anybody can type — so the numbering counts only what can
+/// be chosen and nobody can pick MongoDB by typing `4`.
+fn engine_rows() -> Vec<(Option<Engine>, String)> {
+    let mut chosen = 0;
+
+    catalogue::ENGINES
+        .iter()
+        .map(|listed| {
+            let marker = if listed.supported() {
+                chosen += 1;
+                format!("{chosen}.")
+            } else {
+                "--".to_owned()
+            };
+            (
+                listed.engine,
+                format!("{marker:>3}  {}  {}", listed.name, listed.blurb),
+            )
+        })
+        .collect()
+}
+
 /// Which engine, asked as a numbered list.
 fn ask_which_engine() -> Outcome<Engine> {
     crate::say!("{}", style::heading("Which engine?"));
 
-    let mut rows = Vec::new();
-    for listed in catalogue::ENGINES {
-        if let Some(engine) = listed.engine {
-            rows.push(engine);
-            crate::say!(
-                "  {}  {}  {}",
-                style::paint(&format!("{}.", rows.len())),
-                listed.name,
-                style::dim(listed.blurb)
-            );
-        } else {
-            // **On the screen and not choosable**, which is exactly what `R19d` asked for:
-            // a menu that omits MongoDB reads as a tool that has never heard of it.
-            crate::say!(
-                "  {}  {}  {}",
-                style::dim("--"),
-                style::dim(listed.name),
-                style::dim(listed.blurb)
-            );
-        }
+    let rows = engine_rows();
+    for (engine, line) in &rows {
+        // A row nobody can choose is drawn quietly, the way a heading is on the menu screen.
+        crate::say!(
+            "  {}",
+            if engine.is_some() {
+                line.clone()
+            } else {
+                style::dim(line)
+            }
+        );
     }
 
-    let picked = ask_a_number("Engine", rows.len())?;
-    Ok(rows[picked])
+    let choosable: Vec<Engine> = rows.iter().filter_map(|(engine, _)| *engine).collect();
+    let picked = ask_a_number("Engine", choosable.len())?;
+    Ok(choosable[picked])
 }
 
 /// How many versions a screen shows before it becomes a wall of numbers nobody reads.
