@@ -13,7 +13,11 @@ mod support;
 use support::Sandbox;
 
 /// Every command that will do something one day and does not yet.
-const STUBS: &[&[&str]] = &[&["uninstall"]];
+///
+/// **Empty since `R19c6`**, which gave `uninstall` a body — it was the last one. The list
+/// stays rather than going, because the next command to be sketched before it is built goes
+/// in here and the test below is what stops it shipping as a silent no-op.
+const STUBS: &[&[&str]] = &[];
 
 /// Commands with a body. They move here one task at a time.
 ///
@@ -23,6 +27,8 @@ const STUBS: &[&[&str]] = &[&["uninstall"]];
 const IMPLEMENTED: &[&[&str]] = &[
     &["init"],
     &["doctor"],
+    &["reset"],
+    &["uninstall"],
     &["db", "add"],
     &["db", "create"],
     &["db", "list"],

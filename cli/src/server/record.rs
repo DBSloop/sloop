@@ -109,6 +109,39 @@ fn read(global: &Path) -> Outcome<Option<RawFile>> {
     Ok(Some(raw))
 }
 
+/// The server a previous run settled on, **without starting it**.
+///
+/// [`reopen`] starts a stopped cluster, which is right for every command that is about to use
+/// one and wrong for the one command that is about to delete it. `R19c6` needs to know what is
+/// there before it decides what to destroy.
+pub fn read_server(global: &Path) -> Outcome<Option<Server>> {
+    Ok(read(global)?.as_ref().map(server_from))
+}
+
+/// The superuser password this machine keeps for that server, if it can still be read.
+///
+/// `None` rather than a failure when there is no record: a machine with nothing to open has
+/// nothing to fail about. A password that *is* recorded and cannot be fetched is an error,
+/// because that is a machine whose secret store has moved out from under it.
+pub fn superuser_password(global: &Path, server: &Server) -> Outcome<Option<Secret>> {
+    let Some(raw) = read(global)? else {
+        return Ok(None);
+    };
+
+    let route = Route::parse(&raw.password)?;
+    let resolved = crate::secret::resolve(
+        &route,
+        &crate::secret::Lookup {
+            key: &credential_key(server),
+            vault: &crate::secret::sealed::Vault::File(
+                &global.join(crate::registry::file::SEALED_FILE),
+            ),
+        },
+    )?;
+
+    Ok(Some(resolved.secret))
+}
+
 /// The route sloop's own database's password takes, if a previous run settled one.
 pub fn database_route(global: &Path) -> Outcome<Option<Route>> {
     match read(global)?.and_then(|raw| raw.database) {
@@ -298,21 +331,5 @@ fn server_from(raw: &RawFile) -> Server {
         } else {
             Origin::Machines
         },
-    }
-}
-
-/// Forget the record, for a Setup that is being run again from nothing.
-///
-/// The cluster itself is left alone — deleting somebody's database because a file was wrong
-/// is exactly what rule 5 exists to prevent.
-#[allow(dead_code)]
-pub fn forget(global: &Path) -> Outcome<()> {
-    match std::fs::remove_file(path(global)) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(Failure::usage(format!(
-            "could not remove {}: {error}",
-            path(global).display()
-        ))),
     }
 }

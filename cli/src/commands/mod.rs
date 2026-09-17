@@ -8,6 +8,7 @@ pub mod init;
 pub mod key;
 pub mod menu;
 pub mod mirror;
+pub mod reset;
 pub mod restore;
 pub mod sync;
 pub mod tables;

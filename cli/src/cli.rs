@@ -281,7 +281,18 @@ pub enum Command {
         superuser_password_stdin: bool,
     },
 
+    /// Put this machine back to the moment sloop was installed.
+    ///
+    /// Removes sloop's own database and everything it knows. A PostgreSQL that sloop
+    /// installed goes with it; one that was already here keeps every other database on it
+    /// and loses only sloop's. `sloop setup` is needed again afterwards.
+    ///
+    /// **Backups are never deleted**, by this or by `uninstall`.
+    Reset,
+
     /// Remove sloop from this machine.
+    ///
+    /// Everything `reset` does, and then sloop itself.
     Uninstall,
 }
 
@@ -834,6 +845,7 @@ impl Command {
             Self::Sync { .. } => "sync",
             Self::Key { command } => command.path(),
             Self::Setup { .. } => "setup",
+            Self::Reset => "reset",
             Self::Uninstall => "uninstall",
         }
     }
@@ -1065,6 +1077,7 @@ mod tests {
                 "sync",
                 "key",
                 "setup",
+                "reset",
                 "uninstall",
             ]
         );

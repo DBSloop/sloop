@@ -117,6 +117,15 @@ fn run(cli: &Cli) -> Outcome<Exit> {
             Ok(Exit::Success)
         }
 
+        // **Before `uses_registry`, because reset is what removes the registry.** Opening
+        // it first would fail with "run `sloop setup`" on the way into the command whose
+        // whole job is to undo Setup.
+        Some(command @ (Command::Reset | Command::Uninstall)) => commands::reset::run(
+            &locations,
+            Consent::given(cli.yes, cli.force, cli.confirm.as_deref()),
+            matches!(command, Command::Uninstall),
+        ),
+
         Some(command) if command.uses_registry() => with_registry(cli, &locations, command),
 
         Some(command) => Ok(unimplemented(&format!("'{}'", command.path()), None)),
