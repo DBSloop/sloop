@@ -19,6 +19,7 @@ mod registry;
 mod report;
 mod secret;
 mod server;
+mod ssh;
 mod style;
 mod tools;
 mod ui;
@@ -39,6 +40,15 @@ use crate::registry::locations::Locations;
 use crate::registry::{Disk, Registries, projects, resolve};
 
 fn main() -> ExitCode {
+    // **Before `clap`, because this process is not sloop.** `ssh` runs sloop as its own
+    // askpass helper, handing the prompt as arguments that are not sloop's arguments at all —
+    // so parsing them would be a usage error about a flag nobody typed. An environment
+    // variable rather than a hidden subcommand keeps the agreed top-level command list the
+    // agreed command list. See `ssh::askpass`.
+    if ssh::askpass::is_the_helper() {
+        return ssh::askpass::respond().into();
+    }
+
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
