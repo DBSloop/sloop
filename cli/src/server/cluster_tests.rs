@@ -34,12 +34,27 @@ fn exe(name: &str) -> String {
     format!("{name}{}", if cfg!(windows) { ".exe" } else { "" })
 }
 
+/// Why these tests have a server to build out of at all.
+///
+/// The distinction decides what a failure means, and it is `engine::cluster_tests`' rule
+/// rather than a new one: asked for a PostgreSQL by name and it will not run, that is a red
+/// test, because somebody wanted that one exercised. Found one lying around and it will not
+/// run, that is a skip — nobody promised this machine could host a database, and a runner
+/// that ships a client without a server is exactly such a machine.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Asked {
+    /// `SLOOP_TEST_PG_BIN` named it.
+    Explicitly,
+    /// It turned up on `PATH` or in a package manager's directory.
+    ByLookingAround,
+}
+
 /// Where the server programs are, or `None` if this machine has none.
 ///
 /// `SLOOP_TEST_PG_BIN` first, and when it is set and wrong this **panics** rather than
 /// skipping: a test that quietly skips because a variable was mistyped is a green tick that
 /// proved nothing.
-fn binaries() -> Option<PathBuf> {
+fn binaries() -> Option<(PathBuf, Asked)> {
     if let Some(named) = std::env::var_os(BIN_DIR_VAR) {
         let directory = PathBuf::from(named);
         assert!(
@@ -48,11 +63,11 @@ fn binaries() -> Option<PathBuf> {
             directory.display(),
             exe("initdb")
         );
-        return Some(directory);
+        return Some((directory, Asked::Explicitly));
     }
 
-    // `PATH`, then the same install directories `tools` knows about — `initdb` ships in the
-    // server package and distributions leave it off `PATH`.
+    // `PATH`, then the same install directories `tools` knows about — the server programs
+    // ship in the server package and distributions leave them off `PATH`.
     let mut looked: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect())
         .unwrap_or_default();
@@ -60,14 +75,45 @@ fn binaries() -> Option<PathBuf> {
         crate::engine::Engine::Postgres,
     ));
 
+    // **All three, which is what `find::version_of` means by a server.** Checking only
+    // `initdb` and `pg_ctl` was a bug with a shape: a runner given `postgresql-client` has
+    // some of them and no `postgres` at all, so these tests started building a cluster on a
+    // machine that could not run one, and failed where they should never have begun.
     let found = looked.into_iter().find(|directory| {
-        directory.join(exe("initdb")).is_file() && directory.join(exe("pg_ctl")).is_file()
+        ["initdb", "pg_ctl", "postgres"]
+            .iter()
+            .all(|name| directory.join(exe(name)).is_file())
     });
 
     if found.is_none() {
-        eprintln!("skipping the sloop-cluster tests: this machine has no initdb");
+        eprintln!("skipping the sloop-cluster tests: this machine has no PostgreSQL server");
     }
-    found
+    found.map(|directory| (directory, Asked::ByLookingAround))
+}
+
+/// Build the cluster, or say why these tests are not going to run on this machine.
+///
+/// The one place the rule above is applied, so no test in this file can forget it.
+fn cluster(global: &Path, port: u16) -> Option<super::Ready> {
+    let (bin, asked) = binaries()?;
+    let data = super::data_dir(global);
+
+    match make::with_binaries(global, bin.clone(), port) {
+        Ok(ready) => Some(ready),
+        Err(why) => {
+            stop(&bin, &data);
+            assert!(
+                asked == Asked::ByLookingAround,
+                "{BIN_DIR_VAR} named a PostgreSQL that cannot build a cluster: {}",
+                why.message()
+            );
+            eprintln!(
+                "skipping the sloop-cluster tests: this machine cannot host a database: {}",
+                why.message()
+            );
+            None
+        }
+    }
 }
 
 /// Stop a cluster these tests started, so the temporary directory can actually be removed.
@@ -123,19 +169,12 @@ fn connect_with(bin: &Path, port: u16, password: Option<&str>, sql: &str) -> (bo
 /// and five tests would mean five `initdb`s of the same thing.
 #[test]
 fn a_cluster_is_made_started_and_closed_behind_a_password() {
-    let Some(bin) = binaries() else { return };
-
     let scratch = Scratch::new("cluster");
     let global = scratch.path().to_path_buf();
     let data = super::data_dir(&global);
 
-    let built = make::with_binaries(&global, bin.clone(), MADE_PORT);
-    let ready = match built {
-        Ok(ready) => ready,
-        Err(why) => {
-            stop(&bin, &data);
-            panic!("the cluster could not be built: {}", why.message());
-        }
+    let Some(ready) = cluster(&global, MADE_PORT) else {
+        return;
     };
 
     // Written here because `ensure` is what writes it in a real run, and assertion 3 below
@@ -207,19 +246,12 @@ fn a_cluster_is_made_started_and_closed_behind_a_password() {
 /// cluster down as the last thing it does.
 #[test]
 fn the_password_opens_it_and_an_empty_one_does_not() {
-    let Some(bin) = binaries() else { return };
-
     let scratch = Scratch::new("auth");
     let global = scratch.path().to_path_buf();
     let data = super::data_dir(&global);
 
-    let built = make::with_binaries(&global, bin.clone(), AUTH_PORT);
-    let ready = match built {
-        Ok(ready) => ready,
-        Err(why) => {
-            stop(&bin, &data);
-            panic!("the cluster could not be built: {}", why.message());
-        }
+    let Some(ready) = cluster(&global, AUTH_PORT) else {
+        return;
     };
 
     let password = ready.password.expose().to_owned();
@@ -247,20 +279,14 @@ fn the_password_opens_it_and_an_empty_one_does_not() {
 /// over: that directory is a database.
 #[test]
 fn a_cluster_that_is_already_there_is_never_initialised_over() {
-    let Some(bin) = binaries() else { return };
-
     let scratch = Scratch::new("again");
     let global = scratch.path().to_path_buf();
     let data = super::data_dir(&global);
 
-    let built = make::with_binaries(&global, bin.clone(), AGAIN_PORT);
-    let ready = match built {
-        Ok(ready) => ready,
-        Err(why) => {
-            stop(&bin, &data);
-            panic!("the cluster could not be built: {}", why.message());
-        }
+    let Some(ready) = cluster(&global, AGAIN_PORT) else {
+        return;
     };
+    let bin = ready.server.bin.clone();
     stop(&ready.server.bin, &data);
 
     let before = std::fs::read_to_string(data.join("PG_VERSION")).expect("PG_VERSION is there");
