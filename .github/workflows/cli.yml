@@ -106,7 +106,15 @@ jobs:
             fi
           done
 
-          echo "SLOOP_TEST_PG_BIN=$bin" >> "$GITHUB_ENV"
+          # **A Windows path for the Windows binary.** This step runs in bash, so `$bin` is
+          # `/c/Program Files/...`, and the tests are a Rust program that asks Windows to
+          # open it — which it cannot. `PATH` takes the bash spelling; the variable the tests
+          # read takes the native one.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "SLOOP_TEST_PG_BIN=$(cygpath -w "$bin")" >> "$GITHUB_ENV"
+          else
+            echo "SLOOP_TEST_PG_BIN=$bin" >> "$GITHUB_ENV"
+          fi
           echo "$bin" >> "$GITHUB_PATH"
           echo "using $bin"
 

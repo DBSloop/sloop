@@ -257,7 +257,11 @@ fn start(server: &Server) -> Outcome<()> {
         .arg("-D")
         .arg(data)
         .arg("-o")
-        .arg(format!("-p {} -c listen_addresses={LOOPBACK}", server.port))
+        .arg(format!(
+            "-p {} -c listen_addresses={LOOPBACK}{}",
+            server.port,
+            socket_directory(data)
+        ))
         .arg("-l")
         .arg(data.join("server.log"))
         // Wait for it to be accepting connections, rather than returning to a caller that
@@ -283,10 +287,45 @@ fn start(server: &Server) -> Outcome<()> {
             Exit::Connect,
             format!("pg_ctl could not start the cluster at {}", data.display()),
         )
-        .hint(format!("{} says why", data.join("server.log").display())));
+        // **The log, not a path to it.** A failure that names a file somebody then has to go
+        // and open is a failure nobody reads — and on a CI runner the directory is gone by
+        // the time anybody looks. The last few lines are what says why.
+        .hint(last_words(&data.join("server.log"))));
     }
 
     Ok(())
+}
+
+/// Where the cluster puts its unix socket, as an extra `postgres` option.
+///
+/// **Debian and Ubuntu patch this default and it breaks a cluster sloop makes.** Their
+/// `initdb` writes `unix_socket_directories = '/var/run/postgresql'` into `postgresql.conf`,
+/// a directory that exists for the `postgres` system user and that nobody else may write to —
+/// so the postmaster dies at startup with a permission error, on the one platform where the
+/// package manager is the normal way to get PostgreSQL. sloop's own cluster keeps its socket
+/// in its own data directory, which is a directory sloop already owns.
+///
+/// Empty on Windows, which has no unix sockets and refuses the setting outright.
+fn socket_directory(data: &Path) -> String {
+    if cfg!(windows) {
+        String::new()
+    } else {
+        format!(" -c unix_socket_directories={}", data.display())
+    }
+}
+
+/// The end of a log file, for a failure that would otherwise only name it.
+fn last_words(log: &Path) -> String {
+    let Ok(text) = std::fs::read_to_string(log) else {
+        return format!("{} would say why, and could not be read", log.display());
+    };
+
+    let tail: Vec<&str> = text.lines().rev().take(8).collect();
+    if tail.is_empty() {
+        return format!("{} is empty", log.display());
+    }
+
+    tail.into_iter().rev().collect::<Vec<_>>().join("\n")
 }
 
 /// Give the superuser its password, over a pipe.

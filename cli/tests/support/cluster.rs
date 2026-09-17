@@ -446,7 +446,16 @@ fn build() -> Option<Cluster> {
         .arg("-D")
         .arg(&data)
         .arg("-o")
-        .arg(format!("-p {port} -c listen_addresses=127.0.0.1"))
+        .arg(format!(
+            "-p {port} -c listen_addresses=127.0.0.1{}",
+            // The same Debian default the product works around: their `initdb` points the
+            // socket at `/var/run/postgresql`, which the runner user may not write to.
+            if cfg!(windows) {
+                String::new()
+            } else {
+                format!(" -c unix_socket_directories={}", data.display())
+            }
+        ))
         .arg("-l")
         .arg(data.join("server.log"))
         .arg("--timeout=60")
@@ -460,7 +469,12 @@ fn build() -> Option<Cluster> {
         .status();
 
     if !started.is_ok_and(|status| status.success()) {
-        eprintln!("skipping: this machine cannot host a database on {port}");
+        // The log, not a path to it: on a runner the directory is gone before anybody looks.
+        let log = std::fs::read_to_string(data.join("server.log")).unwrap_or_default();
+        eprintln!(
+            "skipping: this machine cannot host a database on {port}\n{}",
+            log.lines().rev().take(8).collect::<Vec<_>>().join("\n")
+        );
         let _ = std::fs::remove_dir_all(&data);
         return None;
     }
