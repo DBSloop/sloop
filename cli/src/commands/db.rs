@@ -537,11 +537,8 @@ fn print_once(role: &str, password: &Secret, route: &Route) {
 /// machine keeps secrets in the encrypted file", and the backup key already chooses the
 /// same way — see `crypt::keep_somewhere`.
 fn kept_where() -> Route {
-    if crate::secret::sealed::is_the_machines_choice() {
-        Route::EncryptedFile
-    } else {
-        Route::Keyring
-    }
+    let [first, _] = crate::secret::preferred_routes();
+    first
 }
 
 /// What the server did, in the order it did it.
@@ -642,7 +639,7 @@ fn role_password(asked: &Building<'_>) -> Outcome<(Secret, bool)> {
     // `docs/OWNER-DECISIONS.md`.
     match typed_twice(role_for(asked))? {
         Some(typed) => Ok((typed, false)),
-        None => Ok((Secret::new(generated_password()?), true)),
+        None => Ok((Secret::new(crate::secret::generated_password()?), true)),
     }
 }
 
@@ -681,51 +678,6 @@ fn typed_twice(role: &str) -> Outcome<Option<Secret>> {
 /// The user this is all about, by whichever name it will end up with.
 fn role_for<'a>(asked: &'a Building<'a>) -> &'a str {
     asked.role.or(asked.database).unwrap_or(asked.name)
-}
-
-/// A password for a role that is about to exist.
-///
-/// **Letters and digits only, and that is a decision rather than a shortcut.** 28 of them is
-/// about 166 bits, which is past anything that matters; what the character set buys is a
-/// password that pastes into a URL, a YAML file, a `docker-compose` environment and a shell
-/// command without one escaping rule between them. `R3` proved sloop itself round-trips a
-/// password full of punctuation — this is about every other tool it will be pasted into.
-fn generated_password() -> Outcome<String> {
-    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    const LENGTH: usize = 28;
-
-    let mut bytes = [0_u8; LENGTH];
-    getrandom::fill(&mut bytes).map_err(|error| {
-        Failure::new(
-            Exit::Failure,
-            format!("the operating system would not provide random bytes: {error}"),
-        )
-    })?;
-
-    // **Rejection sampling, not `%`.** 62 does not divide 256, so taking the remainder would
-    // make the first few letters of the alphabet slightly likelier than the last few. One
-    // extra draw per unlucky byte costs nothing and removes the bias entirely.
-    let mut password = String::with_capacity(LENGTH);
-    let mut spare = [0_u8; 8];
-    let mut at = 0;
-    for byte in bytes {
-        let mut value = byte;
-        while value >= 248 {
-            if at == 0 {
-                getrandom::fill(&mut spare).map_err(|error| {
-                    Failure::new(
-                        Exit::Failure,
-                        format!("the operating system would not provide random bytes: {error}"),
-                    )
-                })?;
-            }
-            value = spare[at];
-            at = (at + 1) % spare.len();
-        }
-        password.push(char::from(ALPHABET[usize::from(value) % ALPHABET.len()]));
-    }
-
-    Ok(password)
 }
 
 /// The password for the account doing the creating.
@@ -1214,9 +1166,15 @@ fn route_for(chosen: &PasswordSource, existing: Option<&Route>) -> Outcome<Route
     } else if let Some(command) = chosen.password_from.as_deref() {
         Route::parse(&format!("command:{command}"))?
     } else {
-        // Nothing chosen: keep what the record already said, and default a new one to the
-        // keyring, which is the route that needs no configuration.
-        return Ok(existing.cloned().unwrap_or(Route::Keyring));
+        // **Nothing chosen: keep what the record already said, and default a new one to
+        // wherever this machine keeps secrets.** Not the keyring unconditionally — that was
+        // this function's bug, and it is the one place of three that had it. `db create`
+        // asks `kept_where` and the backup key asks `crypt::keep_somewhere`, and both have
+        // always read `SLOOP_PASSPHRASE` as "this machine keeps secrets in the encrypted
+        // file". A headless Linux box that had said exactly that was still sent to a keyring
+        // it deliberately does not run, and `db add` failed on a machine it was supposed to
+        // work on. One rule, in `secret::preferred_routes`, and all three read it.
+        return Ok(existing.cloned().unwrap_or_else(kept_where));
     };
 
     Ok(route)

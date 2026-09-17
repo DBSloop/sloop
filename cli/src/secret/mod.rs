@@ -254,3 +254,98 @@ fn from_environment(name: &str) -> Outcome<Secret> {
     value.zeroize();
     Ok(secret)
 }
+
+/// Where this machine keeps a secret sloop generated, in the order to try.
+///
+/// **`SLOOP_PASSPHRASE` decides, where it is set.** That variable exists for one purpose —
+/// the Argon2id file — so a machine that has it has already said where it keeps secrets, and
+/// putting one in a keyring it deliberately does not use would be ignoring the answer.
+/// Everywhere else the keyring comes first, because it needs no configuration and is there
+/// on every desktop.
+#[must_use]
+pub fn preferred_routes() -> [Route; 2] {
+    if sealed::is_the_machines_choice() {
+        [Route::EncryptedFile, Route::Keyring]
+    } else {
+        [Route::Keyring, Route::EncryptedFile]
+    }
+}
+
+/// Put a secret sloop generated wherever this machine can keep one, and say where that was.
+///
+/// The two routes that *store* something, never the two that fetch what somebody else keeps:
+/// `${VAR}` and `command:` point at a secret that already exists somewhere, and this is for
+/// one that has just been invented.
+pub fn keep_somewhere(key: impl AsRef<str>, secret: &Secret, sealed_file: &Path) -> Outcome<Route> {
+    let key = key.as_ref();
+    let mut first = None;
+
+    for route in preferred_routes() {
+        let kept = match route {
+            Route::Keyring => os_keyring::set(key, secret),
+            Route::EncryptedFile => sealed::put(sealed_file, key, secret),
+            // Unreachable by construction — `preferred_routes` returns only these two — and
+            // written as a refusal rather than a panic, because rule 8 says a user can never
+            // reach an `unwrap`.
+            ref other => Err(Failure::usage(format!(
+                "a password sloop generated cannot live in {} — that route fetches a secret \
+                 something else keeps",
+                other.describe()
+            ))),
+        };
+
+        match kept {
+            Ok(()) => return Ok(route),
+            Err(failure) => first = first.or(Some(failure)),
+        }
+    }
+
+    Err(first.unwrap_or_else(|| {
+        Failure::usage("this machine has nowhere to keep a password sloop generated")
+    }))
+}
+
+/// A password for something that is about to exist.
+///
+/// **Letters and digits only, and that is a decision rather than a shortcut.** 28 of them is
+/// about 166 bits, which is past anything that matters; what the character set buys is a
+/// password that pastes into a URL, a YAML file, a `docker-compose` environment and a shell
+/// command without one escaping rule between them. `R3` proved sloop itself round-trips a
+/// password full of punctuation — this is about every other tool it will be pasted into.
+pub fn generated_password() -> Outcome<String> {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const LENGTH: usize = 28;
+
+    let mut bytes = [0_u8; LENGTH];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        Failure::new(
+            crate::exit::Exit::Failure,
+            format!("the operating system would not provide random bytes: {error}"),
+        )
+    })?;
+
+    // **Rejection sampling, not `%`.** 62 does not divide 256, so taking the remainder would
+    // make the first few letters of the alphabet slightly likelier than the last few. One
+    // extra draw per unlucky byte costs nothing and removes the bias entirely.
+    let mut password = String::with_capacity(LENGTH);
+    let mut spare = [0_u8; 8];
+    let mut at = 0;
+    for byte in bytes {
+        let mut value = byte;
+        while value >= 248 {
+            if at == 0 {
+                getrandom::fill(&mut spare).map_err(|error| {
+                    Failure::new(
+                        crate::exit::Exit::Failure,
+                        format!("the operating system would not provide random bytes: {error}"),
+                    )
+                })?;
+            }
+            value = spare[at];
+            at = (at + 1) % spare.len();
+        }
+        password.push(char::from(ALPHABET[usize::from(value) % ALPHABET.len()]));
+    }
+
+    Ok(password)
+}

@@ -453,7 +453,7 @@ fn a_generated_password_is_long_and_needs_no_escaping() {
     let mut seen: Vec<String> = Vec::new();
 
     for _ in 0..50 {
-        let password = super::generated_password().expect("the OS has randomness");
+        let password = crate::secret::generated_password().expect("the OS has randomness");
         assert_eq!(password.chars().count(), 28, "{password}");
         assert!(
             password
@@ -599,4 +599,38 @@ fn the_password_is_asked_for_by_the_name_the_user_will_have() {
         }),
         "orders_app"
     );
+}
+
+/// **A new record goes wherever this machine keeps secrets, not to the keyring regardless.**
+///
+/// It went to the keyring regardless, and that was a defect with a shape: `db create` asks
+/// [`super::kept_where`] and the backup key asks `crypt::keep_somewhere`, and both have always
+/// read `SLOOP_PASSPHRASE` as *"this machine keeps secrets in the encrypted file"*. `db add`
+/// was the one of the three that did not — so a headless Linux box which had said exactly
+/// that was still sent to a keyring it does not run, and `db add` failed on the machine the
+/// encrypted file exists for. CI was that machine, and this is what that bug looks like from
+/// the inside.
+///
+/// Asserted against `kept_where` rather than against a route by name, because the point is
+/// that the three agree — naming one here would just be a fourth opinion.
+#[test]
+fn a_new_record_is_kept_where_this_machine_keeps_secrets() {
+    let chosen = route_for(&no_password(), None).expect("nothing chosen is not an error");
+
+    assert_eq!(chosen, super::kept_where());
+}
+
+/// And an existing record keeps the route it already had, whatever this machine prefers —
+/// changing a field must never quietly move somebody's password to another store.
+#[test]
+fn editing_a_record_leaves_its_route_alone() {
+    for existing in [
+        Route::Keyring,
+        Route::EncryptedFile,
+        Route::Environment("PGPASSWORD".to_owned()),
+        Route::Command("op read op://vault/db/pw".to_owned()),
+    ] {
+        let kept = route_for(&no_password(), Some(&existing)).expect("nothing chosen");
+        assert_eq!(kept, existing);
+    }
 }

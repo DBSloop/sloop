@@ -203,11 +203,7 @@ pub fn keep_somewhere(private: &PrivateKey, sealed_file: &Path) -> Outcome<Route
 
 /// The two storage routes, in the order this machine should be asked about them.
 fn preference() -> [Route; 2] {
-    if secret::sealed::is_the_machines_choice() {
-        [Route::EncryptedFile, Route::Keyring]
-    } else {
-        [Route::Keyring, Route::EncryptedFile]
-    }
+    secret::preferred_routes()
 }
 
 /// A route that cannot hold a key sloop generated.
