@@ -465,10 +465,16 @@ fn the_global_store_is_the_dot_sloop_in_the_home_directory() {
     register(&sandbox, sandbox.work(), &["db", "add", "orders"]);
 
     // Not `%APPDATA%\sloop`, not `~/.config/sloop`, not `~/Library/Application Support`.
+    // `R19c4` moved the registry itself into PostgreSQL; what stays here is the record that
+    // says which PostgreSQL, and it is still `~/.sloop` that holds it.
     assert!(
-        sandbox.global_dir().join("registry.toml").is_file(),
-        "the registry should be at {}",
+        sandbox.global_dir().join("server.toml").is_file(),
+        "the global store should be at {}",
         sandbox.global_dir().display()
+    );
+    assert!(
+        sandbox.registry_text().contains("[databases.orders]"),
+        "the registration should be in sloop's own database"
     );
     assert!(
         !sandbox.legacy_dir().exists(),
@@ -524,21 +530,40 @@ fn a_project_under_the_home_directory_still_resolves_to_itself() {
 /// directory is what moves and a registry that arrived without its pointers would be a
 /// migration that lost half the store.
 fn leave_a_store_at_the_old_path(sandbox: &Sandbox, name: &str) {
-    let project = sandbox.make_dir("indexed");
-    sandbox.sloop_in(&project, &["init"]).expect_code(0);
-    register(sandbox, sandbox.work(), &["db", "add", name]);
-
-    let written = sandbox.global_dir();
-    assert!(
-        written.join("projects").join("indexed").is_file(),
-        "the store should hold a registry and an index by now"
-    );
-
     let old = sandbox.legacy_dir();
-    if let Some(parent) = old.parent() {
-        std::fs::create_dir_all(parent).expect("creatable");
-    }
-    std::fs::rename(&written, &old).expect("movable");
+    std::fs::create_dir_all(old.join("projects")).expect("creatable");
+
+    // **Written by hand, because an older release wrote a file.** `R19c4` moved the registry
+    // into PostgreSQL, so `sloop db add` would put this database in the *machine's* store and
+    // renaming a directory afterwards would not take it anywhere. What a machine upgrading
+    // from the previous release actually has is a `registry.toml` at the old path — so that
+    // is what these tests leave there, and the import is then a real import rather than a
+    // rehearsal of one.
+    std::fs::write(
+        old.join("registry.toml"),
+        format!(
+            "version = 1
+
+[databases.{name}]
+engine = \"postgres\"
+             host = \"h\"
+port = 5432
+database = \"d\"
+user = \"a\"
+             password = \"${{PW}}\"
+"
+        ),
+    )
+    .expect("writing the old registry");
+
+    // The index that came with it, so "the index moved too" is provable by using it.
+    let project = sandbox.make_dir("indexed");
+    std::fs::create_dir_all(project.join(".sloop")).expect("creatable");
+    std::fs::write(
+        old.join("projects").join("indexed"),
+        project.display().to_string(),
+    )
+    .expect("writing the pointer");
 }
 
 #[test]
@@ -589,14 +614,18 @@ fn an_empty_directory_at_the_old_path_is_left_alone() {
 #[test]
 fn a_store_at_the_old_path_is_never_read_alongside_the_new_one() {
     let sandbox = Sandbox::new("adopt-both");
+
+    // **A store at the new path first.** `R19c4` put the registry in PostgreSQL, so a
+    // registration alone leaves nothing in `~/.sloop` — what makes it a *store* rather than
+    // just the record of where the database is, is the project index. `init` writes one.
+    let project = sandbox.make_dir("here");
+    sandbox.sloop_in(&project, &["init"]).expect_code(0);
+    register(&sandbox, sandbox.work(), &["db", "add", "current"]);
+
+    // And the old directory back afterwards: the move already happened once, and this is the
+    // machine where something recreated it.
     leave_a_store_at_the_old_path(&sandbox, "stale");
     let old = sandbox.legacy_dir();
-
-    // A store at the new path as well: the move already happened once, and this is the
-    // machine where something put the old directory back afterwards. Made before the next
-    // run, so that run has a new store to find and nothing to move onto it.
-    std::fs::create_dir_all(sandbox.global_dir()).expect("creatable");
-    register(&sandbox, sandbox.work(), &["db", "add", "current"]);
     assert!(sandbox.global_dir().is_dir() && old.is_dir(), "both, now");
 
     let run = sandbox.sloop(&["db", "list"]);
@@ -648,9 +677,12 @@ fn init_refuses_the_home_directory() {
     let run = sandbox.sloop_in(sandbox.home(), &["init"]);
     run.expect_code(2);
     run.expect_said("home directory");
+    // `R19c` puts `server.toml` in `~/.sloop` on every set-up machine, so the directory
+    // existing proves nothing. What `init` would have created is a project — an index entry
+    // pointing at the home directory — and that is what must not be there.
     assert!(
-        !sandbox.global_dir().exists(),
-        "init created the global store while calling it a project"
+        !sandbox.global_dir().join("projects").exists(),
+        "init recorded the home directory as a project"
     );
 
     // And by name, from somewhere else, which is the same refusal read from the flag.

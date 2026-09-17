@@ -14,7 +14,7 @@ use support::Sandbox;
 
 /// What the registry says about encryption, if anything.
 fn registry(sandbox: &Sandbox) -> String {
-    std::fs::read_to_string(sandbox.global_dir().join("registry.toml")).unwrap_or_default()
+    sandbox.registry_text()
 }
 
 /// The key on standard output, with nothing else mixed into it.
@@ -210,14 +210,15 @@ fn the_first_backup_will_not_run_until_the_key_has_been_copied() {
         !file.contains("key-kept"),
         "it recorded a copy nobody has made: {file}"
     );
+    // `R19c4` moved the sealed store into `sloop_database`. Still the sandbox's own, still
+    // ciphertext, and still never the key in the clear.
+    let sealed = sandbox.sealed_bytes();
     assert!(
-        sandbox.global_dir().join("secrets.sealed").is_file(),
-        "the private key was not kept in the sandbox's own file"
+        !sealed.is_empty(),
+        "the private key was not kept in the sandbox's own store"
     );
     assert!(
-        !std::fs::read_to_string(sandbox.global_dir().join("secrets.sealed"))
-            .unwrap_or_default()
-            .contains("AGE-SECRET-KEY"),
+        !String::from_utf8_lossy(&sealed).contains("AGE-SECRET-KEY"),
         "the private key is sitting in the file in the clear"
     );
 

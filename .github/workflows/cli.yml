@@ -68,48 +68,54 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # **The client, so every runner tests the same thing.** `R17`'s contract says a server
-      # that cannot be reached is exit 3 — and being *refused* by a server needs a client to
-      # be refused with. The Windows runner happens to ship PostgreSQL and the other two do
-      # not, so without this the same assertion passed on one platform and skipped on two,
-      # which is exactly how a matrix stops meaning anything. The client only; the servers
-      # are the `postgres`, `mysql` and `mariadb` jobs below.
-      - name: A PostgreSQL client, on the runners that have none
-        if: runner.os != 'Windows'
-        working-directory: .
-        run: |
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            brew install libpq
-            echo "$(brew --prefix libpq)/bin" >> "$GITHUB_PATH"
-          else
-            sudo apt-get update
-            sudo apt-get install -y postgresql-client
-          fi
-
-      # The Windows runner ships PostgreSQL and does not put it on `PATH`; sloop finds it
-      # anyway, because its own search looks where the installer puts things. The tests
-      # cannot look there — they are outside the binary — so `PATH` is where they have to be
-      # told, and this is the one line that tells them.
-      - name: The Windows runner already has one; put it where the tests can see it
-        if: runner.os == 'Windows'
+      # **A PostgreSQL *server*, not just a client, since `R19c4`.** Every command reads
+      # its registry out of sloop's own PostgreSQL, so a sandbox is a directory and a
+      # database — and a runner with only `postgresql-client` cannot host one. The harness
+      # skips out loud on such a machine, which is worse than failing: it is a green tick
+      # that proved nothing, and that is exactly how CI stayed red for twelve commits once.
+      #
+      # `SLOOP_TEST_PG_BIN` is set rather than left to a search, because the harness
+      # **panics** when it is set and wrong. A mistake here is then a loud failure instead
+      # of a silent skip.
+      - name: A PostgreSQL server, and tell the tests where it is
         working-directory: .
         shell: bash
         run: |
-          if [ -n "$PGBIN" ] && [ -x "$PGBIN/psql.exe" ]; then
-            echo "$PGBIN" >> "$GITHUB_PATH"
-          else
-            for bin in "/c/Program Files/PostgreSQL"/*/bin; do
-              if [ -x "$bin/psql.exe" ]; then
-                echo "$bin" >> "$GITHUB_PATH"
-                break
-              fi
-            done
-          fi
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux)
+              sudo apt-get update
+              sudo apt-get install -y postgresql
+              # `/usr/lib/postgresql/<major>/bin`, newest first.
+              bin=$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)
+              ;;
+            macOS)
+              brew install postgresql@16
+              bin="$(brew --prefix postgresql@16)/bin"
+              ;;
+            Windows)
+              # The runner ships the whole thing and leaves it off `PATH`.
+              bin=$(ls -d "/c/Program Files/PostgreSQL"/*/bin | sort -V | tail -1)
+              ;;
+          esac
+
+          for program in initdb pg_ctl postgres psql; do
+            if [ ! -x "$bin/$program" ] && [ ! -x "$bin/$program.exe" ]; then
+              echo "::error::$bin has no $program — the tests cannot host a database"
+              exit 1
+            fi
+          done
+
+          echo "SLOOP_TEST_PG_BIN=$bin" >> "$GITHUB_ENV"
+          echo "$bin" >> "$GITHUB_PATH"
+          echo "using $bin"
 
       - name: Every runner has one, so nothing below quietly skips
         working-directory: .
         shell: bash
-        run: psql --version
+        run: |
+          psql --version
+          initdb --version
 
       - run: cargo test --all-features
 

@@ -22,6 +22,8 @@
 
 #![allow(dead_code)]
 
+pub mod cluster;
+
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -34,6 +36,12 @@ pub struct Sandbox {
     root: PathBuf,
     home: PathBuf,
     work: PathBuf,
+    /// The database this sandbox's registry lives in, on the test binary's cluster.
+    ///
+    /// **`None` only on a machine with no PostgreSQL server**, where the whole suite skips —
+    /// see [`cluster::available`]. Everywhere else a sandbox is a directory *and* a database,
+    /// because `R19c4` is where the registry stopped being a file.
+    database: Option<String>,
 }
 
 impl Sandbox {
@@ -65,9 +73,131 @@ impl Sandbox {
             std::fs::create_dir_all(dir).expect("a temporary directory should be creatable");
         }
 
-        let sandbox = Self { root, home, work };
+        let mut sandbox = Self {
+            root,
+            home,
+            work,
+            database: None,
+        };
         sandbox.check_containment();
+        sandbox.give_it_a_registry(label);
         sandbox
+    }
+
+    /// Give this sandbox a `sloop_database` of its own and a record pointing at it.
+    ///
+    /// **The record comes first and Setup is never run here.** Writing `server.toml` before
+    /// anything else is what stops `sloop` hunting for a PostgreSQL 18 on the machine running
+    /// the tests: it finds a server already settled, which is exactly the state the owner's
+    /// rule describes — a machine that is set up is never asked again. The schema arrives by
+    /// copying the template, which a real `sloop setup` migrated once per test binary.
+    fn give_it_a_registry(&mut self, label: &str) {
+        let Some(cluster) = cluster::available() else {
+            return;
+        };
+
+        // The template, once per test binary. The closure is how Setup gets run without
+        // `cluster` having to know what a sandbox is.
+        cluster::prepare_template(cluster, |template| {
+            let global = self.global_dir();
+            std::fs::create_dir_all(&global).expect("the global store should be creatable");
+            std::fs::write(
+                global.join("server.toml"),
+                cluster::record_for(cluster, template),
+            )
+            .expect("writing the record");
+
+            let run = self.sloop(&["setup"]);
+            let ok = run.code() == Some(0);
+            if !ok {
+                eprintln!("`sloop setup` on the template said: {}", run.said());
+            }
+            // Whatever Setup left behind belongs to the template, not to this sandbox.
+            let _ = std::fs::remove_dir_all(&global);
+            ok
+        });
+
+        let database = cluster.database_for(label);
+        let global = self.global_dir();
+        std::fs::create_dir_all(&global).expect("the global store should be creatable");
+        std::fs::write(
+            global.join("server.toml"),
+            cluster::record_for(cluster, &database),
+        )
+        .expect("writing the record");
+
+        self.database = Some(database);
+    }
+
+    /// The registry this sandbox holds, rendered the way `registry.toml` used to hold it.
+    ///
+    /// **`R19c4` moved the registry into PostgreSQL**, so a test that used to read the file
+    /// reads this instead. What those tests assert is what the registry *holds* — the file
+    /// was the medium, not the point.
+    #[must_use]
+    pub fn registry_text(&self) -> String {
+        self.registry_text_of(None)
+    }
+
+    /// The same, for a project's registry rather than the global store's.
+    #[must_use]
+    pub fn project_registry_text(&self, project: &Path) -> String {
+        self.registry_text_of(Some(project))
+    }
+
+    fn registry_text_of(&self, project: Option<&Path>) -> String {
+        let cluster = cluster::available().expect("a sandbox with a registry has a cluster");
+        let database = self
+            .database
+            .as_deref()
+            .expect("a sandbox with a registry has a database");
+        cluster.registry_text(
+            database,
+            project.map(|dir| dir.display().to_string()).as_deref(),
+        )
+    }
+
+    /// The sealed password store this sandbox's registry holds, as bytes.
+    ///
+    /// Empty when nothing has ever been sealed, which is what a missing file used to be.
+    #[must_use]
+    pub fn sealed_bytes(&self) -> Vec<u8> {
+        let cluster = cluster::available().expect("a sandbox with a registry has a cluster");
+        let database = self
+            .database
+            .as_deref()
+            .expect("a sandbox with a registry has a database");
+        cluster.sealed_bytes(database, None)
+    }
+
+    /// Write this sandbox's `server.toml` again.
+    ///
+    /// **For the tests that move the global store.** `server.toml` is what says which
+    /// PostgreSQL holds the registry, and a test that renames `~/.sloop` out of the way takes
+    /// it along — on a real machine the record is at the new path because `setup` put it
+    /// there, so putting it back is restoring the situation rather than papering over one.
+    pub fn write_record(&self) {
+        let (Some(cluster), Some(database)) = (cluster::available(), self.database.as_deref())
+        else {
+            return;
+        };
+        let global = self.global_dir();
+        std::fs::create_dir_all(&global).expect("the global store should be creatable");
+        std::fs::write(
+            global.join("server.toml"),
+            cluster::record_for(cluster, database),
+        )
+        .expect("writing the record");
+    }
+
+    /// Whether this sandbox has a registry to read at all.
+    ///
+    /// A test that needs one asks first and skips out loud otherwise, the way the cluster
+    /// tests do. A machine with no PostgreSQL server cannot run a command that reads a
+    /// registry, and pretending otherwise is how a green tick comes to mean nothing.
+    #[must_use]
+    pub fn has_a_registry(&self) -> bool {
+        self.database.is_some()
     }
 
     /// Fail loudly, here, if a run could reach outside the sandbox.
@@ -194,6 +324,9 @@ impl Sandbox {
             // can reach in to clean up. `SLOOP_PASSPHRASE` tells sloop this machine keeps
             // secrets in the Argon2id file, and that file is inside the sandbox.
             .env("SLOOP_PASSPHRASE", "a test passphrase")
+            // How the record's `${…}` route resolves. The file holds the route; this holds
+            // the value, on one child process and nowhere wider.
+            .env(cluster::PASSWORD_VAR, cluster::PASSWORD)
             // Anything the developer's shell happens to export must not reach a test.
             .env_remove("SLOOP_PROJECT")
             .env_remove("CLICOLOR_FORCE")

@@ -36,7 +36,13 @@ pub fn global(locations: &Locations) -> Outcome<PathBuf> {
         return Ok(target);
     }
 
-    if target.exists() {
+    // **`R19c` made the target always exist, so "is it there" stopped being the question.**
+    // Every set-up machine has `~/.sloop/server.toml` — the record saying which PostgreSQL
+    // holds the registry — so a test of mere existence would refuse to migrate any machine
+    // that had ever run Setup, which is all of them. What decides is whether the target holds
+    // a *store*: a registry, an index, sealed passwords. A directory holding nothing but the
+    // server record has nothing to collide with, and the old store moves into it.
+    if holds_a_store(&target) {
         // Rare: the move already happened and something recreated the old directory. Said
         // rather than ignored, because the alternative is somebody adding databases to a
         // store nothing reads and having no idea why they never appear.
@@ -48,7 +54,7 @@ pub fn global(locations: &Locations) -> Outcome<PathBuf> {
         return Ok(target);
     }
 
-    move_directory(&old, &target)?;
+    move_into(&old, &target)?;
     crate::report::notice(&style::dim(&format!(
         "Moved the global store from {} to {}.",
         old.display(),
@@ -66,11 +72,68 @@ fn holds_anything(dir: &Path) -> bool {
     std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
 }
 
+/// Does this directory hold a *store*, rather than just the record of where the database is?
+///
+/// `server.toml` is not a store. It is one file saying which PostgreSQL the store lives in,
+/// written by Setup on every machine, and it is the one thing in `~/.sloop` that has to stay
+/// exactly where it is — everything else can be moved onto it.
+fn holds_a_store(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+
+    entries
+        .flatten()
+        .any(|entry| entry.file_name() != std::ffi::OsStr::new(crate::server::record::FILE))
+}
+
 /// Move `from` onto `to`, across volumes if it has to.
 ///
 /// `rename` is one call and keeps everything — including a file that is open. It also fails
 /// across volumes, and `%APPDATA%` on a roaming Windows profile really is on another one, so
 /// the copy is not a theoretical fallback.
+fn move_into(from: &Path, to: &Path) -> Outcome<()> {
+    std::fs::create_dir_all(to).map_err(|error| cannot(from, to, &error.to_string()))?;
+
+    // **Entry by entry, not a rename of the whole directory.** `to` may already hold
+    // `server.toml`, and a rename onto a directory that is not empty fails — so the old
+    // store's contents move *into* the new one and the record stays where Setup put it.
+    // Nothing is overwritten: the only file that could collide is the record, and the old
+    // store predates it.
+    let entries = std::fs::read_dir(from).map_err(|error| cannot(from, to, &error.to_string()))?;
+    for entry in entries.flatten() {
+        let landing = to.join(entry.file_name());
+        if landing.exists() {
+            continue;
+        }
+        if std::fs::rename(entry.path(), &landing).is_err() {
+            // Across volumes — `%APPDATA%` on a roaming Windows profile really is on another
+            // one — so a copy is not a theoretical fallback.
+            copy_entry(&entry.path(), &landing)
+                .map_err(|error| cannot(from, to, &error.to_string()))?;
+        }
+    }
+
+    std::fs::remove_dir_all(from).map_err(|error| {
+        Failure::usage(format!(
+            "moved the global store to {} but could not remove the old one at {}: {error}",
+            to.display(),
+            from.display()
+        ))
+        .hint("delete the old directory by hand — sloop reads the new one and would otherwise say this every run")
+    })
+}
+
+/// One file or one directory, copied.
+fn copy_entry(from: &Path, to: &Path) -> std::io::Result<()> {
+    if from.is_dir() {
+        copy_tree(from, to)
+    } else {
+        std::fs::copy(from, to).map(|_| ())
+    }
+}
+
+#[allow(dead_code)]
 fn move_directory(from: &Path, to: &Path) -> Outcome<()> {
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent).map_err(|error| cannot(from, to, &error.to_string()))?;

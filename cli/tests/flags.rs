@@ -159,13 +159,13 @@ fn a_failure_is_a_document_with_the_reason_in_it() {
     assert!(document.get("hint").is_some(), "{document}");
 }
 
-/// **The `Done when`: `--dry-run` provably writes nothing.** Checked on the registry file,
-/// which is the thing that outlives the run.
+/// **The `Done when`: `--dry-run` provably writes nothing.** Checked on the registry itself,
+/// which is the thing that outlives the run — rows since `R19c4`, a file before it.
 #[test]
 fn a_dry_run_changes_no_file() {
     let sandbox = with_one("dry-run");
-    let registry = sandbox.global_dir().join("registry.toml");
-    let before = std::fs::read_to_string(&registry).expect("a registry");
+    let before = sandbox.registry_text();
+    assert!(!before.is_empty(), "there should be something to change");
 
     for command in [
         vec!["--dry-run", "db", "rename", "orders", "something-else"],
@@ -193,7 +193,7 @@ fn a_dry_run_changes_no_file() {
         run.expect_code(0).expect_said("dry run");
 
         assert_eq!(
-            std::fs::read_to_string(&registry).expect("a registry"),
+            sandbox.registry_text(),
             before,
             "`sloop {}` changed the registry",
             command.join(" ")

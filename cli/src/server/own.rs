@@ -95,7 +95,9 @@ impl Own {
 /// the password back from wherever this machine keeps secrets, proves the connection, and
 /// returns — with nothing typed and nothing created twice.
 pub fn ensure(global: &Path, server: &Server, superuser: &Secret) -> Outcome<(Own, Secret)> {
-    let own = Own::sloops();
+    // Whatever a previous run settled on, and only otherwise the name sloop would pick today.
+    // See `record::recorded_own`.
+    let own = super::record::recorded_own(global)?.unwrap_or_else(Own::sloops);
     let sealed = global.join(crate::registry::file::SEALED_FILE);
 
     // What a previous run left, if anything. A password sloop cannot read back is the same
@@ -116,7 +118,7 @@ pub fn ensure(global: &Path, server: &Server, superuser: &Secret) -> Outcome<(Ow
     let role_exists = exists(
         server,
         superuser,
-        &format!("SELECT 1 FROM pg_roles WHERE rolname = '{ROLE}';"),
+        &format!("SELECT 1 FROM pg_roles WHERE rolname = '{}';", own.role),
     )?;
 
     // A password only where one is needed: an existing role whose password sloop can still
@@ -137,7 +139,7 @@ pub fn ensure(global: &Path, server: &Server, superuser: &Secret) -> Outcome<(Ow
         (false, _) => {
             let fresh = Secret::new(crate::secret::generated_password()?);
             create_role(server, superuser, &own, &fresh)?;
-            crate::say!("  {} {ROLE}", style::label("Created"));
+            crate::say!("  {} {}", style::label("Created"), own.role);
             fresh
         }
     };
@@ -145,19 +147,30 @@ pub fn ensure(global: &Path, server: &Server, superuser: &Secret) -> Outcome<(Ow
     if exists(
         server,
         superuser,
-        &format!("SELECT 1 FROM pg_database WHERE datname = '{DATABASE}';"),
+        &format!(
+            "SELECT 1 FROM pg_database WHERE datname = '{}';",
+            own.database
+        ),
     )? {
-        crate::say!("  {} {DATABASE}", style::label("Already there"));
+        crate::say!("  {} {}", style::label("Already there"), own.database);
     } else {
         // **Not in a DO block, and not with the checks above folded into it.** `CREATE
         // DATABASE` cannot run inside a transaction, which is what a `DO` block is.
         make::run_sql(
             server,
             Some(superuser),
-            &format!("CREATE DATABASE \"{DATABASE}\" OWNER \"{ROLE}\";"),
+            &format!(
+                "CREATE DATABASE \"{}\" OWNER \"{}\";",
+                own.database, own.role
+            ),
         )
-        .map_err(|failure| failure.hint(format!("{ROLE} exists; {DATABASE} could not be made")))?;
-        crate::say!("  {} {DATABASE}", style::label("Created"));
+        .map_err(|failure| {
+            failure.hint(format!(
+                "{} exists; {} could not be made",
+                own.role, own.database
+            ))
+        })?;
+        crate::say!("  {} {}", style::label("Created"), own.database);
     }
 
     // Proof rather than hope, and as the owning role rather than as the superuser: what every
@@ -166,7 +179,11 @@ pub fn ensure(global: &Path, server: &Server, superuser: &Secret) -> Outcome<(Ow
     if !opens(server, &own, &password)? {
         return Err(Failure::new(
             Exit::Connect,
-            format!("{} would not accept {ROLE}'s password", own.url(server)),
+            format!(
+                "{} would not accept {}'s password",
+                own.url(server),
+                own.role
+            ),
         )
         .hint("the role and the database exist; it is the password that did not open them"));
     }

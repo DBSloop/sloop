@@ -16,10 +16,7 @@ use support::Sandbox;
 /// Read the registry a run just wrote, so a test can assert on the file rather than on
 /// the message the command printed about it.
 fn written(sandbox: &Sandbox) -> String {
-    let path = sandbox.global_dir().join("registry.toml");
-    std::fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!("no registry at {}: {error}", path.display());
-    })
+    sandbox.registry_text()
 }
 
 /// Register one, the short way, for the tests that are about something else.
@@ -139,7 +136,7 @@ fn without_a_terminal_a_stored_password_exits_two_and_names_the_flag() {
 
     // And nothing was written on the way to refusing.
     assert!(
-        !sandbox.global_dir().join("registry.toml").exists(),
+        written(&sandbox).is_empty(),
         "a refused registration still wrote a registry"
     );
 }
@@ -206,16 +203,17 @@ fn a_piped_password_is_taken_verbatim_and_is_never_echoed() {
 
     run.expect_code(0).expect_silent_about(nasty.trim());
 
-    let sealed = sandbox.global_dir().join("secrets.sealed");
-    assert!(sealed.is_file(), "nothing was sealed");
+    // `R19c4` moved the sealed store into `sloop_database`. The bytes are the same
+    // `SLOOPSEC` blob the file held, so both assertions below mean what they always meant.
+    let bytes = sandbox.sealed_bytes();
+    assert!(!bytes.is_empty(), "nothing was sealed");
 
-    // The encrypted file is encrypted: the password is not sitting in it in the clear.
-    let bytes = std::fs::read(&sealed).expect("reading the sealed file");
+    // The encrypted store is encrypted: the password is not sitting in it in the clear.
     assert!(
         !bytes
             .windows(nasty.len())
             .any(|window| window == nasty.as_bytes()),
-        "the password is readable in the sealed file"
+        "the password is readable in the sealed store"
     );
 
     assert!(
@@ -431,14 +429,13 @@ fn the_global_qualifier_reaches_past_a_project() {
         .sloop_in(&project, &["db", "edit", "global:orders", "--user", "far"])
         .expect_code(0);
 
-    let global = std::fs::read_to_string(sandbox.global_dir().join("registry.toml")).unwrap();
+    let global = sandbox.registry_text();
     assert!(global.contains("user = \"far\""), "{global}");
     // The qualifier is not part of the stored name.
     assert!(global.contains("[databases.orders]"), "{global}");
     assert!(!global.contains("global:orders"), "{global}");
 
-    let project_file =
-        std::fs::read_to_string(project.join(".sloop").join("registry.toml")).unwrap();
+    let project_file = sandbox.project_registry_text(&project);
     assert!(project_file.contains("user = \"app\""), "{project_file}");
 }
 

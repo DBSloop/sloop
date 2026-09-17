@@ -117,6 +117,22 @@ pub fn database_route(global: &Path) -> Outcome<Option<Route>> {
     }
 }
 
+/// The database a previous run settled on, by name, without resolving its password.
+///
+/// **Setup keeps whatever the record names.** The same principle [`reopen`] follows for the
+/// server: what a previous run settled comes first, because re-deriving it risks answering
+/// differently than it did then. On an ordinary machine there is no record the first time and
+/// `Own::sloops` decides; after that this does, which is what makes a second Setup use the
+/// database it made rather than looking for one by the name it would have chosen today.
+pub fn recorded_own(global: &Path) -> Outcome<Option<super::own::Own>> {
+    Ok(read(global)?
+        .and_then(|raw| raw.database)
+        .map(|database| super::own::Own {
+            database: database.name,
+            role: database.role,
+        }))
+}
+
 /// sloop's own database and the password that opens it, as a previous run settled them.
 ///
 /// `None` on a machine that has not been set up, which is the state `R19c4` has to turn into

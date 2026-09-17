@@ -37,8 +37,7 @@ fn with_a_source(label: &str) -> Sandbox {
 /// The registry file as it stands, so "nothing was created" can be checked on the thing
 /// that outlives the run rather than on what the run printed.
 fn written(sandbox: &Sandbox) -> String {
-    let path = sandbox.global_dir().join("registry.toml");
-    std::fs::read_to_string(&path).unwrap_or_default()
+    sandbox.registry_text()
 }
 
 /// **`R14a`'s "Done when", the half about not hanging.** No destination, no terminal: the
