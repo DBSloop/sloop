@@ -124,13 +124,6 @@ pub enum Screen {
         /// Where the highlight is.
         cursor: usize,
     },
-    /// One group of commands.
-    Group {
-        /// Which one.
-        group: Group,
-        /// Where the highlight is.
-        cursor: usize,
-    },
     /// A command, part-way through the questions it asks.
     ///
     /// **The answers live here rather than in the loop**, so the screen stack keeps them
@@ -295,19 +288,6 @@ pub struct Ask {
     pub help: String,
 }
 
-/// The groups on the home screen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Group {
-    /// Everything about which databases sloop knows.
-    Databases,
-    /// Taking backups, listing them, putting one back, clearing old ones out.
-    Backups,
-    /// `mirror` and `sync`.
-    Copying,
-    /// The keypair a backup is encrypted with.
-    Key,
-}
-
 /// A command, as a menu item: what it is called, what it does, and the flag form of it.
 ///
 /// **The flag form is reference, never an instruction.** The menu is the tool; a flag is
@@ -336,87 +316,26 @@ pub struct Leaf {
     pub run_it: &'static str,
 }
 
-/// A door on the home screen: into a group, or straight at a command.
-#[derive(Debug, Clone, Copy)]
-enum Door {
-    /// Opens a group menu.
-    Into(Group, &'static str, &'static str),
-    /// Runs a command.
-    At(Leaf),
-}
-
-impl Door {
-    fn opens(self) -> Screen {
-        match self {
-            Self::Into(group, _, _) => Screen::Group { group, cursor: 0 },
-            Self::At(leaf) => Screen::opening(leaf),
-        }
-    }
-
-    /// How it is drawn. A group says what is behind it; a command says the flag form that
-    /// does the same thing, which is what the owner asked for beside every one of them.
-    fn item(self) -> Item {
-        match self {
-            Self::Into(_, title, blurb) => Item::new(title, blurb),
-            Self::At(leaf) => Item::doing(leaf),
-        }
-    }
-}
-
-/// A heading on the home screen, and the doors under it.
-struct Wing(&'static str, &'static [Door]);
-
-/// A heading on a group screen, and the commands under it.
+/// A heading, and the commands under it.
 struct Shelf(&'static str, &'static [Leaf]);
 
-/// The home screen, in the order somebody meets the tool.
+/// **Every command sloop has, on one screen, under the heading it belongs to.**
 ///
-/// Registering comes before backing up because you cannot back up a database sloop has
-/// never heard of; copying comes after both because it needs two.
-const HOME: &[Wing] = &[
-    Wing(
-        "EVERY DAY",
-        &[
-            Door::Into(
-                Group::Databases,
-                "Databases",
-                "tell sloop about one, check it answers, rename it",
-            ),
-            Door::Into(
-                Group::Backups,
-                "Backups",
-                "take one now, put one back, clear the old ones out",
-            ),
-        ],
-    ),
-    Wing(
-        "WHEN YOU NEED IT",
-        &[
-            Door::Into(
-                Group::Copying,
-                "Copy a database",
-                "an exact mirror, or a merge that keeps what is there",
-            ),
-            Door::Into(
-                Group::Key,
-                "Backup key",
-                "the key your backups are locked with",
-            ),
-            Door::At(Leaf {
-                title: "Check my setup",
-                blurb: "what sloop can find on this machine, and what it cannot",
-                command: "sloop doctor",
-                job: Job::Doctor,
-                under: "Check my setup",
-                run_it: "Check this machine",
-            }),
-        ],
-    ),
-];
-
-const DATABASES: &[Shelf] = &[
+/// It used to be five doors — `Databases`, `Backups`, `Copy a database`, `Backup key`,
+/// `Check my setup` — with the commands a screen behind them. The owner reopened that:
+/// a front page of five lines reads as a tool with five features, and neither the eye nor
+/// the type-to-filter could find `mirror`, because the word was not on it. So the doors are
+/// gone and the groups are headings.
+///
+/// **It stays a table on purpose.** Restructuring this menu again is editing the rows below,
+/// not touching the loop that draws them — which is what makes the next reshuffle cheap. See
+/// "The home screen lists every command" in `docs/OWNER-DECISIONS.md`.
+///
+/// Registering comes first because you cannot back up a database sloop has never heard of;
+/// copying comes after both because it needs two.
+const HOME: &[Shelf] = &[
     Shelf(
-        "ADD ONE",
+        "DATABASES",
         &[
             Leaf {
                 title: "Tell sloop about a database",
@@ -434,11 +353,6 @@ const DATABASES: &[Shelf] = &[
                 under: "Databases",
                 run_it: "Make it",
             },
-        ],
-    ),
-    Shelf(
-        "LOOK",
-        &[
             Leaf {
                 title: "See the ones sloop knows",
                 blurb: "every database in this registry, and where its password comes from",
@@ -455,11 +369,6 @@ const DATABASES: &[Shelf] = &[
                 under: "Databases",
                 run_it: "Try it",
             },
-        ],
-    ),
-    Shelf(
-        "CHANGE",
-        &[
             Leaf {
                 title: "Change one's details",
                 blurb: "host, port, user, database, password",
@@ -476,11 +385,6 @@ const DATABASES: &[Shelf] = &[
                 under: "Databases",
                 run_it: "Rename it",
             },
-        ],
-    ),
-    Shelf(
-        "REMOVE",
-        &[
             Leaf {
                 title: "Make sloop forget one",
                 blurb: "removes it from this registry. The database itself is untouched",
@@ -499,11 +403,8 @@ const DATABASES: &[Shelf] = &[
             },
         ],
     ),
-];
-
-const BACKUPS: &[Shelf] = &[
     Shelf(
-        "TAKE ONE",
+        "BACKUPS",
         &[
             Leaf {
                 title: "Back one up now",
@@ -521,11 +422,6 @@ const BACKUPS: &[Shelf] = &[
                 under: "Backups",
                 run_it: "Back them all up",
             },
-        ],
-    ),
-    Shelf(
-        "WHAT YOU HAVE",
-        &[
             Leaf {
                 title: "See the backups I have",
                 blurb: "what was taken, when, how big, and whether it still checks out",
@@ -542,69 +438,75 @@ const BACKUPS: &[Shelf] = &[
                 under: "Backups",
                 run_it: "Clear them out",
             },
+            Leaf {
+                title: "Put a backup back",
+                blurb: "restores a database from one of them",
+                command: "sloop restore <name>",
+                job: Job::Restore,
+                under: "Backups",
+                run_it: "Put it back",
+            },
         ],
     ),
     Shelf(
-        "PUT ONE BACK",
+        "COPYING",
+        &[
+            Leaf {
+                title: "Mirror, an exact copy",
+                blurb: "the destination ends up identical. Anything only it had is gone",
+                command: "sloop mirror <source> --to <destination>",
+                job: Job::Mirror,
+                under: "Copying",
+                run_it: "Mirror it",
+            },
+            Leaf {
+                title: "Sync, a merge",
+                blurb: "rows are added and replaced. Rows only the destination has are kept",
+                command: "sloop sync <source> --to <destination>",
+                job: Job::Sync,
+                under: "Copying",
+                run_it: "Merge it",
+            },
+        ],
+    ),
+    Shelf(
+        "BACKUP KEY",
+        &[
+            Leaf {
+                title: "Export the key",
+                blurb: "copy it somewhere safe. Without it, no backup can ever be opened",
+                command: "sloop key export",
+                job: Job::KeyExport,
+                under: "Backup key",
+                run_it: "Export the key",
+            },
+            Leaf {
+                title: "Import a key",
+                blurb: "bring one in from another machine",
+                command: "sloop key import",
+                job: Job::KeyImport,
+                under: "Backup key",
+                run_it: "Import a key",
+            },
+        ],
+    ),
+    Shelf(
+        "THIS MACHINE",
         &[Leaf {
-            title: "Put a backup back",
-            blurb: "restores a database from one of them",
-            command: "sloop restore <name>",
-            job: Job::Restore,
-            under: "Backups",
-            run_it: "Put it back",
+            title: "Check my setup",
+            blurb: "what sloop can find on this machine, and what it cannot",
+            command: "sloop doctor",
+            job: Job::Doctor,
+            under: "This machine",
+            run_it: "Check this machine",
         }],
     ),
 ];
 
-const COPYING: &[Shelf] = &[Shelf(
-    "COPYING",
-    &[
-        Leaf {
-            title: "Mirror, an exact copy",
-            blurb: "the destination ends up identical. Anything only it had is gone",
-            command: "sloop mirror <source> --to <destination>",
-            job: Job::Mirror,
-            under: "Copy a database",
-            run_it: "Mirror it",
-        },
-        Leaf {
-            title: "Sync, a merge",
-            blurb: "rows are added and replaced. Rows only the destination has are kept",
-            command: "sloop sync <source> --to <destination>",
-            job: Job::Sync,
-            under: "Copy a database",
-            run_it: "Merge it",
-        },
-    ],
-)];
-
-const KEY: &[Shelf] = &[Shelf(
-    "BACKUP KEY",
-    &[
-        Leaf {
-            title: "Export the key",
-            blurb: "copy it somewhere safe. Without it, no backup can ever be opened",
-            command: "sloop key export",
-            job: Job::KeyExport,
-            under: "Backup key",
-            run_it: "Export the key",
-        },
-        Leaf {
-            title: "Import a key",
-            blurb: "bring one in from another machine",
-            command: "sloop key import",
-            job: Job::KeyImport,
-            under: "Backup key",
-            run_it: "Import a key",
-        },
-    ],
-)];
-
-/// The door at `index`, counting doors and not headings.
-fn door_at(index: usize) -> Option<Door> {
+/// The command at `index`, counting commands and not headings.
+fn leaf_at(index: usize) -> Option<Leaf> {
     HOME.iter()
-        .flat_map(|Wing(_, doors)| doors.iter())
+        .flat_map(|Shelf(_, leaves)| leaves.iter())
         .nth(index)
         .copied()
 }
@@ -612,69 +514,12 @@ fn door_at(index: usize) -> Option<Door> {
 /// The home screen as sections.
 fn home_sections() -> Vec<Section> {
     HOME.iter()
-        .map(|Wing(heading, doors)| Section {
+        .map(|Shelf(heading, leaves)| Section {
             heading: (*heading).to_owned(),
-            items: doors.iter().map(|door| door.item()).collect(),
+            items: leaves.iter().copied().map(Item::doing).collect(),
         })
         .collect()
 }
-
-impl Group {
-    /// What the breadcrumb calls it.
-    const fn title(self) -> &'static str {
-        match self {
-            Self::Databases => "Databases",
-            Self::Backups => "Backups",
-            Self::Copying => "Copy a database",
-            Self::Key => "Backup key",
-        }
-    }
-
-    /// The line above the list.
-    const fn question(self) -> &'static str {
-        match self {
-            Self::Databases => "What would you like to do with a database?",
-            Self::Backups => "What would you like to do about backups?",
-            Self::Copying => "Which kind of copy?",
-            Self::Key => "What would you like to do with the key?",
-        }
-    }
-
-    /// What is in it, under its headings.
-    const fn shelves(self) -> &'static [Shelf] {
-        match self {
-            Self::Databases => DATABASES,
-            Self::Backups => BACKUPS,
-            Self::Copying => COPYING,
-            Self::Key => KEY,
-        }
-    }
-
-    /// The command at `index`, counting commands and not headings.
-    fn leaf(self, index: usize) -> Option<Leaf> {
-        self.shelves()
-            .iter()
-            .flat_map(|Shelf(_, leaves)| leaves.iter())
-            .nth(index)
-            .copied()
-    }
-
-    /// The page, as the headings it is drawn under.
-    fn sections(self) -> Vec<Section> {
-        self.shelves()
-            .iter()
-            .map(|Shelf(heading, leaves)| Section {
-                heading: (*heading).to_owned(),
-                items: leaves.iter().copied().map(Item::doing).collect(),
-            })
-            .collect()
-    }
-
-    /// Every group, for the walk that proves `← Back` comes home from all of them.
-    #[cfg(test)]
-    pub const ALL: &'static [Self] = &[Self::Databases, Self::Backups, Self::Copying, Self::Key];
-}
-
 impl Screen {
     /// Where the highlight sits, so that coming back puts it where it was.
     #[must_use]
@@ -683,7 +528,6 @@ impl Screen {
             Self::FirstRun { cursor }
             | Self::Started { cursor, .. }
             | Self::Home { cursor }
-            | Self::Group { cursor, .. }
             | Self::Doing { cursor, .. } => *cursor,
             Self::NewProject { .. } => 0,
         }
@@ -695,7 +539,6 @@ impl Screen {
             Self::FirstRun { cursor }
             | Self::Started { cursor, .. }
             | Self::Home { cursor }
-            | Self::Group { cursor, .. }
             | Self::Doing { cursor, .. } => *cursor = index,
             Self::NewProject { .. } => {}
         }
@@ -766,7 +609,6 @@ impl Screen {
             Self::FirstRun { .. } | Self::Home { .. } => Vec::new(),
             Self::NewProject { .. } => vec!["New project"],
             Self::Started { .. } => vec!["New project", "Done"],
-            Self::Group { group, .. } => vec![group.title()],
             Self::Doing { leaf, .. } => vec![leaf.under, leaf.title],
         }
     }
@@ -828,13 +670,6 @@ impl Screen {
                         many => Line::told("registered", &format!("{many} databases"), Hue::Ok),
                     },
                 ],
-            },
-
-            Self::Group { group, .. } => Header {
-                banner: Banner::Word,
-                crumbs: self.crumbs(),
-                strap: String::new(),
-                lines: vec![Line::Quiet(group.blurb().to_owned())],
             },
 
             Self::Doing {
@@ -905,11 +740,6 @@ impl Screen {
                 sections: home_sections(),
             }),
 
-            Self::Group { group, .. } => Face::Menu(Menu {
-                question: group.question().to_owned(),
-                sections: group.sections(),
-            }),
-
             Self::Doing { leaf, answers, .. } => match leaf.job.next(answers, world) {
                 Next::Ask(step) => {
                     let heading = step.heading();
@@ -954,10 +784,9 @@ impl Screen {
                 trouble: None,
             }),
             Self::Started { .. } => Flow::Home,
-            Self::Home { .. } => door_at(index).map_or(Flow::Stay, |door| Flow::To(door.opens())),
-            Self::Group { group, .. } => group
-                .leaf(index)
-                .map_or(Flow::Stay, |leaf| Flow::To(Self::opening(leaf))),
+            Self::Home { .. } => {
+                leaf_at(index).map_or(Flow::Stay, |leaf| Flow::To(Self::opening(leaf)))
+            }
 
             Self::Doing { leaf, answers, .. } => match leaf.job.next(answers, world) {
                 Next::Ask(step) => match step.how {
@@ -1052,31 +881,6 @@ impl Screen {
 pub enum Kept {
     /// `init` ran, and this is what it made.
     Started(Box<Initialised>),
-}
-
-impl Group {
-    /// The line under the breadcrumb.
-    const fn blurb(self) -> &'static str {
-        match self {
-            Self::Databases => {
-                "A database sloop knows about can be backed up, copied and checked. \
-                 Everything here is about that list."
-            }
-            Self::Backups => {
-                "A backup is a dump, a manifest and an exact row count, in a folder named \
-                 for the moment it was taken."
-            }
-            Self::Copying => {
-                "Both read the source and only the source. The difference is what happens \
-                 to rows the destination already has."
-            }
-            Self::Key => {
-                "Backups are encrypted with an age keypair. The public half lives in the \
-                 config so a scheduled run needs no secret; the private half is in this \
-                 machine's keyring, and only restoring needs it."
-            }
-        }
-    }
 }
 
 /// Make the registry, with the same code `sloop init` runs.

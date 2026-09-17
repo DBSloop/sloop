@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use super::ask::{Answer, Asking};
 use super::flow::{Answers, Doing, Job, field};
 use super::paint::Header;
-use super::screen::{Ask, Group, Kept, Row, Screen, Shell};
+use super::screen::{Ask, Kept, Row, Screen, Shell};
 use super::{Alternate, BACK, QUIT, Stage, at_a_terminal, walk};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
@@ -260,54 +260,32 @@ fn the_first_screen_of_a_fresh_machine_offers_one_thing() {
 
 /// **The `Done when`, first half of it: `← Back` returns from every screen in the tree.**
 ///
-/// Every door on the home screen, and every leaf behind every door, entered and backed out
-/// of — with the highlight checked on the way home each time.
+/// Every command on the home screen, entered and backed out of, with the highlight checked
+/// on the way home each time. There is one level to come back from since the doors went: a
+/// command is on the front page, and choosing it opens its flow.
 #[test]
 fn back_returns_from_every_screen_in_the_tree() {
-    let home = Screen::Home { cursor: 0 };
-    let doors = match home.face(&Bench::default()) {
-        super::Face::Menu(menu) => menu.choices(),
-        super::Face::Ask(_) => unreachable!("the home screen is a menu"),
-    };
+    for command in 0..commands_on_the_home_screen() {
+        let seen = session(vec![Does::Pick(command), Does::Leave, Does::Leave]).seen;
 
-    for door in 0..doors {
-        let mut script = vec![Does::Pick(door)];
-
-        // A group has leaves of its own; a leaf on the home screen has none.
-        let leaves = leaves_behind(door);
-        for leaf in 0..leaves {
-            script.push(Does::Pick(leaf));
-            script.push(Does::Leave);
-        }
-
-        script.push(Does::Leave);
-        script.push(Does::Leave);
-
-        let seen = session(script).seen;
         assert_eq!(
             seen.first().map(String::as_str),
             Some("·"),
-            "door {door} did not start at the menu: {seen:?}"
+            "command {command} did not start at the menu: {seen:?}"
         );
         assert_eq!(
             seen.last().map(String::as_str),
             Some("·"),
-            "door {door} never came home: {seen:?}"
+            "command {command} never came home: {seen:?}"
         );
     }
 }
 
-/// How many leaves sit behind door `index` on the home screen.
-fn leaves_behind(index: usize) -> usize {
-    let home = Screen::Home { cursor: 0 };
-    match home.chose(&shell(false), &Bench::default(), index) {
-        super::Flow::To(Screen::Group { group, .. }) => {
-            match (Screen::Group { group, cursor: 0 }).face(&Bench::default()) {
-                super::Face::Menu(menu) => menu.choices(),
-                super::Face::Ask(_) => 0,
-            }
-        }
-        _ => 0,
+/// How many commands the home screen offers, headings not counted.
+fn commands_on_the_home_screen() -> usize {
+    match (Screen::Home { cursor: 0 }).face(&Bench::default()) {
+        super::Face::Menu(menu) => menu.choices(),
+        super::Face::Ask(_) => unreachable!("the home screen is a menu"),
     }
 }
 
@@ -334,27 +312,29 @@ fn coming_back_finds_the_highlight_where_it_was_left() {
     );
 }
 
-/// Two levels down and back up: both cursors survive, because the history holds whole
-/// screens rather than a path through them.
+/// Down and back up: the highlight survives, because the history holds whole screens rather
+/// than a path through them.
+///
+/// **One level is the whole depth now that the commands are on the front page.** A flow is a
+/// single screen whose answers change rather than a screen per question — which is why
+/// `← Back` inside one drops an answer instead of popping a screen, and that half is
+/// `back_inside_a_flow_undoes_one_question_at_a_time`. The row picked here is deliberately
+/// not the first: a menu that came home to the top would pass a test that started there.
 #[test]
 fn every_cursor_on_the_way_down_survives_the_way_up() {
-    let seen = session(vec![
-        Does::Pick(1),
-        Does::Pick(3),
-        Does::Leave,
-        Does::Leave,
-        Does::Leave,
-    ]);
+    let seen = session(vec![Does::Pick(8), Does::Leave, Does::Leave]);
 
-    // Five screens: the menu, the group, the leaf, and then both of them again on the way
-    // back up. The last two are the ones that matter.
+    // Three screens: the menu, the command, and the menu again on the way back up.
     let at = seen.started_at;
     let chose = seen.answered_at;
-    assert_eq!(at.len(), 5, "{at:?}");
+    assert_eq!(at.len(), 3, "{at:?}");
     // Row 1, not row 0: every page opens on the first thing under its first heading.
-    assert_eq!(at[..3], [1, 1, 1], "a screen opened somewhere unexpected");
-    assert_eq!(at[3], chose[1], "the group lost its highlight: {at:?}");
-    assert_eq!(at[4], chose[0], "the menu lost its highlight: {at:?}");
+    assert_eq!(at[..2], [1, 1], "a screen opened somewhere unexpected");
+    assert_ne!(
+        chose[0], 1,
+        "the test picked the row it would have opened on"
+    );
+    assert_eq!(at[2], chose[0], "the menu lost its highlight: {at:?}");
 }
 
 /// Esc does what `← Back` does. Rule: *"`Esc` from any text or password prompt"*, and the
@@ -369,12 +349,12 @@ fn esc_is_the_same_as_choosing_back() {
 /// The root has nothing behind it, so its last item says so rather than lying about it.
 #[test]
 fn the_root_offers_quit_and_everywhere_else_offers_back() {
-    let seen = session(vec![Does::Pick(0), Does::Leave, Does::Leave]);
+    let seen = session(vec![Does::Pick(2), Does::Leave, Does::Leave]);
 
     let root = seen.listed.first().expect("the menu was drawn");
     assert_eq!(root.last().map(String::as_str), Some(QUIT));
 
-    let inside = seen.listed.get(1).expect("the group was drawn");
+    let inside = seen.listed.get(1).expect("the command was drawn");
     assert_eq!(inside.last().map(String::as_str), Some(BACK));
 }
 
@@ -401,7 +381,7 @@ fn no_menu_anywhere_is_a_dead_end() {
 /// Ctrl-C from anywhere ends the session rather than stepping back one screen at a time.
 #[test]
 fn ctrl_c_leaves_from_wherever_it_is_pressed() {
-    let seen = session(vec![Does::Pick(0), Does::Pick(1), Does::Quit]);
+    let seen = session(vec![Does::Pick(1), Does::Fill, Does::Quit]);
     assert_eq!(
         seen.seen.len(),
         3,
@@ -414,30 +394,21 @@ fn ctrl_c_leaves_from_wherever_it_is_pressed() {
 /// `sloop` line somebody could paste.
 #[test]
 fn every_leaf_names_a_command_that_could_be_pasted() {
-    for group in Group::ALL {
-        let screen = Screen::Group {
-            group: *group,
-            cursor: 0,
-        };
-        let count = match screen.face(&Bench::default()) {
-            super::Face::Menu(menu) => menu.choices(),
-            super::Face::Ask(_) => 0,
-        };
+    let screen = Screen::Home { cursor: 0 };
 
-        for index in 0..count {
-            let super::Flow::To(Screen::Doing { leaf, .. }) =
-                screen.chose(&shell(false), &Bench::default(), index)
-            else {
-                panic!("{group:?} item {index} does not open a command");
-            };
-            assert!(
-                leaf.command.starts_with("sloop "),
-                "{:?} names {:?}, which is not a command",
-                leaf.title,
-                leaf.command
-            );
-            assert!(!leaf.blurb.is_empty(), "{:?} says nothing", leaf.title);
-        }
+    for index in 0..commands_on_the_home_screen() {
+        let super::Flow::To(Screen::Doing { leaf, .. }) =
+            screen.chose(&shell(false), &Bench::default(), index)
+        else {
+            panic!("home item {index} does not open a command");
+        };
+        assert!(
+            leaf.command.starts_with("sloop "),
+            "{:?} names {:?}, which is not a command",
+            leaf.title,
+            leaf.command
+        );
+        assert!(!leaf.blurb.is_empty(), "{:?} says nothing", leaf.title);
     }
 }
 
@@ -647,25 +618,10 @@ fn every_leaf() -> Vec<(usize, usize, Job)> {
     };
 
     for door in 0..doors {
-        match home.chose(&shell(false), &bench, door) {
-            super::Flow::To(Screen::Group { group, .. }) => {
-                let inside = Screen::Group { group, cursor: 0 };
-                let leaves = match inside.face(&bench) {
-                    super::Face::Menu(menu) => menu.choices(),
-                    super::Face::Ask(_) => 0,
-                };
-                for leaf in 0..leaves {
-                    if let super::Flow::To(Screen::Doing { leaf: what, .. }) =
-                        inside.chose(&shell(false), &bench, leaf)
-                    {
-                        found.push((door, leaf, what.job));
-                    }
-                }
-            }
-            super::Flow::To(Screen::Doing { leaf: what, .. }) => {
-                found.push((door, usize::MAX, what.job));
-            }
-            _ => {}
+        if let super::Flow::To(Screen::Doing { leaf: what, .. }) =
+            home.chose(&shell(false), &bench, door)
+        {
+            found.push((door, usize::MAX, what.job));
         }
     }
     found
@@ -752,7 +708,7 @@ fn a_flow_always_shows_what_it_is_about_to_do() {
 
     // Databases, then Rename one: two questions, and the third screen runs it.
     let (seen, _) = run_it(
-        vec![Does::Pick(0), Does::Pick(5), Does::Fill, Does::Fill],
+        vec![Does::Pick(5), Does::Fill, Does::Fill],
         &mut shell(false),
         &mut bench,
         &mut curtain,
@@ -777,7 +733,6 @@ fn what_was_answered_is_what_the_command_is_handed() {
     // Databases → Rename one → the second database → a new name → run it.
     run_it(
         vec![
-            Does::Pick(0),
             Does::Pick(5),
             Does::Pick(1),
             Does::Type("orders_old"),
@@ -806,7 +761,6 @@ fn back_inside_a_flow_undoes_one_question_at_a_time() {
 
     let (seen, _) = run_it(
         vec![
-            Does::Pick(0),
             Does::Pick(0),
             Does::Type("orders"),
             Does::Pick(1),
@@ -842,7 +796,6 @@ fn the_answers_before_the_dropped_one_survive() {
     // given before the change of mind stands.
     let mut script = vec![
         Does::Pick(0),
-        Does::Pick(0),
         Does::Type("orders"),
         Does::Pick(0),
         Does::Leave,
@@ -874,7 +827,6 @@ fn a_job_that_fails_leaves_the_flow_where_it_was() {
 
     let (seen, exit) = run_it(
         vec![
-            Does::Pick(0),
             Does::Pick(5),
             Does::Fill,
             Does::Type("orders_old"),
@@ -899,12 +851,12 @@ fn a_job_that_fails_leaves_the_flow_where_it_was() {
 /// A job that works leaves the flow behind, so nothing is one keystroke away from being
 /// run a second time.
 #[test]
-fn a_job_that_works_goes_back_to_the_group_it_came_from() {
+fn a_job_that_works_comes_back_to_the_menu() {
     let mut bench = Bench::default();
     let mut curtain = Curtain::default();
 
     let (seen, exit) = run_it(
-        vec![Does::Pick(0), Does::Pick(2), Does::Fill, Does::Quit],
+        vec![Does::Pick(2), Does::Fill, Does::Quit],
         &mut shell(false),
         &mut bench,
         &mut curtain,
@@ -914,8 +866,8 @@ fn a_job_that_works_goes_back_to_the_group_it_came_from() {
     assert_eq!(bench.ran.len(), 1, "{:?}", bench.ran);
     assert_eq!(
         seen.seen.last().map(String::as_str),
-        Some("Databases"),
-        "a finished job did not come back to its group: {:?}",
+        Some("·"),
+        "a finished job did not come back to the menu: {:?}",
         seen.seen
     );
 }
@@ -928,7 +880,7 @@ fn a_flow_screen_names_every_step_that_reached_it() {
     let mut curtain = Curtain::default();
 
     let (seen, _) = run_it(
-        vec![Does::Pick(0), Does::Pick(5), Does::Quit],
+        vec![Does::Pick(5), Does::Quit],
         &mut shell(false),
         &mut bench,
         &mut curtain,
@@ -955,15 +907,6 @@ fn every_menu() -> Vec<(&'static str, super::screen::Menu)> {
         ("the first run", Screen::FirstRun { cursor: 0 }),
         ("the menu", Screen::Home { cursor: 0 }),
     ];
-    for group in Group::ALL {
-        pages.push((
-            "a group",
-            Screen::Group {
-                group: *group,
-                cursor: 0,
-            },
-        ));
-    }
     // And every flow's first screen, plus the screen that runs it.
     for (door, leaf, _) in every_leaf() {
         let opening = reach(door, leaf, &bench);
@@ -1106,29 +1049,24 @@ fn choosing_a_heading_moves_to_what_is_under_it_and_does_nothing_else() {
 fn every_command_in_the_tree_names_its_flag_form() {
     let bench = Bench::default();
 
-    for group in Group::ALL {
-        let page = Screen::Group {
-            group: *group,
-            cursor: 0,
-        };
-        let super::Face::Menu(menu) = page.face(&bench) else {
-            panic!("{group:?} is not a menu");
-        };
+    let page = Screen::Home { cursor: 0 };
+    let super::Face::Menu(menu) = page.face(&bench) else {
+        panic!("the home screen is not a menu");
+    };
 
-        for row in menu.rows() {
-            let Row::Item(item, _) = row else { continue };
-            assert!(
-                item.command.starts_with("sloop "),
-                "{group:?}: {:?} names no command",
-                item.title
-            );
-            assert_eq!(
-                item.beside(),
-                item.command,
-                "{group:?}: {:?} shows something other than its command",
-                item.title
-            );
-        }
+    for row in menu.rows() {
+        let Row::Item(item, _) = row else { continue };
+        assert!(
+            item.command.starts_with("sloop "),
+            "{:?} names no command",
+            item.title
+        );
+        assert_eq!(
+            item.beside(),
+            item.command,
+            "{:?} shows something other than its command",
+            item.title
+        );
     }
 }
 
@@ -1220,7 +1158,7 @@ fn a_required_box_refuses_a_blank_and_says_so_on_the_spot() {
 
     // Databases > Make a new database > Enter on the empty name.
     let (seen, _) = run_it(
-        vec![Does::Pick(0), Does::Pick(1), Does::Enter, Does::Quit],
+        vec![Does::Pick(1), Does::Enter, Does::Quit],
         &mut shell(false),
         &mut bench,
         &mut curtain,
@@ -1232,10 +1170,7 @@ fn a_required_box_refuses_a_blank_and_says_so_on_the_spot() {
 
     // And the same thing said directly: a blank into the box comes back as a complaint on
     // the screen it was typed into, not as an answer.
-    let page = Screen::Group {
-        group: Group::Databases,
-        cursor: 0,
-    };
+    let page = Screen::Home { cursor: 0 };
     let super::Flow::To(mut making) = page.chose(&shell(false), &bench, 1) else {
         panic!("the flow did not open");
     };
