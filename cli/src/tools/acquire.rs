@@ -456,15 +456,25 @@ fn package_manager_offer(engine: Engine) -> Option<Offer> {
 }
 
 fn on_path(program: &str) -> bool {
-    let names = if cfg!(windows) {
-        vec![format!("{program}.exe")]
+    let name = if cfg!(windows) {
+        format!("{program}.exe")
     } else {
-        vec![program.to_owned()]
+        program.to_owned()
     };
+    on_path_at(&name).is_some()
+}
 
-    std::env::var_os("PATH").is_some_and(|path| {
+/// The same question, answered with *where* rather than *whether*.
+///
+/// **`R19d` needs the path, not the yes.** Verifying a MySQL archive runs `gpg`, and running
+/// a program found on `PATH` by full path is what keeps it the one that was looked for.
+/// `name` carries its own extension, because the caller already knows which it wants.
+#[must_use]
+pub fn on_path_at(name: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH").and_then(|path| {
         std::env::split_paths(&path)
-            .any(|directory| names.iter().any(|name| directory.join(name).is_file()))
+            .map(|directory| directory.join(name))
+            .find(|candidate| candidate.is_file())
     })
 }
 
@@ -538,7 +548,7 @@ fn index_note(workspace: &Path, release: &releases::Release) -> Option<String> {
 /// In order of preference, and every one of them is a program that was already installed:
 /// `curl`, then PowerShell's `Invoke-WebRequest`, then `wget`. There is no fourth option and
 /// there is deliberately no HTTP client in this binary to fall back on.
-fn download(url: &str, to: &Path) -> Outcome<()> {
+pub fn download(url: &str, to: &Path) -> Outcome<()> {
     let mut attempts: Vec<(&str, Vec<String>)> = Vec::new();
 
     if on_path("curl") {
@@ -672,7 +682,7 @@ fn verify(archive: &Path, release: &releases::Release) -> Outcome<()> {
 }
 
 /// SHA-256 of a file, read a block at a time so a 300 MB archive is not held in memory.
-fn sha256_of(path: &Path) -> Outcome<String> {
+pub fn sha256_of(path: &Path) -> Outcome<String> {
     let mut file = std::fs::File::open(path).map_err(|error| {
         Failure::new(
             Exit::Usage,

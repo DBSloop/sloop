@@ -20,6 +20,7 @@
 //! them so the choice is never a mystery.
 
 pub mod acquire;
+pub mod proof;
 pub mod releases;
 
 #[cfg(test)]
