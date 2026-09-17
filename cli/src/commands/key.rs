@@ -21,7 +21,7 @@ use std::path::Path;
 use crate::crypt::{self, PrivateKey};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
-use crate::registry::file::{Encryption, KeyKept, SEALED_FILE};
+use crate::registry::file::{Encryption, KeyKept};
 use crate::registry::{Registries, Scope};
 use crate::style;
 
@@ -40,11 +40,12 @@ impl Context<'_> {
         self.registries.writes_to()
     }
 
-    /// Where that scope keeps its encrypted file.
-    fn sealed(&self) -> std::path::PathBuf {
-        self.registries
-            .sealed_in(self.scope())
-            .unwrap_or_else(|| self.global.join(SEALED_FILE))
+    /// Where that scope keeps its encrypted passwords — a row, since `R19c4`.
+    fn vault(&self) -> Outcome<crate::secret::sealed::Vault<'static>> {
+        let scope = self.scope();
+        self.registries.vault_in(scope).ok_or_else(|| {
+            crate::failure::Failure::usage("there is no registry in that scope to keep a key in")
+        })
     }
 
     /// The keypair this registry already has, if any.
@@ -63,16 +64,16 @@ impl Context<'_> {
 /// same generation `backup` does, in the same place, with the same route.
 pub fn export(context: &mut Context<'_>) -> Outcome<Exit> {
     let scope = context.scope();
-    let sealed = context.sealed();
+    let vault = context.vault()?;
 
     let (encryption, fresh) = match context.existing() {
         Some(existing) => (existing, false),
-        None => (create(&mut context.registries, scope, &sealed)?, true),
+        None => (create(&mut context.registries, scope, &vault)?, true),
     };
 
     let private = crypt::Store {
         route: &encryption.private_key,
-        sealed_file: &sealed,
+        vault: &vault,
     }
     .fetch(&encryption.public_key)?;
 
@@ -147,7 +148,7 @@ pub fn export(context: &mut Context<'_>) -> Outcome<Exit> {
 /// Take a private key exported somewhere else.
 pub fn import(context: &mut Context<'_>) -> Outcome<Exit> {
     let scope = context.scope();
-    let sealed = context.sealed();
+    let vault = context.vault()?;
     let private = read_a_key()?;
     let public = private.public();
 
@@ -157,7 +158,7 @@ pub fn import(context: &mut Context<'_>) -> Outcome<Exit> {
             // somebody moving to a new machine is actually doing.
             crypt::Store {
                 route: &existing.private_key,
-                sealed_file: &sealed,
+                vault: &vault,
             }
             .keep(&private)?;
             crate::say!(
@@ -183,7 +184,7 @@ pub fn import(context: &mut Context<'_>) -> Outcome<Exit> {
         ));
     }
 
-    let route = crypt::keep_somewhere(&private, &sealed)?;
+    let route = crypt::keep_somewhere(&private, &vault)?;
     write_the_block(
         &mut context.registries,
         scope,
@@ -225,9 +226,13 @@ pub fn import(context: &mut Context<'_>) -> Outcome<Exit> {
 ///
 /// Shared with `backup`, which reaches this same path the first time it runs against a
 /// registry with no key.
-pub fn create(registries: &mut Registries, scope: Scope, sealed: &Path) -> Outcome<Encryption> {
+pub fn create(
+    registries: &mut Registries,
+    scope: Scope,
+    vault: &crate::secret::sealed::Vault<'_>,
+) -> Outcome<Encryption> {
     let private = PrivateKey::generate();
-    let route = crypt::keep_somewhere(&private, sealed)?;
+    let route = crypt::keep_somewhere(&private, vault)?;
 
     let encryption = Encryption {
         public_key: private.public(),

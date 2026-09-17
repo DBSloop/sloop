@@ -608,7 +608,7 @@ fn role_password(asked: &Building<'_>) -> Outcome<(Secret, bool)> {
             &Route::Command(command.to_owned()),
             &Lookup {
                 key: role_for(asked),
-                sealed_file: Path::new(""),
+                vault: &crate::secret::sealed::Vault::File(Path::new("")),
             },
         )?;
         return Ok((resolved.secret, false));
@@ -696,7 +696,7 @@ fn superuser_password(
             &Route::Command(command.to_owned()),
             &Lookup {
                 key: superuser,
-                sealed_file: Path::new(""),
+                vault: &crate::secret::sealed::Vault::File(Path::new("")),
             },
         )?;
         return Ok(resolved.secret);
@@ -1201,16 +1201,17 @@ fn secret_for(
         // that insisted the variable already be set would make the useful case impossible.
         // `--test` is the way to say "and prove it works", and that path does fail.
         let key = database.credential_key();
-        let sealed = context
+        let scope = context.registries.writes_to();
+        let vault = context
             .registries
-            .sealed_in(context.registries.writes_to())
-            .unwrap_or_default();
+            .vault_in(scope)
+            .unwrap_or_else(crate::secret::sealed::Vault::nowhere);
 
         match resolve(
             route,
             &Lookup {
                 key: &key,
-                sealed_file: &sealed,
+                vault: &vault,
             },
         ) {
             Ok(resolved) => {
@@ -1308,13 +1309,15 @@ fn carry_over(before: &Database, context: &Context<'_>, scope: Scope) -> Option<
     }
 
     let key = before.credential_key();
-    let sealed = context.registries.sealed_in(scope).unwrap_or_default();
+    // `?` on the Option rather than a failure: this whole function answers "is there an
+    // old password worth carrying over", and no registry in that scope is a `no`.
+    let vault = context.registries.vault_in(scope)?;
 
     resolve(
         &before.password,
         &Lookup {
             key: &key,
-            sealed_file: &sealed,
+            vault: &vault,
         },
     )
     .ok()
@@ -1329,13 +1332,16 @@ fn connect(
 ) -> Outcome<crate::engine::ServerInfo> {
     let key = database.credential_key();
     let route = database.password.overridden_by(context.password_command);
-    let sealed = context.registries.sealed_in(scope).unwrap_or_default();
+    let vault = context
+        .registries
+        .vault_in(scope)
+        .unwrap_or_else(crate::secret::sealed::Vault::nowhere);
 
     let resolved = resolve(
         &route,
         &Lookup {
             key: &key,
-            sealed_file: &sealed,
+            vault: &vault,
         },
     )?;
     for note in &resolved.notes {
@@ -1470,10 +1476,10 @@ fn store(
     match route {
         Route::Keyring => crate::secret::os_keyring::set(key, secret),
         Route::EncryptedFile => {
-            let path = registries.sealed_in(scope).ok_or_else(|| {
-                Failure::usage("there is nowhere to put the encrypted password file")
-            })?;
-            crate::secret::sealed::put(&path, key, secret)
+            let vault = registries
+                .vault_in(scope)
+                .ok_or_else(|| Failure::usage("there is nowhere to put the encrypted password"))?;
+            crate::secret::sealed::put(&vault, key, secret)
         }
         // Nothing to store: the route is the answer.
         Route::Environment(_) | Route::Command(_) => Ok(()),
@@ -1484,10 +1490,10 @@ fn forget(route: &Route, key: &str, registries: &Registries, scope: Scope) -> Ou
     match route {
         Route::Keyring => crate::secret::os_keyring::delete(key),
         Route::EncryptedFile => {
-            let path = registries.sealed_in(scope).ok_or_else(|| {
-                Failure::usage("there is nowhere to look for the encrypted password file")
+            let vault = registries.vault_in(scope).ok_or_else(|| {
+                Failure::usage("there is nowhere to look for the encrypted password")
             })?;
-            crate::secret::sealed::forget(&path, key)
+            crate::secret::sealed::forget(&vault, key)
         }
         Route::Environment(_) | Route::Command(_) => Ok(()),
     }
@@ -1603,12 +1609,15 @@ pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
     // "about to destroy X" had better be true before it is printed.
     let key = record.credential_key();
     let route = record.password.overridden_by(context.password_command);
-    let sealed = context.registries.sealed_in(scope).unwrap_or_default();
+    let vault = context
+        .registries
+        .vault_in(scope)
+        .unwrap_or_else(crate::secret::sealed::Vault::nowhere);
     let resolved = resolve(
         &route,
         &Lookup {
             key: &key,
-            sealed_file: &sealed,
+            vault: &vault,
         },
     )?;
     let target = record.target(&resolved.secret);

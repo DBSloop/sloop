@@ -18,10 +18,14 @@ const NASTY: &str =
 /// The same, with the trailing space that a copy-and-paste brings along.
 const NASTY_TRAILING: &str = r#"p@ss\word "double" 'single' end "#;
 
-fn lookup(sealed: &Path) -> Lookup<'_> {
+fn vault(sealed: &Path) -> super::sealed::Vault<'_> {
+    super::sealed::Vault::File(sealed)
+}
+
+fn lookup<'a>(vault: &'a super::sealed::Vault<'a>) -> Lookup<'a> {
     Lookup {
         key: "postgres://app@db.internal:5432/app",
-        sealed_file: sealed,
+        vault,
     }
 }
 
@@ -229,7 +233,7 @@ fn with_no_terminal_it_names_the_variable_instead_of_stopping_to_ask() {
 #[test]
 fn asking_the_encrypted_file_for_a_file_that_is_not_there_says_which() {
     let missing = std::env::temp_dir().join("sloop-no-such-sealed-file");
-    let failure = super::sealed::get(&missing, "anything").unwrap_err();
+    let failure = super::sealed::get(&vault(&missing), "anything").unwrap_err();
 
     assert_eq!(failure.exit().code(), 2);
     assert!(failure.message().contains("sloop-no-such-sealed-file"));
@@ -325,7 +329,8 @@ fn a_nasty_password_round_trips_through_an_environment_variable() {
 #[ignore = "re-executed with SLOOP_TEST_NASTY set"]
 fn environment_child() {
     let route = Route::Environment("SLOOP_TEST_NASTY".to_owned());
-    let resolved = resolve(&route, &lookup(Path::new("unused"))).expect("the variable is set");
+    let resolved =
+        resolve(&route, &lookup(&vault(Path::new("unused")))).expect("the variable is set");
 
     assert_eq!(
         resolved.secret.expose(),
@@ -338,7 +343,7 @@ fn environment_child() {
 #[test]
 fn a_variable_that_is_not_set_is_a_usage_error_naming_it() {
     let route = Route::Environment("SLOOP_DEFINITELY_NOT_SET_ANYWHERE".to_owned());
-    let failure = resolve(&route, &lookup(Path::new("unused"))).unwrap_err();
+    let failure = resolve(&route, &lookup(&vault(Path::new("unused")))).unwrap_err();
 
     assert_eq!(failure.exit().code(), 2);
     assert!(

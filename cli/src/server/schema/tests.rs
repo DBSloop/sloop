@@ -48,7 +48,7 @@ fn tables_created() -> Vec<String> {
 /// the scan keys on. A migration that reaches for a type not on this list makes
 /// [`the_column_scan_actually_reads_the_migrations`] fail rather than quietly shrinking what
 /// the two rule tests below look at.
-const TYPES: [&str; 8] = [
+const TYPES: [&str; 9] = [
     "BIGSERIAL",
     "BIGINT",
     "INTEGER",
@@ -57,6 +57,7 @@ const TYPES: [&str; 8] = [
     "DATE",
     "TIMESTAMPTZ",
     "DOUBLE",
+    "BYTEA",
 ];
 
 /// Every column declared by the migrations, as `(table, column)`.
@@ -187,7 +188,11 @@ fn only_the_ledger_is_created_if_not_exists() {
 #[test]
 fn every_table_is_reachable_from_a_documented_query() {
     let created = tables_created();
-    assert_eq!(created.len(), 10, "the schema is ten tables: {created:?}");
+    assert_eq!(
+        created.len(),
+        11,
+        "the schema is eleven tables: {created:?}"
+    );
 
     for table in &created {
         let reading = READINGS
@@ -341,7 +346,7 @@ fn the_column_scan_actually_reads_the_migrations() {
     // Every table, and a plausible number of columns in total.
     let tables: std::collections::BTreeSet<&str> =
         columns.iter().map(|(table, _)| table.as_str()).collect();
-    assert_eq!(tables.len(), 10, "the scan missed a table: {tables:?}");
+    assert_eq!(tables.len(), 11, "the scan missed a table: {tables:?}");
     assert!(
         columns.len() > 70,
         "the scan found only {} columns, which is not this schema",

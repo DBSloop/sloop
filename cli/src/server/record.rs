@@ -117,6 +117,37 @@ pub fn database_route(global: &Path) -> Outcome<Option<Route>> {
     }
 }
 
+/// sloop's own database and the password that opens it, as a previous run settled them.
+///
+/// `None` on a machine that has not been set up, which is the state `R19c4` has to turn into
+/// *"run `sloop setup`"* rather than into a crash. The password comes back off whichever of
+/// `R3`'s routes the record names — it is never in the record itself.
+pub fn database(global: &Path) -> Outcome<Option<(super::own::Own, Secret)>> {
+    let Some(raw) = read(global)? else {
+        return Ok(None);
+    };
+    let (Some(database), server) = (raw.database.clone(), server_from(&raw)) else {
+        return Ok(None);
+    };
+
+    let own = super::own::Own {
+        database: database.name,
+        role: database.role,
+    };
+    let password = crate::secret::resolve(
+        &Route::parse(&database.password)?,
+        &crate::secret::Lookup {
+            key: &own.credential_key(&server),
+            vault: &crate::secret::sealed::Vault::File(
+                &global.join(crate::registry::file::SEALED_FILE),
+            ),
+        },
+    )?
+    .secret;
+
+    Ok(Some((own, password)))
+}
+
 /// Write down sloop's own database, and put the owning role's password where this machine
 /// keeps secrets.
 pub fn remember_database(
@@ -128,7 +159,7 @@ pub fn remember_database(
     let route = crate::secret::keep_somewhere(
         own.credential_key(server),
         password,
-        &global.join(crate::registry::file::SEALED_FILE),
+        &crate::secret::sealed::Vault::File(&global.join(crate::registry::file::SEALED_FILE)),
     )?;
 
     let mut raw = read(global)?.ok_or_else(|| {
@@ -165,7 +196,7 @@ pub fn write(global: &Path, server: &Server, password: &Secret) -> Outcome<()> {
     let route = crate::secret::keep_somewhere(
         credential_key(server),
         password,
-        &global.join(crate::registry::file::SEALED_FILE),
+        &crate::secret::sealed::Vault::File(&global.join(crate::registry::file::SEALED_FILE)),
     )?;
 
     let raw = RawFile {
@@ -198,18 +229,7 @@ pub fn reopen(global: &Path) -> Outcome<Option<Ready>> {
         return Ok(None);
     };
     let file = path(global);
-
-    let server = Server {
-        bin: PathBuf::from(&raw.bin),
-        data: raw.data.as_ref().map(PathBuf::from),
-        port: raw.port,
-        superuser: raw.superuser,
-        origin: if raw.origin == "sloop" {
-            Origin::Sloops
-        } else {
-            Origin::Machines
-        },
-    };
+    let server = server_from(&raw);
 
     if !server.program("psql").is_file() {
         crate::note!(
@@ -228,7 +248,9 @@ pub fn reopen(global: &Path) -> Outcome<Option<Ready>> {
         &route,
         &crate::secret::Lookup {
             key: &credential_key(&server),
-            sealed_file: &global.join(crate::registry::file::SEALED_FILE),
+            vault: &crate::secret::sealed::Vault::File(
+                &global.join(crate::registry::file::SEALED_FILE),
+            ),
         },
     )?
     .secret;
@@ -242,6 +264,25 @@ pub fn reopen(global: &Path) -> Outcome<Option<Ready>> {
         password,
         made_now: false,
     }))
+}
+
+/// The server a record describes.
+///
+/// One builder, because there are two readers now — [`reopen`] and [`database`] — and a
+/// second copy of this is a second chance for one of them to read `origin` differently and
+/// start a cluster that is not sloop's to start.
+fn server_from(raw: &RawFile) -> Server {
+    Server {
+        bin: PathBuf::from(&raw.bin),
+        data: raw.data.as_ref().map(PathBuf::from),
+        port: raw.port,
+        superuser: raw.superuser.clone(),
+        origin: if raw.origin == "sloop" {
+            Origin::Sloops
+        } else {
+            Origin::Machines
+        },
+    }
 }
 
 /// Forget the record, for a Setup that is being run again from nothing.

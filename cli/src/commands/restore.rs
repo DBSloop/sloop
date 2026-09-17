@@ -59,6 +59,14 @@ pub struct Context<'a> {
 }
 
 /// Put a backup back.
+/// Where this scope keeps its encrypted passwords, or nowhere for a route that needs none.
+fn vault_for(context: &Context<'_>, scope: Scope) -> crate::secret::sealed::Vault<'static> {
+    context
+        .registries
+        .vault_in(scope)
+        .unwrap_or_else(crate::secret::sealed::Vault::nowhere)
+}
+
 pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exit> {
     let (scope, record) = context.registries.find(name)?;
     let record = record.clone();
@@ -114,12 +122,12 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
 
     let key = record.credential_key();
     let route = record.password.overridden_by(context.password_command);
-    let sealed = context.registries.sealed_in(scope).unwrap_or_default();
+    let vault = vault_for(context, scope);
     let resolved = resolve(
         &route,
         &Lookup {
             key: &key,
-            sealed_file: &sealed,
+            vault: &vault,
         },
     )?;
     for note in &resolved.notes {
@@ -327,10 +335,13 @@ fn key_for(
         .hint("the key that made a backup is the only key that can open it — `sloop key import`"));
     }
 
-    let sealed = context.registries.sealed_in(scope).unwrap_or_default();
+    let vault = context
+        .registries
+        .vault_in(scope)
+        .unwrap_or_else(crate::secret::sealed::Vault::nowhere);
     crypt::Store {
         route: &encryption.private_key,
-        sealed_file: &sealed,
+        vault: &vault,
     }
     .fetch(&encryption.public_key)
     .map(Some)

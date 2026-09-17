@@ -65,22 +65,112 @@ impl Default for Cost {
     }
 }
 
+/// Somewhere a sealed store's bytes live that is not a file.
+///
+/// **A trait so that `secret` does not have to know what a table is.** `R19c4` moves the
+/// sealed store into `sloop_database`, and the implementation of this lives over in
+/// `registry::store` — which already depends on `secret`, so the dependency can only point
+/// one way.
+pub trait Shelf {
+    /// The whole store, or empty when there has never been one.
+    fn read(&self) -> Outcome<Vec<u8>>;
+    /// Put the whole store back. An empty slice means there is nothing left to keep.
+    fn write(&self, blob: &[u8]) -> Outcome<()>;
+    /// How it reads in a message. Never a secret — it is a table name or a path.
+    fn describe(&self) -> String;
+}
+
+/// Where a sealed store lives.
+///
+/// **Two places, and the split is not arbitrary.** `Rows` is where every registry's passwords
+/// went in `R19c4`. `File` is what is left: sloop's own superuser and `sloop_db_admin`
+/// passwords, which open the database and therefore cannot be kept inside it.
+pub enum Vault<'a> {
+    /// A file on disk.
+    File(&'a Path),
+    /// A row in sloop's own database.
+    ///
+    /// Boxed because the thing that knows how to reach one row is built on the spot — it is a
+    /// store and a registry name together — and there is nowhere for a caller to keep it.
+    Rows(Box<dyn Shelf + 'a>),
+}
+
+impl Vault<'static> {
+    /// No store at all.
+    ///
+    /// **For a route that does not use one**, which is three of the four: a keyring, an
+    /// environment variable and a command all fetch a password from somewhere else entirely.
+    /// Reaching this is what a wrong route looks like, so it fails when it is *read* rather
+    /// than when it is built — which is what an empty path used to do, and what keeps
+    /// `db test` on a `${VAR}` entry working in a registry that has no sealed store at all.
+    #[must_use]
+    pub fn nowhere() -> Self {
+        Self::File(Path::new(""))
+    }
+}
+
+impl Vault<'_> {
+    /// The bytes as they stand, or empty where there is no store yet.
+    fn bytes(&self) -> Outcome<Vec<u8>> {
+        match self {
+            Self::File(path) if !path.is_file() => Ok(Vec::new()),
+            Self::File(path) => std::fs::read(path).map_err(|error| {
+                Failure::new(
+                    Exit::Usage,
+                    format!("could not read {}: {error}", path.display()),
+                )
+            }),
+            Self::Rows(rows) => rows.read(),
+        }
+    }
+
+    /// Put the whole store back.
+    fn replace(&self, blob: &[u8]) -> Outcome<()> {
+        match self {
+            Self::File(path) => {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| {
+                        Failure::new(
+                            Exit::Usage,
+                            format!("could not create {}: {error}", parent.display()),
+                        )
+                    })?;
+                }
+                std::fs::write(path, blob).map_err(|error| {
+                    Failure::new(
+                        Exit::Usage,
+                        format!("could not write {}: {error}", path.display()),
+                    )
+                })
+            }
+            Self::Rows(rows) => rows.write(blob),
+        }
+    }
+
+    /// How it reads in a message.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match self {
+            Self::File(path) => path.display().to_string(),
+            Self::Rows(rows) => rows.describe(),
+        }
+    }
+}
+
 /// Read the password stored under `key`.
-pub fn get(path: &Path, key: &str) -> Outcome<Secret> {
-    if !path.is_file() {
+pub fn get(vault: &Vault<'_>, key: &str) -> Outcome<Secret> {
+    let bytes = vault.bytes()?;
+    if bytes.is_empty() {
         return Err(Failure::new(
             Exit::Usage,
-            format!("there is no encrypted password file at {}", path.display()),
+            format!(
+                "there is no encrypted password store at {}",
+                vault.describe()
+            ),
         )
         .hint("run `sloop db add` and choose the encrypted file, or use another route"));
     }
 
-    let bytes = std::fs::read(path).map_err(|error| {
-        Failure::new(
-            Exit::Usage,
-            format!("could not read {}: {error}", path.display()),
-        )
-    })?;
     let passphrase = passphrase(false)?;
     let plaintext = open(&bytes, &passphrase)?;
 
@@ -91,43 +181,38 @@ pub fn get(path: &Path, key: &str) -> Outcome<Secret> {
         .ok_or_else(|| {
             Failure::new(
                 Exit::Usage,
-                format!("the encrypted file has no password for {key}"),
+                format!("the encrypted store has no password for {key}"),
             )
             .hint("run `sloop db add` for it")
         })
 }
 
-/// Store a password under `key`, rewriting the file.
-pub fn put(path: &Path, key: &str, secret: &Secret) -> Outcome<()> {
-    rewrite(path, key, Some(secret))
+/// Store a password under `key`, rewriting the store.
+pub fn put(vault: &Vault<'_>, key: &str, secret: &Secret) -> Outcome<()> {
+    rewrite(vault, key, Some(secret))
 }
 
-/// Take a password out of the file.
+/// Take a password out of the store.
 ///
 /// A key that is not in there is not a failure: `db edit` calls this to clear the old key
 /// after moving a password, and a record whose password was never stored has nothing to
 /// clear. Reporting that as an error would make a successful edit look like a failed one.
-pub fn forget(path: &Path, key: &str) -> Outcome<()> {
-    if !path.is_file() {
+pub fn forget(vault: &Vault<'_>, key: &str) -> Outcome<()> {
+    if vault.bytes()?.is_empty() {
         return Ok(());
     }
-    rewrite(path, key, None)
+    rewrite(vault, key, None)
 }
 
 /// Read the whole store, replace or drop one entry, and write it back.
-fn rewrite(path: &Path, key: &str, secret: Option<&Secret>) -> Outcome<()> {
+fn rewrite(vault: &Vault<'_>, key: &str, secret: Option<&Secret>) -> Outcome<()> {
     let passphrase = passphrase(true)?;
 
-    let mut stored: Vec<(String, Secret)> = if path.is_file() {
-        let bytes = std::fs::read(path).map_err(|error| {
-            Failure::new(
-                Exit::Usage,
-                format!("could not read {}: {error}", path.display()),
-            )
-        })?;
-        entries(&open(&bytes, &passphrase)?)?
-    } else {
+    let bytes = vault.bytes()?;
+    let mut stored: Vec<(String, Secret)> = if bytes.is_empty() {
         Vec::new()
+    } else {
+        entries(&open(&bytes, &passphrase)?)?
     };
 
     stored.retain(|(name, _)| name != key);
@@ -138,20 +223,7 @@ fn rewrite(path: &Path, key: &str, secret: Option<&Secret>) -> Outcome<()> {
     let plaintext = encode(&stored);
     let sealed = seal(&plaintext, &passphrase)?;
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            Failure::new(
-                Exit::Usage,
-                format!("could not create {}: {error}", parent.display()),
-            )
-        })?;
-    }
-    std::fs::write(path, sealed).map_err(|error| {
-        Failure::new(
-            Exit::Usage,
-            format!("could not write {}: {error}", path.display()),
-        )
-    })
+    vault.replace(&sealed)
 }
 
 /// Encrypt `plaintext` under `passphrase`.

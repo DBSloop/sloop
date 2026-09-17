@@ -523,11 +523,12 @@ fn both(project: &[&str], global: &[&str]) -> Registries {
     let world = Fake::default().home("/home/me").project("/home/me/app");
     let resolution = resolve(&at("/home/me/app"), &world, false, None, None).unwrap();
 
-    Registries {
-        project: Some((PathBuf::from("/home/me/app/.sloop"), holding(project))),
-        global: (PathBuf::from("/home/me/.sloop"), holding(global)),
+    Registries::of(
         resolution,
-    }
+        &PathBuf::from("/home/me/.sloop"),
+        holding(global),
+        Some(holding(project)),
+    )
 }
 
 /// **The order every picker in the tool inherits.** `backup`, `restore`, `mirror`, `sync`,
@@ -577,11 +578,12 @@ fn the_global_flag_lists_only_the_global_store() {
     let world = Fake::default().home("/home/me").project("/home/me/app");
     let resolution = resolve(&at("/home/me/app"), &world, true, None, None).unwrap();
 
-    let registries = Registries {
-        project: None,
-        global: (PathBuf::from("/home/me/.sloop"), holding(&["alpha"])),
+    let registries = Registries::of(
         resolution,
-    };
+        &PathBuf::from("/home/me/.sloop"),
+        holding(&["alpha"]),
+        None,
+    );
 
     let listed: Vec<&str> = registries.all().map(|(_, name, _)| name).collect();
     assert_eq!(listed, ["alpha"]);

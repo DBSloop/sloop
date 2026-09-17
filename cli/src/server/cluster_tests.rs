@@ -507,10 +507,15 @@ fn assertions(
 ) {
     // 1. **From nothing.** An empty database gets every migration, in order, and lands on the
     //    newest version this build knows.
+    // Driven from `MIGRATIONS` rather than from a number typed here, so the next migration
+    // is a file and a `READINGS` entry rather than a hunt through this test for fours.
+    let newest = i64::try_from(schema::MIGRATIONS.len()).expect("this many migrations fit");
+    let every_name: Vec<&str> = schema::MIGRATIONS.iter().map(|one| one.name).collect();
+
     let applied = schema::migrate(server, own, password).expect("an empty database migrates");
     assert_eq!(applied.from, 0, "it was not empty to begin with");
-    assert_eq!(applied.to, 4);
-    assert_eq!(applied.ran, ["ledger", "registry", "history", "service"]);
+    assert_eq!(applied.to, newest);
+    assert_eq!(applied.ran, every_name);
     assert!(applied.changed_anything());
 
     // 2. Ten tables, and they are exactly the ten the module documents.
@@ -549,7 +554,11 @@ fn assertions(
     )
     .expect("the migrated database answers");
     let id_columns = rows(&said);
-    assert_eq!(id_columns.len(), 10, "a table has no id: {id_columns:?}");
+    assert_eq!(
+        id_columns.len(),
+        schema::READINGS.len(),
+        "a table has no id: {id_columns:?}"
+    );
     for column in &id_columns {
         assert!(column.contains("bigint"), "{column} is not a BIGSERIAL");
         assert!(
@@ -594,8 +603,8 @@ fn assertions(
 
     // 6. **A second run applies nothing**, which is what makes Setup safe to run again.
     let again = schema::migrate(server, own, password).expect("a second run is ordinary");
-    assert_eq!(again.from, 4);
-    assert_eq!(again.to, 4);
+    assert_eq!(again.from, newest);
+    assert_eq!(again.to, newest);
     assert!(again.ran.is_empty(), "it ran {:?} a second time", again.ran);
     assert!(!again.changed_anything());
 
@@ -618,11 +627,13 @@ fn assertions(
     )
     .expect("a second database can be made on sloop's own cluster");
 
-    let behind = schema::migrate_through(server, &older, password, &schema::MIGRATIONS[..3])
-        .expect("three of four migrations apply");
+    let one_short = schema::MIGRATIONS.len() - 1;
+    let behind =
+        schema::migrate_through(server, &older, password, &schema::MIGRATIONS[..one_short])
+            .expect("every migration but the last applies");
     assert_eq!(behind.from, 0);
-    assert_eq!(behind.to, 3);
-    assert_eq!(behind.ran, ["ledger", "registry", "history"]);
+    assert_eq!(behind.to, newest - 1);
+    assert_eq!(behind.ran, every_name[..one_short]);
 
     // It really is a release behind: the fourth migration's tables are not there yet.
     let said = make::ask(
@@ -630,16 +641,20 @@ fn assertions(
         &older.as_who(),
         Some(password),
         "SELECT count(*) FROM information_schema.tables
-          WHERE table_schema = 'public' AND table_name = 'bandwidth_day';",
+          WHERE table_schema = 'public' AND table_name = 'sealed_vault';",
     )
     .expect("the older database answers");
-    assert_eq!(said.trim(), "0");
+    assert_eq!(
+        said.trim(),
+        "0",
+        "the last migration's table is already there"
+    );
 
     // 8. And the real `migrate` carries it forward — the one it is missing, not all four.
     let caught_up = schema::migrate(server, &older, password).expect("it migrates forwards");
-    assert_eq!(caught_up.from, 3);
-    assert_eq!(caught_up.to, 4);
-    assert_eq!(caught_up.ran, ["service"]);
+    assert_eq!(caught_up.from, newest - 1);
+    assert_eq!(caught_up.to, newest);
+    assert_eq!(caught_up.ran, [every_name[one_short]]);
 
     // 9. **Ending indistinguishable from one migrated from nothing.** Not "both work" —
     //    identical, table for table and column for column.

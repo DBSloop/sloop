@@ -106,7 +106,7 @@ pub fn ensure(global: &Path, server: &Server, superuser: &Secret) -> Outcome<(Ow
                 &route,
                 &crate::secret::Lookup {
                     key: &own.credential_key(server),
-                    sealed_file: &sealed,
+                    vault: &crate::secret::sealed::Vault::File(&sealed),
                 },
             )
             .ok()

@@ -49,7 +49,7 @@ pub(super) fn this_machine_can_keep_a_secret(global: &Path) -> bool {
     let kept = crate::secret::keep_somewhere(
         "sloop-server:can-this-machine-keep-a-secret",
         &Secret::new("a throwaway probe".to_owned()),
-        &global.join(crate::registry::file::SEALED_FILE),
+        &crate::secret::sealed::Vault::File(&global.join(crate::registry::file::SEALED_FILE)),
     );
 
     if kept.is_err() {

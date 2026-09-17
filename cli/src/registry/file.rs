@@ -149,7 +149,7 @@ impl KeyKept {
         }
     }
 
-    fn parse(field: &str) -> Outcome<Self> {
+    pub(crate) fn parse(field: &str) -> Outcome<Self> {
         match field.trim() {
             "exported" => Ok(Self::Exported),
             "declined" => Ok(Self::Declined),
@@ -256,39 +256,6 @@ impl Registry {
         Ok(())
     }
 
-    /// Write the registry back, atomically.
-    ///
-    /// **Through a temporary file and a rename**, because the alternative is a process
-    /// that dies mid-write and leaves a half-written registry — which parses as a syntax
-    /// error and takes every *other* registered database down with it. A rename over an
-    /// existing file is atomic on every platform this ships to.
-    pub fn save(&self, path: &std::path::Path) -> Outcome<()> {
-        let text = self.to_toml()?;
-
-        let parent = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty());
-        if let Some(parent) = parent {
-            std::fs::create_dir_all(parent).map_err(|error| {
-                Failure::usage(format!("could not create {}: {error}", parent.display()))
-            })?;
-        }
-
-        // Beside the real file rather than in the system temp directory: a rename across
-        // filesystems is not atomic, and on Linux `/tmp` is very often a different one.
-        let staged = path.with_extension("toml.writing");
-        std::fs::write(&staged, text.as_bytes()).map_err(|error| {
-            Failure::usage(format!("could not write {}: {error}", staged.display()))
-        })?;
-
-        std::fs::rename(&staged, path).map_err(|error| {
-            // The staged file is no use to anybody if the rename failed, and leaving it
-            // behind makes the next run look like it crashed.
-            let _ = std::fs::remove_file(&staged);
-            Failure::usage(format!("could not replace {}: {error}", path.display()))
-        })
-    }
-
     /// Read a registry from the text of a file.
     ///
     /// Carriage returns are taken off the ends of lines first. TOML treats `\r\n` as a
@@ -358,7 +325,14 @@ impl Registry {
         })
     }
 
-    /// Write a registry back out.
+    /// Write a registry back out as TOML.
+    ///
+    /// **Nothing in the binary writes TOML any more** — `R19c4` moved the registry into
+    /// PostgreSQL, and `Registry::save` went with it so that there is exactly one writer.
+    /// This is kept because it is the inverse of [`Registry::parse`], which `import_once`
+    /// still needs, and because the round-trip is what proves that parse reads everything
+    /// a registry can hold. Its readers are the tests.
+    #[allow(dead_code)]
     pub fn to_toml(&self) -> Outcome<String> {
         let raw = RawFile {
             version: VERSION,

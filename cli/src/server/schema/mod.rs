@@ -7,7 +7,7 @@
 //! edited after it was applied somewhere is a failure that names the migration rather than a
 //! schema that quietly disagrees with the build reading it.
 //!
-//! **Ten tables, and every one of them is on the owner's list:**
+//! **Eleven tables, and every one of them is on the owner's list:**
 //!
 //! ```text
 //! schema_migration      which migrations have run here                     0001
@@ -20,12 +20,17 @@
 //! service               whether the service is set up                      0004
 //! monitored_database    which databases are attached to it                 0004
 //! bandwidth_day         bytes in and out, per database, per UTC day        0004
+//! sealed_vault          `secrets.sealed`, as ciphertext in a column        0005
 //! ```
 //!
 //! **No user data, ever.** What is stored is about *databases* — their addresses, their
 //! sizes, their row counts, how long a dump took. Not one column holds anything that was
 //! inside one of the user's tables, and [`tests::no_column_could_hold_a_secret`] is what
 //! keeps a later one from creeping in.
+//!
+//! **And no plaintext password.** Every credential column holds a *route*; the one column
+//! that holds secret material at all is `sealed_vault.blob`, which is `R3`'s ciphertext and
+//! cannot be read without a passphrase this database has never seen.
 //!
 //! **Every table is reachable from a documented query.** [`READINGS`] is that list, one entry
 //! per table, and a unit test proves it covers exactly the tables the migrations create — so
@@ -101,6 +106,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 4,
         name: "service",
         sql: include_str!("migrations/0004_service.sql"),
+    },
+    Migration {
+        version: 5,
+        name: "vault",
+        sql: include_str!("migrations/0005_vault.sql"),
     },
 ];
 
@@ -207,6 +217,17 @@ pub const READINGS: &[Reading] = &[
                 JOIN service s ON s.id = m.service_id
                 JOIN registered_database d ON d.id = m.registered_database_id
                ORDER BY s.name, d.label;",
+    },
+    Reading {
+        table: "sealed_vault",
+        // Never `blob` itself. A documented query is something somebody runs at a prompt,
+        // and dumping ciphertext across a terminal helps nobody.
+        purpose: "which registries have a sealed vault, and how big each one is — never its                   contents",
+        sql: "SELECT v.scope, p.directory AS project,
+                     octet_length(v.blob) AS bytes, v.updated_at
+                FROM sealed_vault v
+                LEFT JOIN project p ON p.id = v.project_id
+               ORDER BY v.scope DESC;",
     },
     Reading {
         table: "bandwidth_day",

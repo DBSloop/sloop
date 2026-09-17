@@ -386,12 +386,15 @@ fn check(
     let route = database.password.overridden_by(registered.password_command);
     // The encrypted file sits beside the registry that names the database, so a project
     // entry and a global one of the same name read from two different stores.
-    let sealed = registered.registries.sealed_in(scope).unwrap_or_default();
+    let vault = registered
+        .registries
+        .vault_in(scope)
+        .unwrap_or_else(crate::secret::sealed::Vault::nowhere);
     let resolved = secret::resolve(
         &route,
         &Lookup {
             key: &key,
-            sealed_file: &sealed,
+            vault: &vault,
         },
     )?;
 

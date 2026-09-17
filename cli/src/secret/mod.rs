@@ -25,7 +25,6 @@ pub mod sealed;
 mod tests;
 
 use std::fmt;
-use std::path::Path;
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -206,8 +205,9 @@ pub struct Lookup<'a> {
     /// What this database is called, in a form that survives being a keyring account name
     /// and a key inside the encrypted file.
     pub key: &'a str,
-    /// Where the encrypted file lives.
-    pub sealed_file: &'a Path,
+    /// Where the encrypted store lives — a row in sloop's own database for every registry,
+    /// a file for the two passwords that open that database.
+    pub vault: &'a sealed::Vault<'a>,
 }
 
 /// A password, with anything the user ought to know about how it arrived.
@@ -225,7 +225,7 @@ pub struct Resolved {
 pub fn resolve(route: &Route, lookup: &Lookup<'_>) -> Outcome<Resolved> {
     let secret = match route {
         Route::Keyring => os_keyring::get(lookup.key)?,
-        Route::EncryptedFile => sealed::get(lookup.sealed_file, lookup.key)?,
+        Route::EncryptedFile => sealed::get(lookup.vault, lookup.key)?,
         Route::Environment(name) => from_environment(name)?,
         Route::Command(command) => command::run(command)?,
     };
@@ -276,14 +276,18 @@ pub fn preferred_routes() -> [Route; 2] {
 /// The two routes that *store* something, never the two that fetch what somebody else keeps:
 /// `${VAR}` and `command:` point at a secret that already exists somewhere, and this is for
 /// one that has just been invented.
-pub fn keep_somewhere(key: impl AsRef<str>, secret: &Secret, sealed_file: &Path) -> Outcome<Route> {
+pub fn keep_somewhere(
+    key: impl AsRef<str>,
+    secret: &Secret,
+    vault: &sealed::Vault<'_>,
+) -> Outcome<Route> {
     let key = key.as_ref();
     let mut first = None;
 
     for route in preferred_routes() {
         let kept = match route {
             Route::Keyring => os_keyring::set(key, secret),
-            Route::EncryptedFile => sealed::put(sealed_file, key, secret),
+            Route::EncryptedFile => sealed::put(vault, key, secret),
             // Unreachable by construction — `preferred_routes` returns only these two — and
             // written as a refusal rather than a panic, because rule 8 says a user can never
             // reach an `unwrap`.

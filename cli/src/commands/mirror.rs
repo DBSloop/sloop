@@ -932,12 +932,14 @@ pub(super) fn secret_for(
 ) -> Outcome<Secret> {
     let key = record.credential_key();
     let route = record.password.overridden_by(password_command);
-    let sealed = registries.sealed_in(scope).unwrap_or_default();
+    let vault = registries
+        .vault_in(scope)
+        .unwrap_or_else(crate::secret::sealed::Vault::nowhere);
     let resolved = resolve(
         &route,
         &Lookup {
             key: &key,
-            sealed_file: &sealed,
+            vault: &vault,
         },
     )?;
     for note in &resolved.notes {

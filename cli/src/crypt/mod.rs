@@ -113,8 +113,9 @@ pub struct Store<'a> {
     /// The keyring, or the Argon2id file. Nothing else: the other two password routes fetch
     /// a secret somebody else manages, and this is a secret sloop generated.
     pub route: &'a Route,
-    /// The encrypted file belonging to the registry that names the key.
-    pub sealed_file: &'a Path,
+    /// The encrypted store belonging to the registry that names the key — a row in
+    /// sloop's own database since `R19c4`, a file for the two passwords that open it.
+    pub vault: &'a secret::sealed::Vault<'a>,
 }
 
 impl Store<'_> {
@@ -133,7 +134,7 @@ impl Store<'_> {
 
         match self.route {
             Route::Keyring => secret::os_keyring::set(&name, &secret),
-            Route::EncryptedFile => secret::sealed::put(self.sealed_file, &name, &secret),
+            Route::EncryptedFile => secret::sealed::put(self.vault, &name, &secret),
             other => Err(unsupported(other)),
         }
     }
@@ -147,7 +148,7 @@ impl Store<'_> {
                 self.route,
                 &Lookup {
                     key: &name,
-                    sealed_file: self.sealed_file,
+                    vault: self.vault,
                 },
             )
             .map_err(|failure| {
@@ -183,13 +184,13 @@ impl Store<'_> {
 /// **A machine that can keep neither is not a failure, it is a machine without encryption.**
 /// The caller says so and takes a plain dump, because a backup that did not happen is worse
 /// than a backup that is not encrypted — see `commands::backup`.
-pub fn keep_somewhere(private: &PrivateKey, sealed_file: &Path) -> Outcome<Route> {
+pub fn keep_somewhere(private: &PrivateKey, vault: &secret::sealed::Vault<'_>) -> Outcome<Route> {
     let mut first = None;
 
     for route in preference() {
         let store = Store {
             route: &route,
-            sealed_file,
+            vault,
         };
         match store.keep(private) {
             Ok(()) => return Ok(route),

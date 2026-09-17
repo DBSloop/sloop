@@ -22,7 +22,7 @@ use crate::engine::Engine;
 use crate::engine::cluster_tests::{Cluster, skip};
 use crate::exit::Exit;
 use crate::registry::file::{Database, Encryption, KeyKept, Registry};
-use crate::registry::{Registries, Resolution, World, file, resolve};
+use crate::registry::{Registries, Resolution, World, resolve};
 use crate::secret::Route;
 
 /// Plain, because it goes through `echo`. What a password may contain is R3's question and
@@ -250,11 +250,11 @@ fn every_database_is_backed_up_and_a_broken_one_does_not_stop_the_rest() {
         "orders".to_owned(),
         entry(cluster.port, "source_db", "alpha", ALPHA),
     );
-    registry
-        .save(&store.join(file::FILE))
-        .expect("writing the registry");
-
-    let registries = Registries::open(global_only(), &store).expect("reading it back");
+    // Built in hand rather than written to a file and read back. `R19c4` put the registry
+    // in PostgreSQL, and what these two tests are about is `backup --all` — giving each of
+    // them a `sloop_database` of its own would be a second cluster to prove something
+    // `registry::cluster_tests` proves once.
+    let registries = Registries::of(global_only(), &store, registry, None);
     let mut context = Context {
         registries,
         global: &store,
@@ -380,11 +380,11 @@ fn what_it_prints_is_in_local_time_and_names_where_the_backup_went() {
         "orders".to_owned(),
         entry(cluster.port, "source_db", "alpha", ALPHA),
     );
-    registry
-        .save(&store.join(file::FILE))
-        .expect("writing the registry");
-
-    let registries = Registries::open(global_only(), &store).expect("reading it back");
+    // Built in hand rather than written to a file and read back. `R19c4` put the registry
+    // in PostgreSQL, and what these two tests are about is `backup --all` — giving each of
+    // them a `sloop_database` of its own would be a second cluster to prove something
+    // `registry::cluster_tests` proves once.
+    let registries = Registries::of(global_only(), &store, registry, None);
     let mut context = Context {
         registries,
         global: &store,

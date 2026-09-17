@@ -31,6 +31,7 @@ pub mod adopt;
 pub mod file;
 pub mod locations;
 pub mod projects;
+pub mod store;
 pub mod url;
 
 #[cfg(test)]
@@ -80,10 +81,20 @@ pub struct Resolution {
 }
 
 impl Resolution {
-    /// The project's registry directory.
+    /// The project's registry directory — the `.sloop` itself.
     #[must_use]
     pub fn registry_dir(&self) -> Option<PathBuf> {
         self.project.as_ref().map(|dir| dir.join(PROJECT_DIR))
+    }
+
+    /// The project directory — the one *holding* the `.sloop`.
+    ///
+    /// **The one `R19c4` records**, because it is what somebody types after `-C` and what the
+    /// walk up the tree finds. `.sloop` is an implementation detail of where a project keeps
+    /// its backups; the project is the directory above it.
+    #[must_use]
+    pub fn project_dir(&self) -> Option<&Path> {
+        self.project.as_deref()
     }
 
     /// The scopes a bare name is looked for in, nearest first.
@@ -230,30 +241,109 @@ impl Scope {
 /// command that takes a name gets both, and the search order lives in [`Resolution`],
 /// where it was settled, rather than being re-derived here.
 pub struct Registries {
-    project: Option<(PathBuf, Registry)>,
-    global: (PathBuf, Registry),
+    project: Option<Side>,
+    global: Side,
+    /// sloop's own database. `R19c4` put the registry in it, so everything below reads and
+    /// writes through this.
+    ///
+    /// Shared rather than owned outright, so a vault handed out by [`Registries::vault_in`]
+    /// can outlive the borrow that produced it — see [`store::Store::vault_at`].
+    ///
+    /// **`None` only in a test**, where a pair of registries is built to ask a question about
+    /// the search order rather than about persistence. Reading works without it because the
+    /// registries are already in hand; writing does not, and says so.
+    store: Option<std::rc::Rc<store::Store>>,
     resolution: Resolution,
 }
 
-impl Registries {
-    /// Read whichever of the two exist. A registry that is not there yet is an empty one,
-    /// not an error: that is the state of every machine before the first `db add`.
-    pub fn open(resolution: Resolution, global_dir: &Path) -> Outcome<Self> {
-        let read = |dir: &Path| Registry::load(&dir.join(file::FILE));
+/// One registry: where its rows live, where its files live, and what is in it right now.
+///
+/// **The directory did not go away when the registry did.** `backups/` still hangs off it,
+/// which is what keeps a project's copies with the project, and the `.sloop` is still what
+/// the walk up the tree looks for. What moved into the database is the *registry*.
+struct Side {
+    which: store::Which,
+    dir: PathBuf,
+    registry: Registry,
+}
 
-        let project = match resolution.registry_dir() {
-            Some(dir) => {
-                let registry = read(&dir)?;
-                Some((dir, registry))
-            }
-            None => None,
+impl Registries {
+    /// Read whichever of the two exist, out of sloop's own database.
+    ///
+    /// A registry with no rows is an empty one, not an error: that is the state of every
+    /// machine before the first `db add`, exactly as a missing `registry.toml` was.
+    ///
+    /// **A `registry.toml` left over from the previous release is imported here, once.** See
+    /// [`store::import`] — the file is kept, renamed out of the way only when the owner says
+    /// so, because a migration nobody has checked is not a migration anybody should trust.
+    pub fn open(resolution: Resolution, global_dir: &Path) -> Outcome<Self> {
+        Self::onto(store::Store::require(global_dir)?, resolution, global_dir)
+    }
+
+    /// The same, onto a store somebody else opened.
+    pub fn onto(store: store::Store, resolution: Resolution, global_dir: &Path) -> Outcome<Self> {
+        let store = std::rc::Rc::new(store);
+        let side = |which: store::Which, dir: PathBuf| -> Outcome<Side> {
+            // `import_once` is what carries a `registry.toml` from the previous release in.
+            // It runs before the read, so the first run on an upgraded machine reads what it
+            // just imported rather than an empty registry.
+            store.import_once(&which, &dir)?;
+            let registry = store.read(&which)?;
+            Ok(Side {
+                which,
+                dir,
+                registry,
+            })
         };
+
+        let project = match (
+            store::Which::of(Scope::Project, resolution.project_dir()),
+            resolution.registry_dir(),
+        ) {
+            (Some(which), Some(sloop_dir)) => Some(side(which, sloop_dir)?),
+            _ => None,
+        };
+
+        let global = store::Which::of(Scope::Global, None)
+            .ok_or_else(|| Failure::usage("there is always a global store"))?;
 
         Ok(Self {
             project,
-            global: (global_dir.to_path_buf(), read(global_dir)?),
+            global: side(global, global_dir.to_path_buf())?,
+            store: Some(store),
             resolution,
         })
+    }
+
+    /// Two registries built by hand, for the tests that are not about persistence.
+    ///
+    /// **Not a second way to reach a real registry** — it takes a store like everything else.
+    /// What it skips is the read, so a test can say what is registered instead of arranging
+    /// for rows to exist.
+    #[cfg(test)]
+    pub fn of(
+        resolution: Resolution,
+        global_dir: &Path,
+        global: Registry,
+        project: Option<Registry>,
+    ) -> Self {
+        Self {
+            project: project.and_then(|registry| {
+                let project_dir = resolution.project_dir()?.to_path_buf();
+                Some(Side {
+                    which: store::Which::Project(project_dir),
+                    dir: resolution.registry_dir()?,
+                    registry,
+                })
+            }),
+            global: Side {
+                which: store::Which::Global,
+                dir: global_dir.to_path_buf(),
+                registry: global,
+            },
+            store: None,
+            resolution,
+        }
     }
 
     /// How the registry was chosen, for the commands that say so.
@@ -265,16 +355,27 @@ impl Registries {
     /// The registry in one scope, if it is in play at all.
     #[must_use]
     pub fn in_scope(&self, scope: Scope) -> Option<&Registry> {
+        self.side(scope).map(|side| &side.registry)
+    }
+
+    /// One side of the pair, if that scope is in play at all.
+    fn side(&self, scope: Scope) -> Option<&Side> {
         match scope {
-            Scope::Project => self.project.as_ref().map(|(_, registry)| registry),
-            Scope::Global => Some(&self.global.1),
+            Scope::Project => self.project.as_ref(),
+            Scope::Global => Some(&self.global),
         }
     }
 
-    /// Where a scope's encrypted password file is.
+    /// Where a scope's encrypted passwords live.
+    ///
+    /// **A row, since `R19c4`.** `secrets.sealed` is not a file any more for a registry; the
+    /// bytes are the same `SLOOPSEC` store, in `sealed_vault`. The one sealed *file* left on
+    /// a machine holds sloop's own two passwords, which open the database and so cannot be
+    /// inside it.
     #[must_use]
-    pub fn sealed_in(&self, scope: Scope) -> Option<PathBuf> {
-        self.dir_of(scope).map(|dir| dir.join(file::SEALED_FILE))
+    pub fn vault_in(&self, scope: Scope) -> Option<crate::secret::sealed::Vault<'static>> {
+        let which = self.side(scope)?.which.clone();
+        Some(self.store.as_ref()?.vault_at(which))
     }
 
     /// The directory a scope keeps everything in — its registry, its sealed passwords and
@@ -285,10 +386,7 @@ impl Registries {
     }
 
     fn dir_of(&self, scope: Scope) -> Option<PathBuf> {
-        match scope {
-            Scope::Project => self.project.as_ref().map(|(dir, _)| dir.clone()),
-            Scope::Global => Some(self.global.0.clone()),
-        }
+        self.side(scope).map(|side| side.dir.clone())
     }
 
     /// The scope a new entry goes in: the project when there is one, the global store
@@ -361,7 +459,7 @@ impl Registries {
         scope: Scope,
         change: impl FnOnce(&mut Registry) -> Outcome<T>,
     ) -> Outcome<T> {
-        let (dir, registry) = match scope {
+        let side = match scope {
             Scope::Project => self
                 .project
                 .as_mut()
@@ -369,8 +467,11 @@ impl Registries {
             Scope::Global => &mut self.global,
         };
 
-        let outcome = change(registry)?;
-        registry.save(&dir.join(file::FILE))?;
+        let outcome = change(&mut side.registry)?;
+        let store = self.store.as_ref().ok_or_else(|| {
+            Failure::usage("these registries were opened without a database to write back to")
+        })?;
+        store.write(&side.which, &side.registry)?;
         Ok(outcome)
     }
 }

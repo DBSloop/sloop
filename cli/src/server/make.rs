@@ -42,7 +42,7 @@ impl Asking<'_> {
                 &Route::Command(command.to_owned()),
                 &crate::secret::Lookup {
                     key: &server.superuser,
-                    sealed_file: Path::new(""),
+                    vault: &crate::secret::sealed::Vault::File(Path::new("")),
                 },
             )?
             .secret);

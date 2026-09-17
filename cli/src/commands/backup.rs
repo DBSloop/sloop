@@ -47,7 +47,7 @@ use crate::crypt::{self, PublicKey};
 use crate::engine::{Adapter, ServerInfo, TableCount, Target};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
-use crate::registry::file::{Database, KeyKept, SEALED_FILE};
+use crate::registry::file::{Database, KeyKept};
 use crate::registry::{Registries, Scope};
 use crate::secret::{Lookup, resolve};
 use crate::style;
@@ -327,12 +327,15 @@ fn one(
     // The encrypted file sits beside the registry that names the database, so a project
     // entry and a global one of the same name read from two different stores.
     let route = database.password.overridden_by(context.password_command);
-    let sealed = context.registries.sealed_in(scope).unwrap_or_default();
+    let vault = context
+        .registries
+        .vault_in(scope)
+        .unwrap_or_else(crate::secret::sealed::Vault::nowhere);
     let resolved = resolve(
         &route,
         &Lookup {
             key: &key,
-            sealed_file: &sealed,
+            vault: &vault,
         },
     )?;
     for note in &resolved.notes {
@@ -610,12 +613,12 @@ fn sealing_for(context: &mut Context<'_>, scope: Scope) -> Outcome<Option<Public
     let encryption = if let Some(encryption) = existing {
         encryption
     } else {
-        let sealed = context
+        let vault = context
             .registries
-            .sealed_in(scope)
-            .unwrap_or_else(|| context.global.join(SEALED_FILE));
+            .vault_in(scope)
+            .unwrap_or_else(crate::secret::sealed::Vault::nowhere);
 
-        match crate::commands::key::create(&mut context.registries, scope, &sealed) {
+        match crate::commands::key::create(&mut context.registries, scope, &vault) {
             Ok(encryption) => encryption,
             Err(failure) => {
                 crate::note!(
