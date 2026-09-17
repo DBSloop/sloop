@@ -39,6 +39,7 @@ use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::secret::{Route, Secret};
 use crate::server::{self, own::Own};
+use crate::ssh::{Reach, Server, Through};
 
 use super::Scope;
 use super::file::{Database, Encryption, KeyKept, Registry};
@@ -110,6 +111,21 @@ struct RawDatabase {
     /// A route. The column's own CHECK refuses anything that is not one, and
     /// [`Route::parse`] refuses it again here — the same double refusal the file had.
     password: String,
+    /// The SSH server this one goes through, or `None` for the direct connection every
+    /// database had before `R19e`.
+    ssh: Option<RawSsh>,
+}
+
+/// The SSH server a row names, as the query hands it back.
+#[derive(Debug, Deserialize)]
+struct RawSsh {
+    host: String,
+    port: i64,
+    user: Option<String>,
+    identity: Option<String>,
+    /// A route, and never a passphrase. Two CHECKs and [`Route::parse`] all refuse
+    /// anything else.
+    passphrase: Option<String>,
 }
 
 /// The backup keypair, as the query hands it back.
@@ -176,7 +192,20 @@ impl Store {
                                      'port',     d.port,
                                      'database', d.database_name,
                                      'user',     d.username,
-                                     'password', d.password_route)
+                                     'password', d.password_route,
+                                     -- One object or NULL, rather than five nullable
+                                     -- fields: `ssh_host IS NULL` is the whole question of
+                                     -- whether this database goes over SSH, and answering
+                                     -- it once in SQL is what lets Rust match on an Option
+                                     -- instead of re-deriving it from four columns.
+                                     'ssh', CASE WHEN d.ssh_host IS NULL THEN NULL ELSE
+                                         json_build_object(
+                                             'host',       d.ssh_host,
+                                             'port',       d.ssh_port,
+                                             'user',       d.ssh_user,
+                                             'identity',   d.ssh_identity,
+                                             'passphrase', d.ssh_secret_route)
+                                     END)
                                  ORDER BY d.label)
                             FROM registered_database d
                             JOIN engine e ON e.id = d.engine_id
@@ -206,6 +235,32 @@ impl Store {
             let password =
                 Route::parse(row.password.trim_end()).map_err(|why| why.prefixed(&row.label))?;
 
+            let reach = match row.ssh {
+                None => Reach::Direct,
+                Some(ssh) => {
+                    let ssh_port = u16::try_from(ssh.port).map_err(|_| {
+                        Failure::usage(format!(
+                            "{} is reached over SSH on port {}",
+                            row.label, ssh.port
+                        ))
+                    })?;
+                    Reach::Over(Box::new(Through {
+                        server: Server {
+                            host: ssh.host,
+                            port: ssh_port,
+                            user: ssh.user,
+                            identity: ssh.identity.map(PathBuf::from),
+                        },
+                        secret: ssh
+                            .passphrase
+                            .as_deref()
+                            .map(|field| Route::parse(field.trim_end()))
+                            .transpose()
+                            .map_err(|why| why.prefixed(format!("{} ssh", row.label)))?,
+                    }))
+                }
+            };
+
             registry.insert(
                 row.label,
                 Database {
@@ -215,6 +270,7 @@ impl Store {
                     database: row.database,
                     user: row.user,
                     password,
+                    reach,
                 },
             );
         }
@@ -272,13 +328,24 @@ impl Store {
         );
 
         for (label, database) in registry.entries() {
+            // Five values or five NULLs. `Reach::Direct` is not an absence of settings to
+            // be filled in later — it is the ordinary state, and the constraints on those
+            // columns say so.
+            let through = database.reach.through();
+            let optional = |value: Option<String>| match value {
+                Some(value) => literal(&value),
+                None => Ok("NULL".to_owned()),
+            };
+
             let _ = write!(
                 script,
                 "INSERT INTO registered_database
                      (label, engine_id, host, port, database_name, username,
-                      password_route, scope, project_id)
+                      password_route, scope, project_id,
+                      ssh_host, ssh_port, ssh_user, ssh_identity, ssh_secret_route)
                  VALUES ({label}, (SELECT id FROM engine WHERE name = {engine}),
-                         {host}, {port}, {database}, {user}, {route}, {scope}, {project});\n",
+                         {host}, {port}, {database}, {user}, {route}, {scope}, {project},
+                         {ssh_host}, {ssh_port}, {ssh_user}, {ssh_identity}, {ssh_route});\n",
                 label = literal(label)?,
                 engine = literal(database.engine.scheme())?,
                 host = literal(&database.host)?,
@@ -288,6 +355,20 @@ impl Store {
                 route = literal(&database.password.as_field())?,
                 scope = literal(which.word())?,
                 project = project,
+                ssh_host = optional(through.map(|one| one.server.host.clone()))?,
+                ssh_port = match through {
+                    Some(one) => one.server.port.to_string(),
+                    None => "NULL".to_owned(),
+                },
+                ssh_user = optional(through.and_then(|one| one.server.user.clone()))?,
+                ssh_identity = optional(through.and_then(|one| {
+                    one.server
+                        .identity
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                }))?,
+                ssh_route =
+                    optional(through.and_then(|one| one.secret.as_ref().map(Route::as_field)))?,
             );
         }
 

@@ -15,7 +15,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::cli::{Fields, PasswordSource};
+use crate::cli::{Fields, PasswordSource, SshFields};
 use crate::commands;
 use crate::consent::Consent;
 use crate::exit::Exit;
@@ -294,6 +294,7 @@ impl Machine {
             by_url.then(|| answers.text(field::URL)),
             &fields(answers, !by_url),
             &password_source(answers),
+            &no_ssh_questions(),
             answers.yes(field::TEST),
         )
     }
@@ -329,6 +330,7 @@ impl Machine {
             None,
             &fields(answers, !changing_the_password),
             &password_source(answers),
+            &no_ssh_questions(),
             answers.yes(field::TEST),
         )
     }
@@ -443,6 +445,28 @@ fn fields(answers: &Answers, wanted: bool) -> Fields {
         port: answers.number(field::PORT),
         database: answers.some(field::DATABASE).map(ToOwned::to_owned),
         user: answers.some(field::USER).map(ToOwned::to_owned),
+    }
+}
+
+/// The SSH flags, all unset — which is what leaves a record's [`crate::ssh::Reach`] alone.
+///
+/// **The menu does not ask about SSH yet.** `R19e` is being built in pieces and this is the
+/// one that taught the registry to hold a tunnel; the screens that offer one are the next.
+/// Every field is written out rather than defaulted, for the reason [`fields`] is: a flag
+/// added to `SshFields` and silently defaulted here would be a question the menu quietly
+/// stopped asking.
+fn no_ssh_questions() -> SshFields {
+    SshFields {
+        ssh_host: None,
+        ssh_port: None,
+        ssh_user: None,
+        ssh_identity: None,
+        no_ssh: false,
+        ssh_keyring: false,
+        ssh_encrypted_file: false,
+        ssh_env: None,
+        ssh_passphrase_from: None,
+        ssh_passphrase_stdin: false,
     }
 }
 

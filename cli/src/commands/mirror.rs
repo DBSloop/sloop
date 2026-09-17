@@ -930,6 +930,8 @@ pub(super) fn secret_for(
     scope: Scope,
     record: &Database,
 ) -> Outcome<Secret> {
+    super::reachable(record)?;
+
     let key = record.credential_key();
     let route = record.password.overridden_by(password_command);
     let vault = registries

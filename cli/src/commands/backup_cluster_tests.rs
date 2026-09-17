@@ -80,6 +80,7 @@ fn entry(port: u16, database: &str, user: &str, password: &str) -> Database {
         database: database.to_owned(),
         user: user.to_owned(),
         password: Route::Command(format!("echo {password}")),
+        reach: crate::ssh::Reach::Direct,
     }
 }
 

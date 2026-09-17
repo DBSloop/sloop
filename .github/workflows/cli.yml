@@ -235,7 +235,7 @@ jobs:
         run: cargo test --bin sloop engine::mysql_cluster_tests::mariadb -- --nocapture --test-threads=1
 
   guarantee:
-    name: no HTTP client
+    name: nothing opens a socket
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -182,25 +182,85 @@ fn a_server_with_no_user_named_leaves_it_to_ssh() {
 fn databases_on_one_server_share_a_connection_and_different_keys_do_not() {
     let one = server();
     let another = server();
-    assert_eq!(one.connection_key(), another.connection_key());
+    assert_eq!(one.credential_key(), another.credential_key());
 
     let other_user = Server {
         user: Some("someone-else".to_owned()),
         ..server()
     };
-    assert_ne!(one.connection_key(), other_user.connection_key());
+    assert_ne!(one.credential_key(), other_user.credential_key());
 
     let other_key = Server {
         identity: Some(PathBuf::from("/home/me/.ssh/id_other")),
         ..server()
     };
-    assert_ne!(one.connection_key(), other_key.connection_key());
+    assert_ne!(one.credential_key(), other_key.credential_key());
 
     let other_port = Server {
         port: 2222,
         ..server()
     };
-    assert_ne!(one.connection_key(), other_port.connection_key());
+    assert_ne!(one.credential_key(), other_port.credential_key());
+}
+
+/// **It is also a keyring account name, so it has to read like one.** Somebody opening
+/// Credential Manager should be able to tell what a row is for without decoding it.
+#[test]
+fn the_login_key_reads_as_something_a_person_can_place() {
+    assert_eq!(server().credential_key(), "ssh://deploy@db.example.test:22");
+
+    let anyone = Server {
+        user: None,
+        ..server()
+    };
+    assert_eq!(anyone.credential_key(), "ssh://db.example.test:22");
+
+    let with_a_key = Server {
+        identity: Some(PathBuf::from("/home/me/.ssh/id_ed25519")),
+        ..server()
+    };
+    assert_eq!(
+        with_a_key.credential_key(),
+        "ssh://deploy@db.example.test:22#/home/me/.ssh/id_ed25519"
+    );
+
+    // The port is always in it, so passing `--ssh-port 22` and leaving it out file the
+    // passphrase under the same name rather than under two.
+    let said_so = Server {
+        port: DEFAULT_PORT,
+        ..server()
+    };
+    assert_eq!(said_so.credential_key(), server().credential_key());
+}
+
+/// What a listing says about a tunnel, and what it cannot say.
+#[test]
+fn how_a_tunnel_reads_carries_no_secret() {
+    let agent = Through {
+        server: server(),
+        secret: None,
+    };
+    assert_eq!(
+        agent.describe(),
+        "over deploy@db.example.test, from the agent"
+    );
+
+    let kept = Through {
+        server: server(),
+        secret: Some(Route::Keyring),
+    };
+    assert_eq!(
+        kept.describe(),
+        "over deploy@db.example.test, unlocked from the OS keyring"
+    );
+
+    // A `command:` route is a command line, which is a direction and not a value — the same
+    // property that lets a password route be printed.
+    let from_a_manager = Through {
+        server: server(),
+        secret: Some(Route::Command("op read op://vault/ssh/pw".to_owned())),
+    };
+    assert!(from_a_manager.describe().contains("op read"));
 }
 
 /// The passphrase's *route* plays no part in which connection is shared: it opens the same
@@ -217,8 +277,8 @@ fn where_the_passphrase_is_kept_does_not_split_a_connection() {
     };
 
     assert_eq!(
-        keyring.server.connection_key(),
-        from_a_command.server.connection_key()
+        keyring.server.credential_key(),
+        from_a_command.server.credential_key()
     );
 }
 

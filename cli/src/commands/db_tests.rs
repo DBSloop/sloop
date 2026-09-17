@@ -4,7 +4,7 @@
 //! a whole process are in `tests/db.rs`.
 
 use super::{Draft, draft, route_for};
-use crate::cli::{Fields, PasswordSource};
+use crate::cli::{Fields, PasswordSource, SshFields};
 use crate::engine::Engine;
 use crate::exit::Exit;
 use crate::registry::file::Database;
@@ -20,6 +20,22 @@ fn no_fields() -> Fields {
     }
 }
 
+/// The SSH flags, with nothing set — which leaves a record's reach exactly as it was.
+fn no_ssh() -> SshFields {
+    SshFields {
+        ssh_host: None,
+        ssh_port: None,
+        ssh_user: None,
+        ssh_identity: None,
+        no_ssh: false,
+        ssh_keyring: false,
+        ssh_encrypted_file: false,
+        ssh_env: None,
+        ssh_passphrase_from: None,
+        ssh_passphrase_stdin: false,
+    }
+}
+
 fn no_password() -> PasswordSource {
     PasswordSource {
         keyring: false,
@@ -31,7 +47,7 @@ fn no_password() -> PasswordSource {
 }
 
 fn built(url: Option<&str>, fields: &Fields) -> Database {
-    let (draft, _) = draft(None, url, fields).expect("a draft");
+    let (draft, _) = draft(None, url, fields, &no_ssh()).expect("a draft");
     draft.into_database(Route::Keyring).expect("a database")
 }
 
@@ -122,6 +138,7 @@ fn an_edit_changes_only_what_was_named() {
             user: Some("backup".to_owned()),
             ..no_fields()
         },
+        &no_ssh(),
     )
     .expect("a draft");
     let after = changed.into_database(Route::Keyring).expect("a database");
@@ -143,6 +160,7 @@ fn a_url_in_an_edit_does_not_leave_the_old_port_behind() {
         Some(&before),
         Some("postgres://app@new.host/orders"),
         &no_fields(),
+        &no_ssh(),
     )
     .expect("a draft");
     let after = changed.into_database(Route::Keyring).expect("a database");
@@ -276,6 +294,7 @@ fn a_password_in_a_url_is_taken_out_of_it_and_never_written_back() {
         None,
         Some("postgres://app:s3cr%40t@db.internal/orders"),
         &no_fields(),
+        &no_ssh(),
     )
     .expect("a draft");
 
@@ -313,43 +332,45 @@ fn what_an_edit_orphans_is_cleared_through_the_route_that_held_it() {
     use super::Retiring;
 
     let record = |url: &str, route: Route| {
-        let (draft, _) = draft(None, Some(url), &no_fields()).expect("a draft");
+        let (draft, _) = draft(None, Some(url), &no_fields(), &no_ssh()).expect("a draft");
         draft.into_database(route).expect("a database")
     };
     let here = "postgres://app@db.internal:5432/orders";
     let moved = "postgres://app@db.internal:5432/replica";
 
+    let only = |retiring: Vec<Retiring>| {
+        assert_eq!(retiring.len(), 1, "one credential is orphaned, not two");
+        retiring.into_iter().next().expect("the one")
+    };
+
     // Nothing changed: nothing to clear.
     assert!(
-        Retiring::between(&record(here, Route::Keyring), &record(here, Route::Keyring)).is_none()
+        Retiring::between(&record(here, Route::Keyring), &record(here, Route::Keyring)).is_empty()
     );
 
     // The connection moved. Same route, old key.
-    let by_key = Retiring::between(
+    let by_key = only(Retiring::between(
         &record(here, Route::Keyring),
         &record(moved, Route::Keyring),
-    )
-    .expect("the old key is orphaned");
+    ));
     assert_eq!(by_key.route, Route::Keyring);
     assert_eq!(by_key.key, "postgres://app@db.internal:5432/orders");
 
     // The route moved and the key did not — the case that was silently leaking. It has to
     // be cleared from the keyring, which is where it is, and not from the file it is
     // going to.
-    let by_route = Retiring::between(
+    let by_route = only(Retiring::between(
         &record(here, Route::Keyring),
         &record(here, Route::EncryptedFile),
-    )
-    .expect("the keyring entry is orphaned");
+    ));
     assert_eq!(by_route.route, Route::Keyring);
     assert_eq!(by_route.key, "postgres://app@db.internal:5432/orders");
 
     // Moving to a route that stores nothing still has to clear what the old one held.
-    let to_a_variable = Retiring::between(
+    let to_a_variable = only(Retiring::between(
         &record(here, Route::Keyring),
         &record(here, Route::Environment("PW".to_owned())),
-    )
-    .expect("the keyring entry is orphaned");
+    ));
     assert_eq!(to_a_variable.route, Route::Keyring);
 
     // And a record that never stored anything leaves nothing behind, however it changes.
@@ -358,7 +379,8 @@ fn what_an_edit_orphans_is_cleared_through_the_route_that_held_it() {
         record(here, Route::EncryptedFile),
     ] {
         assert!(
-            Retiring::between(&record(here, Route::Environment("PW".to_owned())), &after).is_none(),
+            Retiring::between(&record(here, Route::Environment("PW".to_owned())), &after)
+                .is_empty(),
             "a ${{VAR}} record has nothing for sloop to clear"
         );
     }
@@ -633,4 +655,292 @@ fn editing_a_record_leaves_its_route_alone() {
         let kept = route_for(&no_password(), Some(&existing)).expect("nothing chosen");
         assert_eq!(kept, existing);
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// reaching it over SSH — R19e
+// ---------------------------------------------------------------------------------------
+
+/// The flags, with a server named and nothing else.
+fn over(host: &str) -> SshFields {
+    SshFields {
+        ssh_host: Some(host.to_owned()),
+        ..no_ssh()
+    }
+}
+
+/// A record reached through a server, built the way `db add` builds one.
+fn through(url: &str, ssh: &SshFields) -> Database {
+    let (draft, _) = draft(None, Some(url), &no_fields(), ssh).expect("a draft");
+    draft.into_database(Route::Keyring).expect("a database")
+}
+
+/// **`--ssh-host` and nothing else is the documented default**: the agent holds the key,
+/// sloop is told no secret, and the port is the one `ssh` uses.
+#[test]
+fn naming_a_server_is_enough_and_keeps_sloop_out_of_the_secret() {
+    let record = through(
+        "postgres://app@127.0.0.1:5432/orders",
+        &over("bastion.test"),
+    );
+    let reached = record.reach.through().expect("it goes over SSH");
+
+    assert_eq!(reached.server.host, "bastion.test");
+    assert_eq!(reached.server.port, 22);
+    assert_eq!(reached.server.user, None);
+    assert_eq!(reached.server.identity, None);
+    assert_eq!(reached.secret, None, "the agent is the default");
+
+    // And the database's own address is untouched: it is what the *server* sees.
+    assert_eq!(record.host, "127.0.0.1");
+    assert_eq!(record.port, 5432);
+}
+
+/// **The one collision this feature could have caused.** Every tunnelled database is
+/// registered at the address its server sees, so two behind two different bastions produce
+/// the same connection string — and would have been filed under one key, opening one with
+/// the other's password.
+#[test]
+fn two_databases_behind_two_servers_are_not_filed_under_one_key() {
+    let url = "postgres://app@127.0.0.1:5432/orders";
+    let one = through(url, &over("one.test"));
+    let other = through(url, &over("other.test"));
+
+    assert_ne!(one.credential_key(), other.credential_key());
+    assert!(one.credential_key().contains("ssh://one.test:22"));
+
+    // A direct registration is unchanged, byte for byte: there was nothing to append, and a
+    // release that moved every existing key would have orphaned every stored password.
+    let direct = through(url, &no_ssh());
+    assert_eq!(
+        direct.credential_key(),
+        "postgres://app@127.0.0.1:5432/orders"
+    );
+}
+
+/// An edit changes the field it names and leaves the rest of the server alone, the same way
+/// `--port` alone leaves the host alone.
+#[test]
+fn an_ssh_edit_changes_only_what_was_named() {
+    let before = through(
+        "postgres://app@127.0.0.1/orders",
+        &SshFields {
+            ssh_user: Some("deploy".to_owned()),
+            ssh_port: Some(2222),
+            ..over("bastion.test")
+        },
+    );
+
+    let (changed, _) = draft(
+        Some(&before),
+        None,
+        &no_fields(),
+        &SshFields {
+            ssh_user: Some("someone-else".to_owned()),
+            ..no_ssh()
+        },
+    )
+    .expect("a draft");
+    let after = changed.into_database(Route::Keyring).expect("a database");
+    let reached = after.reach.through().expect("it still goes over SSH");
+
+    assert_eq!(reached.server.user.as_deref(), Some("someone-else"));
+    assert_eq!(reached.server.host, "bastion.test");
+    assert_eq!(reached.server.port, 2222);
+}
+
+/// `--no-ssh` is how a tunnel is turned off, and it is a flag of its own rather than an
+/// empty `--ssh-host` because that is a decision somebody should have to spell.
+#[test]
+fn no_ssh_puts_a_record_back_to_a_direct_connection() {
+    let before = through("postgres://app@127.0.0.1/orders", &over("bastion.test"));
+
+    let (changed, _) = draft(
+        Some(&before),
+        None,
+        &no_fields(),
+        &SshFields {
+            no_ssh: true,
+            ..no_ssh()
+        },
+    )
+    .expect("a draft");
+    let after = changed.into_database(Route::Keyring).expect("a database");
+
+    assert!(after.reach.through().is_none());
+    assert_eq!(
+        after.credential_key(),
+        "postgres://app@127.0.0.1:5432/orders"
+    );
+}
+
+/// An SSH detail with no server to hang it off names the flag that would have given it one.
+/// Guessing would mean guessing which machine, and sloop knows none of them.
+#[test]
+fn an_ssh_detail_without_a_server_says_which_flag_is_missing() {
+    for orphan in [
+        SshFields {
+            ssh_user: Some("deploy".to_owned()),
+            ..no_ssh()
+        },
+        SshFields {
+            ssh_port: Some(2222),
+            ..no_ssh()
+        },
+        SshFields {
+            ssh_identity: Some("/home/me/.ssh/id_ed25519".to_owned()),
+            ..no_ssh()
+        },
+        SshFields {
+            ssh_keyring: true,
+            ..no_ssh()
+        },
+    ] {
+        let refused = draft(
+            None,
+            Some("postgres://app@127.0.0.1/orders"),
+            &no_fields(),
+            &orphan,
+        )
+        .expect_err("there is no server to put this on");
+
+        assert_eq!(refused.exit(), Exit::Usage);
+        assert!(
+            refused.message().contains("--ssh-host"),
+            "it has to name the flag: {}",
+            refused.message()
+        );
+    }
+}
+
+/// A server name that `ssh` would read as something other than a host is refused when it is
+/// written, not discovered when a tunnel is opened.
+#[test]
+fn a_server_name_ssh_would_misread_is_refused() {
+    for bad in ["", " bastion.test", "two hosts", "-oProxyCommand=id"] {
+        let refused = draft(
+            None,
+            Some("postgres://app@127.0.0.1/orders"),
+            &no_fields(),
+            &over(bad),
+        )
+        .expect_err("that is not a host");
+        assert_eq!(refused.exit(), Exit::Usage);
+    }
+
+    // And a username with a space in it, which would be two arguments as well.
+    let refused = draft(
+        None,
+        Some("postgres://app@127.0.0.1/orders"),
+        &no_fields(),
+        &SshFields {
+            ssh_user: Some("de ploy".to_owned()),
+            ..over("bastion.test")
+        },
+    )
+    .expect_err("that is not a username");
+    assert!(
+        refused.message().contains("username"),
+        "{}",
+        refused.message()
+    );
+}
+
+/// The four routes reach the SSH passphrase exactly as they reach a database password, and
+/// the field is a route in every one of them.
+#[test]
+fn the_passphrase_takes_the_same_four_routes_a_password_does() {
+    let cases = [
+        (
+            SshFields {
+                ssh_keyring: true,
+                ..over("bastion.test")
+            },
+            Route::Keyring,
+        ),
+        (
+            SshFields {
+                ssh_encrypted_file: true,
+                ..over("bastion.test")
+            },
+            Route::EncryptedFile,
+        ),
+        (
+            SshFields {
+                ssh_env: Some("SSH_KEY_PW".to_owned()),
+                ..over("bastion.test")
+            },
+            Route::Environment("SSH_KEY_PW".to_owned()),
+        ),
+        (
+            SshFields {
+                ssh_passphrase_from: Some("op read op://vault/ssh/pw".to_owned()),
+                ..over("bastion.test")
+            },
+            Route::Command("op read op://vault/ssh/pw".to_owned()),
+        ),
+    ];
+
+    for (flags, expected) in cases {
+        let record = through("postgres://app@127.0.0.1/orders", &flags);
+        let reached = record.reach.through().expect("it goes over SSH");
+        assert_eq!(reached.secret, Some(expected));
+    }
+}
+
+/// What an SSH edit orphans, and through which door it is cleared — the same rule the
+/// database password has, applied to the second credential a record can hold.
+#[test]
+fn moving_the_server_orphans_the_passphrase_filed_under_the_old_one() {
+    use super::Retiring;
+
+    let url = "postgres://app@127.0.0.1:5432/orders";
+    let kept = |host: &str| SshFields {
+        ssh_keyring: true,
+        ..over(host)
+    };
+
+    // Nothing moved: nothing to clear, and no keyring prompt for a value already in place.
+    assert!(
+        Retiring::between(
+            &through(url, &kept("one.test")),
+            &through(url, &kept("one.test"))
+        )
+        .is_empty()
+    );
+
+    // The server moved. Both credentials are orphaned — the passphrase because it is filed
+    // under the server, and the password because the server is part of its key.
+    let moved = Retiring::between(
+        &through(url, &kept("one.test")),
+        &through(url, &kept("two.test")),
+    );
+    assert_eq!(moved.len(), 2, "both keys moved: {moved:?}");
+    assert!(moved.iter().any(|one| one.key == "ssh://one.test:22"));
+    assert!(
+        moved
+            .iter()
+            .any(|one| one.key == "postgres://app@127.0.0.1:5432/orders through ssh://one.test:22")
+    );
+
+    // And `--no-ssh` orphans the passphrase outright.
+    let off = Retiring::between(&through(url, &kept("one.test")), &through(url, &no_ssh()));
+    assert!(off.iter().any(|one| one.key == "ssh://one.test:22"));
+
+    // A passphrase on `${VAR}` stores nothing, so there is nothing to clear however it
+    // moves.
+    let variable = |host: &str| SshFields {
+        ssh_env: Some("SSH_KEY_PW".to_owned()),
+        ..over(host)
+    };
+    let nothing_stored = Retiring::between(
+        &through(url, &variable("one.test")),
+        &through(url, &variable("two.test")),
+    );
+    assert!(
+        nothing_stored
+            .iter()
+            .all(|one| !one.key.starts_with("ssh://")),
+        "a ${{VAR}} passphrase has nothing for sloop to clear: {nothing_stored:?}"
+    );
 }

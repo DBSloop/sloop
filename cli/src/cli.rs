@@ -347,6 +347,9 @@ pub enum DbCommand {
         #[command(flatten)]
         password: PasswordSource,
 
+        #[command(flatten)]
+        ssh: SshFields,
+
         /// Connect before saving, and refuse to save if it does not work.
         #[arg(long)]
         test: bool,
@@ -427,6 +430,9 @@ pub enum DbCommand {
 
         #[command(flatten)]
         password: PasswordSource,
+
+        #[command(flatten)]
+        ssh: SshFields,
 
         /// Connect before saving, and refuse to save if it does not work.
         #[arg(long)]
@@ -685,6 +691,84 @@ pub struct NewDestination {
     pub role_password_command: Option<String>,
 }
 
+/// Reaching a database that is only reachable from the server — `R19e`.
+///
+/// **`--host` then means the address the *server* sees**, which is almost always
+/// `127.0.0.1`, and the machine sloop connects *to* is `--ssh-host`. Getting that backwards
+/// is the mistake everybody makes once, so it is in the help of every flag here that could
+/// be read the other way.
+///
+/// **The agent first.** With `ssh-agent` or Pageant holding the key, none of the passphrase
+/// flags are needed and sloop never sees a secret at all. When a key does need a passphrase
+/// it takes `R3`'s four routes, exactly as a database password does — and there is no
+/// `--ssh-passphrase` flag for the same reason there is no `--password` one.
+///
+/// **Four booleans, for the reason [`Cli`] has seven.** They are flags a user typed, filled
+/// in by clap from `argv` by name and read by name; there is no call site where two of them
+/// could be handed over the wrong way round.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, clap::Args)]
+pub struct SshFields {
+    /// Reach this database through an SSH server, because its own port is not open.
+    ///
+    /// --host then means the address that server sees, usually 127.0.0.1.
+    #[arg(long, value_name = "HOST", help_heading = SSH_HEADING)]
+    pub ssh_host: Option<String>,
+
+    /// The SSH server's port. 22 when left out. Not the database's port.
+    #[arg(long, value_name = "PORT", help_heading = SSH_HEADING)]
+    pub ssh_port: Option<u16>,
+
+    /// Who to be on the SSH server. ~/.ssh/config, then your own username, when left out.
+    #[arg(long, value_name = "USER", help_heading = SSH_HEADING)]
+    pub ssh_user: Option<String>,
+
+    /// A particular private key, as `ssh -i` takes it.
+    ///
+    /// The agent and ~/.ssh/config when left out, which is the documented default. sloop
+    /// never reads this file and never copies it.
+    #[arg(long, value_name = "PATH", help_heading = SSH_HEADING)]
+    pub ssh_identity: Option<String>,
+
+    /// Stop going through an SSH server. The connection becomes a direct one.
+    #[arg(
+        long,
+        help_heading = SSH_HEADING,
+        conflicts_with_all = [
+            "ssh_host", "ssh_port", "ssh_user", "ssh_identity",
+            "ssh_keyring", "ssh_encrypted_file", "ssh_env", "ssh_passphrase_from",
+            "ssh_passphrase_stdin",
+        ]
+    )]
+    pub no_ssh: bool,
+
+    /// Keep the key's passphrase in the OS keyring.
+    #[arg(long, group = "ssh-route", help_heading = SSH_HEADING)]
+    pub ssh_keyring: bool,
+
+    /// Keep it in the Argon2id-encrypted store, for a machine with no keyring.
+    #[arg(long, group = "ssh-route", help_heading = SSH_HEADING)]
+    pub ssh_encrypted_file: bool,
+
+    /// Read it from this environment variable at run time, for automation.
+    #[arg(long, value_name = "VARIABLE", group = "ssh-route", help_heading = SSH_HEADING)]
+    pub ssh_env: Option<String>,
+
+    /// Run this and read the passphrase from its output, for a team password manager.
+    #[arg(long, value_name = "COMMAND", group = "ssh-route", help_heading = SSH_HEADING)]
+    pub ssh_passphrase_from: Option<String>,
+
+    /// Take the passphrase from standard input instead of asking for it.
+    ///
+    /// The only way to store one without a terminal. Not together with --password-stdin:
+    /// there is one pipe and reading it twice would make the second secret empty.
+    #[arg(long, help_heading = SSH_HEADING, conflicts_with = "password_stdin")]
+    pub ssh_passphrase_stdin: bool,
+}
+
+/// The one place the SSH flags' help heading is spelled, so all ten sit together.
+const SSH_HEADING: &str = "Reaching it over SSH";
+
 /// Where the password will come from, from now on.
 ///
 /// **Never a `--password` flag, and there never will be one.** Everything in `argv` is
@@ -732,8 +816,16 @@ Examples:
   printf %s \"$PW\" | sloop db add nightly --url postgres://bk@db/app --password-stdin
       For a machine with no terminal to ask at.
 
+  sloop db add prod --url postgres://app@127.0.0.1/orders --ssh-host db.example.com
+      A database whose port is closed to everything outside its own server. sloop
+      opens one SSH connection and every dump, restore and query goes down it.
+
 A password never goes in a flag. `ps` shows every argument of every process on the
-machine, so a password passed that way has already been read by anyone who wanted it.";
+machine, so a password passed that way has already been read by anyone who wanted it.
+
+Over SSH, --host is the address the SERVER sees — almost always 127.0.0.1 — and the
+machine sloop connects to is --ssh-host. Getting those two the wrong way round is the
+mistake everybody makes once.";
 
 /// `sloop backups …` — everything that reads what has already been taken.
 #[derive(Debug, Subcommand)]

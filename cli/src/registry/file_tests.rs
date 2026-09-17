@@ -215,3 +215,87 @@ fn a_file_that_will_not_parse_names_itself() {
         failure.message()
     );
 }
+
+/// **The round trip is what proves `parse` reads everything a registry can hold**, so a
+/// field that arrives has to arrive here too — and a `Reach` that quietly did not survive
+/// being written and read would make the test above pass while checking nothing about it.
+#[test]
+fn a_registry_that_goes_over_ssh_survives_the_same_round_trip() {
+    let text = r#"
+version = 1
+
+[databases.prod]
+engine = "postgres"
+host = "127.0.0.1"
+port = 5432
+database = "orders"
+user = "app"
+password = "keyring"
+
+[databases.prod.ssh]
+host = "bastion.internal"
+port = 2222
+user = "deploy"
+identity = "/home/me/.ssh/id_ed25519"
+passphrase = "${SSH_KEY_PW}"
+
+[databases.plain]
+engine = "mysql"
+host = "db.internal"
+port = 3306
+database = "app"
+user = "app"
+password = "keyring"
+"#;
+
+    let original = Registry::parse(text).unwrap();
+    let written = original.to_toml().unwrap();
+    let again = Registry::parse(&written).unwrap();
+    assert_eq!(original, again);
+
+    let prod = original.get("prod").expect("prod");
+    let through = prod.reach.through().expect("it goes over SSH");
+    assert_eq!(through.server.host, "bastion.internal");
+    assert_eq!(through.server.port, 2222);
+    assert_eq!(through.server.user.as_deref(), Some("deploy"));
+    assert_eq!(
+        through.secret,
+        Some(crate::secret::Route::Environment("SSH_KEY_PW".to_owned()))
+    );
+
+    // A database that says nothing about SSH has no block written for it, because
+    // `Reach::Direct` is an ordinary state and not an empty setting.
+    assert!(original.get("plain").unwrap().reach.through().is_none());
+    assert!(
+        !written.contains("[databases.plain.ssh]"),
+        "a direct registration writes no ssh block:\n{written}"
+    );
+}
+
+/// A passphrase written into the file where a route belongs is refused, exactly as a
+/// password in the `password` field is. There is no spelling of a plaintext one that parses.
+#[test]
+fn a_passphrase_in_the_ssh_block_is_refused_like_any_other_secret() {
+    let text = r#"
+version = 1
+
+[databases.prod]
+engine = "postgres"
+host = "127.0.0.1"
+port = 5432
+database = "orders"
+user = "app"
+password = "keyring"
+
+[databases.prod.ssh]
+host = "bastion.internal"
+passphrase = "hunter2"
+"#;
+
+    let failure = Registry::parse(text).unwrap_err();
+    assert!(
+        failure.message().contains("prod ssh"),
+        "it has to say which entry: {}",
+        failure.message()
+    );
+}

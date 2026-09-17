@@ -258,7 +258,10 @@ impl Cluster {
             database,
             &format!(
                 "SELECT d.label, e.name, d.host, d.port, d.database_name, d.username,
-                        d.password_route
+                        d.password_route,
+                        coalesce(d.ssh_host, ''), coalesce(d.ssh_port::text, ''),
+                        coalesce(d.ssh_user, ''), coalesce(d.ssh_identity, ''),
+                        coalesce(d.ssh_secret_route, '')
                    FROM registered_database d
                    JOIN engine e ON e.id = d.engine_id
                   WHERE {predicate}
@@ -270,15 +273,37 @@ impl Cluster {
         let mut text = String::new();
         for line in said.lines() {
             let fields: Vec<&str> = line.split(UNIT).collect();
-            if fields.len() != 7 {
+            if fields.len() != 12 {
                 continue;
             }
             let _ = write!(
                 text,
                 "[databases.{}]\nengine = \"{}\"\nhost = \"{}\"\nport = {}\n\
-                 database = \"{}\"\nuser = \"{}\"\npassword = \"{}\"\n\n",
+                 database = \"{}\"\nuser = \"{}\"\npassword = \"{}\"\n",
                 fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6]
             );
+
+            // The SSH server, when the row names one — and nothing at all when it does not,
+            // because "no block" is what a direct registration has to look like and a test
+            // asserting on that is asserting on the constraint as well as on the code.
+            if !fields[7].is_empty() {
+                let _ = write!(
+                    text,
+                    "\n[databases.{}.ssh]\nhost = \"{}\"\nport = {}\n",
+                    fields[0], fields[7], fields[8]
+                );
+                for (name, value) in [
+                    ("user", fields[9]),
+                    ("identity", fields[10]),
+                    ("passphrase", fields[11]),
+                ] {
+                    if !value.is_empty() {
+                        let _ = writeln!(text, "{name} = \"{value}\"");
+                    }
+                }
+            }
+
+            text.push('\n');
         }
 
         // The backup keypair, which `key` and `backup` assert on the same way.

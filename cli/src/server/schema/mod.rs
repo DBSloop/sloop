@@ -23,6 +23,10 @@
 //! sealed_vault          `secrets.sealed`, as ciphertext in a column        0005
 //! ```
 //!
+//! **`0006` adds no table.** It puts five columns on `registered_database` — the SSH server
+//! a database is reached through, when it is reached through one — which is why the count
+//! above is still eleven.
+//!
 //! **No user data, ever.** What is stored is about *databases* — their addresses, their
 //! sizes, their row counts, how long a dump took. Not one column holds anything that was
 //! inside one of the user's tables, and [`tests::no_column_could_hold_a_secret`] is what
@@ -112,6 +116,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "vault",
         sql: include_str!("migrations/0005_vault.sql"),
     },
+    Migration {
+        version: 6,
+        name: "ssh",
+        sql: include_str!("migrations/0006_ssh.sql"),
+    },
 ];
 
 /// The documented way in to one table.
@@ -165,9 +174,11 @@ pub const READINGS: &[Reading] = &[
         // The project's own first, then the global store's: `scope` DESC puts 'project'
         // above 'global' because that is the order the two words sort in, which is a
         // coincidence worth naming rather than relying on silently.
-        purpose: "every database this registry can reach, the project's own listed first",
+        purpose: "every database this registry can reach, the project's own listed first, \
+                  and the SSH server each one goes through when it goes through one",
         sql: "SELECT d.label, e.name AS engine, d.host, d.port, d.database_name,
-                     d.username, d.password_route, d.scope, p.directory AS project
+                     d.username, d.password_route, d.scope, p.directory AS project,
+                     d.ssh_host, d.ssh_port, d.ssh_user, d.ssh_identity, d.ssh_secret_route
                 FROM registered_database d
                 JOIN engine  e ON e.id = d.engine_id
                 LEFT JOIN project p ON p.id = d.project_id

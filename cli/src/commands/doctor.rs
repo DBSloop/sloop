@@ -382,6 +382,8 @@ fn check(
     scope: Scope,
     inventory: &Inventory,
 ) -> Result<Report, Failure> {
+    super::reachable(database)?;
+
     let key = database.credential_key();
     let route = database.password.overridden_by(registered.password_command);
     // The encrypted file sits beside the registry that names the database, so a project

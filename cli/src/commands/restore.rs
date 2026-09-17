@@ -38,6 +38,7 @@ use crate::crypt::{self, PrivateKey};
 use crate::engine::{Adapter, Target};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
+use crate::registry::file::Database;
 use crate::registry::{Registries, Scope};
 use crate::secret::{Lookup, resolve};
 use crate::style;
@@ -70,6 +71,7 @@ fn vault_for(context: &Context<'_>, scope: Scope) -> crate::secret::sealed::Vaul
 pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exit> {
     let (scope, record) = context.registries.find(name)?;
     let record = record.clone();
+    super::reachable(&record)?;
 
     // **The paperwork first, before a password is fetched or a socket opened.** A scheduled
     // restore that named the wrong database should be told so without contacting anything.
@@ -109,16 +111,7 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
         crate::say!("  {}", style::dim(&line));
     }
 
-    // The engine the backup came from has to be the engine it is going into. A PostgreSQL
-    // archive fed to `mysql` is a wall of syntax errors, and saying so here is kinder than
-    // letting the client say it.
-    if manifest.engine != record.engine {
-        return Err(Failure::usage(format!(
-            "that backup is {} and {name} is {}",
-            manifest.engine, record.engine
-        ))
-        .hint("R29 is where restoring across engines gets decided; today it is refused"));
-    }
+    same_engine(&manifest, &record, name)?;
 
     let key = record.credential_key();
     let route = record.password.overridden_by(context.password_command);
@@ -192,6 +185,22 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
         "tables": comparison.as_json(),
     }));
     Ok(comparison.exit())
+}
+
+/// The engine a backup came from has to be the engine it is going into.
+///
+/// A PostgreSQL archive fed to `mysql` is a wall of syntax errors, and saying so here is
+/// kinder than letting the client say it.
+fn same_engine(manifest: &Manifest, record: &Database, name: &str) -> Outcome<()> {
+    if manifest.engine == record.engine {
+        return Ok(());
+    }
+
+    Err(Failure::usage(format!(
+        "that backup is {} and {name} is {}",
+        manifest.engine, record.engine
+    ))
+    .hint("R29 is where restoring across engines gets decided; today it is refused"))
 }
 
 /// Which backup this run is putting back.

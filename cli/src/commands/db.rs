@@ -24,7 +24,7 @@
 use std::io::{IsTerminal as _, Read as _};
 use std::path::Path;
 
-use crate::cli::{Fields, PasswordSource};
+use crate::cli::{Fields, PasswordSource, SshFields};
 use crate::consent::{Consent, Destroying};
 use crate::engine::{Engine, Provisioning, Target};
 use crate::exit::Exit;
@@ -32,6 +32,7 @@ use crate::failure::{Failure, Outcome};
 use crate::registry::file::{Database, check_name};
 use crate::registry::{Registries, Scope};
 use crate::secret::{Lookup, Route, Secret, resolve};
+use crate::ssh::{DEFAULT_PORT as SSH_PORT, Reach, Server, Through};
 use crate::style;
 
 /// Everything a `db` command needs from the outside.
@@ -57,6 +58,7 @@ pub fn add(
     url: Option<&str>,
     fields: &Fields,
     password: &PasswordSource,
+    ssh: &SshFields,
     test: bool,
 ) -> Outcome<Exit> {
     check_name(name)?;
@@ -76,7 +78,7 @@ pub fn add(
         .hint("`sloop db edit` changes it, and --force replaces it outright"));
     }
 
-    let (draft, from_url) = draft(None, url, fields)?;
+    let (draft, from_url) = draft(None, url, fields, ssh)?;
     let route = route_for(password, None)?;
     let database = draft.into_database(route.clone())?;
 
@@ -84,6 +86,7 @@ pub fn add(
     // the password is fetched, the connection is tried, and only then does the machine
     // change. A half-registered database is worse than an unregistered one.
     let secret = secret_for(&route, password, from_url, &database, context)?;
+    let passphrase = ssh_secret_for(&database, ssh, context)?;
     if test {
         let reached = probe(&database, secret.as_ref(), context)?;
         announce_server(&reached);
@@ -96,14 +99,18 @@ pub fn add(
     // Replacing a record orphans whatever the old one pointed at, exactly as an edit does.
     let retire = replacing
         .as_ref()
-        .and_then(|existing| Retiring::between(existing, &database));
+        .map(|existing| Retiring::between(existing, &database))
+        .unwrap_or_default();
     write(
         &mut context.registries,
         scope,
         name,
         &database,
-        secret.as_ref(),
-        retire,
+        &Secrets {
+            password: secret.as_ref(),
+            ssh: passphrase.as_ref(),
+        },
+        &retire,
     )?;
 
     crate::report::result(serde_json::json!({
@@ -111,6 +118,7 @@ pub fn add(
         "registry": scope.label(),
         "connection": database.credential_key(),
         "password": route.describe(),
+        "ssh": database.reach.through().map(Through::describe),
     }));
     crate::say!(
         "{} {} in the {} registry {}",
@@ -124,7 +132,29 @@ pub fn add(
         ))
     );
     crate::say!("  {}", style::dim(&database.credential_key()));
+    announce_reach(&database);
     Ok(Exit::Success)
+}
+
+/// The sentence everybody needs once, printed where it cannot be missed.
+///
+/// **Said on the way in rather than only in `--help`.** A registration whose `--host` is the
+/// laptop's idea of the address instead of the server's produces a tunnel to nowhere and an
+/// error about the *database*, which is the least useful place to find out. So the record is
+/// read back in words at the moment it is written.
+fn announce_reach(database: &Database) {
+    let Some(through) = database.reach.through() else {
+        return;
+    };
+
+    crate::say!("  {}", style::dim(&through.describe()));
+    crate::say!(
+        "  {}",
+        style::dim(&format!(
+            "{}:{} is as {} sees it, not as this machine does",
+            database.host, database.port, through.server.host
+        ))
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -331,14 +361,18 @@ pub fn build(
         database: database.clone(),
         user: role.clone(),
         password: route.clone(),
+        // `db create` makes a database on a server it can already reach, so there is no
+        // tunnel to record. Creating one on the far side of an SSH server is a different
+        // command's problem and not something to half-build here.
+        reach: Reach::Direct,
     };
     write(
         registries,
         scope,
         asked.name,
         &record,
-        Some(&role_password),
-        None,
+        &Secrets::just_the_password(&role_password),
+        &[],
     )?;
 
     crate::say!(
@@ -734,9 +768,45 @@ const fn usual_superuser(engine: Engine) -> &'static str {
 // list
 // ---------------------------------------------------------------------------------------
 
+/// One registered database, for `--json`.
+///
+/// **Nothing in here is a secret**, and that is a property of every field rather than a
+/// habit: a password is a [`Route`], which is a direction, and every SSH field is something
+/// `ps` shows the moment `ssh` runs.
+fn as_json(
+    scope: Scope,
+    name: &str,
+    database: &Database,
+    context: &Context<'_>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "registry": scope.label(),
+        "engine": database.engine.to_string(),
+        "host": database.host,
+        "port": database.port,
+        "database": database.database,
+        "user": database.user,
+        "password": database.password.overridden_by(context.password_command).describe(),
+        "ssh": database.reach.through().map(|through| serde_json::json!({
+            "host": through.server.host,
+            "port": through.server.port,
+            "user": through.server.user,
+            "identity": through.server.identity
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            "passphrase": through.secret.as_ref().map(Route::describe),
+        })),
+    })
+}
+
 /// One line of `db list`, gathered before anything is printed so the columns can be
 /// measured against every row rather than guessed at.
-type Row = (String, Scope, String, String);
+///
+/// The last field is the tunnel, on a line of its own when there is one. It is not a column
+/// because it is rare and long: widening every row of a listing for a field most of them do
+/// not have is how a table stops being readable.
+type Row = (String, Scope, String, String, Option<String>);
 
 /// Show what is registered. Never a secret — see [`Route::describe`].
 ///
@@ -763,17 +833,7 @@ pub fn list(context: &Context<'_>) -> Exit {
         "databases": context
             .registries
             .all()
-            .map(|(scope, name, database)| serde_json::json!({
-                "name": name,
-                "registry": scope.label(),
-                "engine": database.engine.to_string(),
-                "host": database.host,
-                "port": database.port,
-                "database": database.database,
-                "user": database.user,
-                // A route, never a value — the same property that lets this be printed.
-                "password": database.password.overridden_by(context.password_command).describe(),
-            }))
+            .map(|(scope, name, database)| as_json(scope, name, database, context))
             .collect::<Vec<_>>(),
     }));
 
@@ -784,13 +844,23 @@ pub fn list(context: &Context<'_>) -> Exit {
             (
                 name.to_owned(),
                 scope,
-                database.credential_key(),
+                // The connection alone, without the `through ssh://…` that
+                // `Database::credential_key` appends: the tunnel gets its own line below,
+                // where there is room to say what it means.
+                crate::engine::connection_string(
+                    database.engine,
+                    &database.user,
+                    &database.host,
+                    database.port,
+                    &database.database,
+                ),
                 // A route, never a value. Not one of these phrases can contain a
                 // password, which is the property that lets this be printed at all.
                 database
                     .password
                     .overridden_by(context.password_command)
                     .describe(),
+                database.reach.through().map(Through::describe),
             )
         })
         .collect();
@@ -811,7 +881,7 @@ pub fn list(context: &Context<'_>) -> Exit {
 
     let mut seen: Vec<&str> = Vec::new();
 
-    for (name, scope, connection, route) in &rows {
+    for (name, scope, connection, route, over) in &rows {
         // A project entry shadows a global one of the same name. Saying so is the
         // difference between a confusing listing and an explanation.
         let shadowed = seen.contains(&name.as_str());
@@ -829,6 +899,15 @@ pub fn list(context: &Context<'_>) -> Exit {
                 if shadowed { ", shadowed" } else { "" }
             )),
         );
+
+        if let Some(over) = over {
+            crate::say!(
+                "{}{}  {}",
+                " ".repeat(name.chars().count()),
+                pad(name, name_column),
+                style::dim(over)
+            );
+        }
     }
 
     crate::say!();
@@ -928,12 +1007,13 @@ pub fn edit(
     url: Option<&str>,
     fields: &Fields,
     password: &PasswordSource,
+    ssh: &SshFields,
     test: bool,
 ) -> Outcome<Exit> {
     let (scope, before) = context.registries.find(name)?;
     let before = before.clone();
 
-    let (draft, from_url) = draft(Some(&before), url, fields)?;
+    let (draft, from_url) = draft(Some(&before), url, fields, ssh)?;
     let route = route_for(password, Some(&before.password))?;
     let after = draft.into_database(route.clone())?;
 
@@ -973,6 +1053,8 @@ pub fn edit(
         None
     };
 
+    let passphrase = ssh_carried_over(&before, &after, ssh, context, scope)?;
+
     if test {
         let reached = probe(&after, secret.as_ref(), context)?;
         announce_server(&reached);
@@ -987,8 +1069,11 @@ pub fn edit(
         scope,
         name,
         &after,
-        secret.as_ref(),
-        Retiring::between(&before, &after),
+        &Secrets {
+            password: secret.as_ref(),
+            ssh: passphrase.as_ref(),
+        },
+        &Retiring::between(&before, &after),
     )?;
 
     crate::say!(
@@ -999,6 +1084,7 @@ pub fn edit(
     );
     crate::say!("  {}", style::dim(&before.credential_key()));
     crate::say!("  {}", after.credential_key());
+    announce_reach(&after);
     Ok(Exit::Success)
 }
 
@@ -1061,13 +1147,14 @@ pub fn rename(context: &mut Context<'_>, from: &str, to: &str) -> Outcome<Exit> 
 ///
 /// One of these whether the details came from a URL, from flags, or from an existing
 /// record being edited — which is what makes the three indistinguishable afterwards.
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Draft {
     engine: Option<Engine>,
     host: Option<String>,
     port: Option<u16>,
     database: Option<String>,
     user: Option<String>,
+    reach: Reach,
 }
 
 impl Draft {
@@ -1091,6 +1178,7 @@ impl Draft {
             user: self.user.ok_or_else(|| need("role", "--user"))?,
             engine,
             password,
+            reach: self.reach,
         })
     }
 }
@@ -1104,6 +1192,7 @@ fn draft(
     existing: Option<&Database>,
     url: Option<&str>,
     fields: &Fields,
+    ssh: &SshFields,
 ) -> Outcome<(Draft, Option<Secret>)> {
     let mut draft = Draft::default();
     let mut from_url = None;
@@ -1114,6 +1203,7 @@ fn draft(
         draft.port = Some(existing.port);
         draft.database = Some(existing.database.clone());
         draft.user = Some(existing.user.clone());
+        draft.reach = existing.reach.clone();
     }
 
     if let Some(url) = url {
@@ -1149,7 +1239,151 @@ fn draft(
         draft.user = Some(user);
     }
 
+    draft.reach = reach_from(draft.reach, ssh)?;
+
     Ok((draft, from_url))
+}
+
+/// How this database is reached, after the `--ssh-*` flags have had their say.
+///
+/// **The flags edit what is there rather than replacing it**, the same way `--port` alone
+/// leaves the host alone: `db edit prod --ssh-user deploy` changes the account and keeps the
+/// server. `--no-ssh` is the one that replaces, and it is a separate flag rather than an
+/// empty `--ssh-host ""` because turning a tunnel off is a decision somebody should have to
+/// spell.
+///
+/// A URL has no say here at all. There is no spelling of an SSH server in a PostgreSQL URL,
+/// and inventing one would be inventing a format nobody else reads.
+fn reach_from(current: Reach, ssh: &SshFields) -> Outcome<Reach> {
+    if ssh.no_ssh {
+        return Ok(Reach::Direct);
+    }
+
+    let nothing_said = ssh.ssh_host.is_none()
+        && ssh.ssh_port.is_none()
+        && ssh.ssh_user.is_none()
+        && ssh.ssh_identity.is_none()
+        && !ssh.ssh_keyring
+        && !ssh.ssh_encrypted_file
+        && ssh.ssh_env.is_none()
+        && ssh.ssh_passphrase_from.is_none()
+        && !ssh.ssh_passphrase_stdin;
+
+    if nothing_said {
+        return Ok(current);
+    }
+
+    let mut through = match current {
+        Reach::Over(through) => *through,
+        // Nothing to edit, so there has to be a server to start from. Naming the flag
+        // rather than guessing: `--ssh-user deploy` on a direct database could mean four
+        // different servers and sloop knows none of them.
+        Reach::Direct => {
+            let host = ssh.ssh_host.clone().ok_or_else(|| {
+                Failure::usage("--ssh-host says which server to go through, and it was not given")
+                    .hint(
+                        "`--ssh-host db.example.com`. --host is then the address that \
+                         server sees, usually 127.0.0.1",
+                    )
+            })?;
+
+            Through {
+                server: Server {
+                    host,
+                    port: SSH_PORT,
+                    user: None,
+                    identity: None,
+                },
+                secret: None,
+            }
+        }
+    };
+
+    if let Some(host) = ssh.ssh_host.clone() {
+        through.server.host = host;
+    }
+    if let Some(port) = ssh.ssh_port {
+        through.server.port = port;
+    }
+    if let Some(user) = ssh.ssh_user.clone() {
+        through.server.user = Some(user);
+    }
+    if let Some(identity) = ssh.ssh_identity.as_deref() {
+        through.server.identity = Some(std::path::PathBuf::from(identity));
+    }
+
+    through.secret = ssh_route_for(ssh, through.secret.as_ref())?;
+
+    check_ssh(&through.server)?;
+    Ok(Reach::Over(Box::new(through)))
+}
+
+/// Where the key's passphrase comes from, or `None` for the agent.
+///
+/// **`None` is the default and stays the default.** Unlike a database password, which always
+/// has to come from somewhere, an SSH key usually needs nothing from sloop at all — the
+/// agent holds it, or the key has no passphrase. So a registration says nothing about a
+/// passphrase unless one of these flags was passed.
+fn ssh_route_for(chosen: &SshFields, existing: Option<&Route>) -> Outcome<Option<Route>> {
+    if chosen.ssh_keyring {
+        return Ok(Some(Route::Keyring));
+    }
+    if chosen.ssh_encrypted_file {
+        return Ok(Some(Route::EncryptedFile));
+    }
+    if let Some(variable) = chosen.ssh_env.as_deref() {
+        // The same reader the registry uses, so a flag and a hand-written field cannot
+        // disagree about what a legal variable name is.
+        return Ok(Some(Route::parse(&format!("${{{variable}}}"))?));
+    }
+    if let Some(command) = chosen.ssh_passphrase_from.as_deref() {
+        return Ok(Some(Route::parse(&format!("command:{command}"))?));
+    }
+    if chosen.ssh_passphrase_stdin {
+        // A value is being supplied with no route named for it, so it goes wherever this
+        // machine keeps secrets — the same answer `db add` gives for a database password.
+        return Ok(Some(existing.cloned().unwrap_or_else(kept_where)));
+    }
+
+    Ok(existing.cloned())
+}
+
+/// Check the server's own fields, before a record naming it is written.
+///
+/// Nothing here is about security — `known_hosts` is OpenSSH's and stays OpenSSH's. It is
+/// about a record that would produce an `ssh` command line meaning something other than what
+/// was typed: a host that is really `-o` would be an option, and a host with a space in it is
+/// two arguments.
+fn check_ssh(server: &Server) -> Outcome<()> {
+    let refuse = |why: &str| {
+        Failure::usage(format!("{} cannot be an SSH server: {why}", server.host))
+            .hint("a host name or an address, as you would type it after `ssh`")
+    };
+
+    if server.host.trim().is_empty() {
+        return Err(refuse("it is empty"));
+    }
+    if server.host.trim() != server.host {
+        return Err(refuse("it starts or ends with whitespace"));
+    }
+    if server.host.contains(char::is_whitespace) {
+        return Err(refuse(
+            "it has a space in it, so `ssh` would read it as two arguments",
+        ));
+    }
+    if server.host.starts_with('-') {
+        return Err(refuse(
+            "it starts with a dash, so `ssh` would read it as an option",
+        ));
+    }
+    if let Some(user) = &server.user
+        && (user.trim() != user || user.is_empty() || user.contains(char::is_whitespace))
+    {
+        return Err(Failure::usage(format!("{user} cannot be an SSH username"))
+            .hint("the account on the server, with no spaces around it"));
+    }
+
+    Ok(())
 }
 
 /// Which of the four routes this registration will use.
@@ -1296,6 +1530,146 @@ fn from_stdin() -> Outcome<Secret> {
     Ok(Secret::new(typed))
 }
 
+/// Try a route that keeps nothing, and say so if it answers with nothing.
+fn note_if_it_does_not_answer(route: &Route, key: &str, context: &Context<'_>) {
+    let scope = context.registries.writes_to();
+    let vault = context
+        .registries
+        .vault_in(scope)
+        .unwrap_or_else(crate::secret::sealed::Vault::nowhere);
+
+    if let Err(failure) = resolve(route, &Lookup { key, vault: &vault }) {
+        crate::note!(
+            "{}",
+            style::dim(&format!(
+                "note: {} — registered anyway, because {} is read on every run rather than \
+                 kept here",
+                failure.message(),
+                route.describe()
+            ))
+        );
+    }
+}
+
+/// Get the SSH key's passphrase, if this registration needs sloop to hold one.
+///
+/// **`None` is the ordinary answer and the good one.** No SSH server, no route, or a route
+/// that is a direction rather than a place — all three mean there is nothing for sloop to
+/// keep, and with an agent holding the key that is every run.
+fn ssh_secret_for(
+    database: &Database,
+    chosen: &SshFields,
+    context: &Context<'_>,
+) -> Outcome<Option<Secret>> {
+    let Some(through) = database.reach.through() else {
+        return Ok(None);
+    };
+    let Some(route) = &through.secret else {
+        return Ok(None);
+    };
+
+    let asking_for = through.server.credential_key();
+
+    if !route.is_stored() {
+        // A direction rather than a place, so there is nothing to keep — but it is tried
+        // once, for the reason `secret_for` tries the database's: a variable that is not set
+        // or a command that is not installed should be mentioned now rather than found at
+        // the first backup. A note and not a refusal, because these two routes exist for
+        // machines configured later than they are registered.
+        note_if_it_does_not_answer(route, &asking_for, context);
+        return Ok(None);
+    }
+
+    let secret = if chosen.ssh_passphrase_stdin {
+        from_stdin()?
+    } else if std::io::stdin().is_terminal() {
+        let typed = rpassword::prompt_password(format!("Passphrase for {asking_for}: "))
+            .map_err(|error| Failure::usage(format!("could not read the passphrase: {error}")))?;
+        Secret::new(typed)
+    } else {
+        // Rule 4. The flag that would have answered it is named, and so is the way to
+        // register this database without sloop holding anything at all.
+        return Err(Failure::new(
+            Exit::Usage,
+            "the SSH key's passphrase is needed and there is no terminal to ask at",
+        )
+        .hint(
+            "pipe it in with --ssh-passphrase-stdin, or use --ssh-env VARIABLE or \
+             --ssh-passphrase-from <command> — or put the key in an agent and pass none of \
+             them",
+        ));
+    };
+
+    for note in secret.notes() {
+        crate::note!("{}", style::dim(&note));
+    }
+
+    Ok(Some(secret))
+}
+
+/// The passphrase an edit should file, carried over rather than asked for where it can be.
+///
+/// **Changing the SSH port should not cost somebody their passphrase.** It is filed under
+/// the server, so moving the server moves the key it lives under — and the old one is read
+/// from wherever it was and written under the new name, exactly as the database password is.
+fn ssh_carried_over(
+    before: &Database,
+    after: &Database,
+    chosen: &SshFields,
+    context: &Context<'_>,
+    scope: Scope,
+) -> Outcome<Option<Secret>> {
+    let Some(now) = after.reach.through() else {
+        return Ok(None);
+    };
+    let Some(route) = &now.secret else {
+        return Ok(None);
+    };
+    if !route.is_stored() {
+        return Ok(None);
+    }
+
+    // Supplied on this command line, so there is nothing to carry.
+    if chosen.ssh_passphrase_stdin {
+        return ssh_secret_for(after, chosen, context);
+    }
+
+    let key = now.server.credential_key();
+
+    if let Some(was) = before.reach.through()
+        && let Some(old_route) = &was.secret
+        && old_route.is_stored()
+    {
+        let old_key = was.server.credential_key();
+        if old_key == key && old_route == route {
+            // Nothing moved and nothing changed: what is already filed is still right, and
+            // reading and rewriting it would be a keyring prompt for no reason.
+            return Ok(None);
+        }
+
+        if let Some(vault) = context.registries.vault_in(scope)
+            && let Ok(resolved) = resolve(
+                old_route,
+                &Lookup {
+                    key: &old_key,
+                    vault: &vault,
+                },
+            )
+        {
+            return Ok(Some(resolved.secret));
+        }
+    }
+
+    // Nothing to carry — this database did not go over SSH before, or its passphrase was a
+    // `${VAR}`, or there is simply nothing filed under the old name. Ask.
+    ssh_secret_for(after, chosen, context).map_err(|failure| {
+        failure.hint(
+            "this edit needs the passphrase filed under the new server, and there was none \
+             under the old one. Supply it with --ssh-passphrase-stdin, or at the prompt",
+        )
+    })
+}
+
 /// Fetch the password a record already had, so an edit can move it rather than ask again.
 ///
 /// `None` rather than an error on every failure, deliberately: the old route may be a
@@ -1330,6 +1704,8 @@ fn connect(
     context: &Context<'_>,
     scope: Scope,
 ) -> Outcome<crate::engine::ServerInfo> {
+    super::reachable(database)?;
+
     let key = database.credential_key();
     let route = database.password.overridden_by(context.password_command);
     let vault = context
@@ -1400,40 +1776,108 @@ fn write(
     scope: Scope,
     name: &str,
     database: &Database,
-    secret: Option<&Secret>,
-    retire: Option<Retiring>,
+    secrets: &Secrets<'_>,
+    retire: &[Retiring],
 ) -> Outcome<()> {
-    let key = database.credential_key();
+    // **Every secret this registration holds, each under its own key.** A database reached
+    // over SSH has two — its own password and the passphrase that opens the key — and the
+    // two go to different places under different names, because five databases behind one
+    // bastion share the passphrase and share nothing else.
+    let mut written: Vec<Retiring> = Vec::new();
 
-    if let Some(secret) = secret {
+    if let Some(secret) = secrets.password {
+        let key = database.credential_key();
         store(&database.password, &key, secret, registries, scope)?;
+        written.push(Retiring {
+            route: database.password.clone(),
+            key,
+        });
+    }
+
+    if let Some((route, key, secret)) = ssh_credential(database, secrets.ssh) {
+        if let Err(failure) = store(route, &key, secret, registries, scope) {
+            // The database password may already be down. Nothing is half-written if this
+            // fails, which is the same guarantee the single-secret version had.
+            undo(&written, registries, scope);
+            return Err(failure);
+        }
+        written.push(Retiring {
+            route: route.clone(),
+            key,
+        });
     }
 
     let stored = crate::registry::Qualified::parse(name)?.name().to_owned();
     let entry = database.clone();
     let saved = registries.update(scope, move |registry| Ok(registry.insert(stored, entry)));
 
-    if saved.is_err() && secret.is_some() {
-        let _ = forget(&database.password, &key, registries, scope);
+    if saved.is_err() {
+        undo(&written, registries, scope);
     }
     saved?;
 
     // Only once the new record is safely on disk. A password nothing references any more
     // is clutter at best, and clearing it before the write would have been clutter plus a
     // lost password if the write then failed.
-    if let Some(old) = retire
-        && let Err(failure) = forget(&old.route, &old.key, registries, scope)
-    {
-        crate::note!(
-            "{}",
-            style::dim(&format!(
-                "the password under the old key could not be removed: {}",
-                failure.message()
-            ))
-        );
+    for old in retire {
+        if let Err(failure) = forget(&old.route, &old.key, registries, scope) {
+            crate::note!(
+                "{}",
+                style::dim(&format!(
+                    "the secret under the old key could not be removed: {}",
+                    failure.message()
+                ))
+            );
+        }
     }
 
     Ok(())
+}
+
+/// The SSH passphrase this registration is about to file, if it has one to file.
+///
+/// Three things have to line up: a secret in hand, a server to file it against, and a route
+/// that keeps anything. `${VAR}` and `command:` are directions rather than places, so there
+/// is nothing to write for either.
+fn ssh_credential<'a>(
+    database: &'a Database,
+    secret: Option<&'a Secret>,
+) -> Option<(&'a Route, String, &'a Secret)> {
+    let secret = secret?;
+    let through = database.reach.through()?;
+    let route = through.secret.as_ref()?;
+    Some((route, through.server.credential_key(), secret))
+}
+
+/// Put back what was just written, after something else in the same registration failed.
+fn undo(written: &[Retiring], registries: &Registries, scope: Scope) {
+    for one in written {
+        let _ = forget(&one.route, &one.key, registries, scope);
+    }
+}
+
+/// What a registration is holding, ready to be filed.
+///
+/// Named fields rather than two `Option<&Secret>` arguments in a row: the two are the same
+/// type, they go to different keys, and passing them the wrong way round would file a
+/// database password under an SSH server's name and be discovered at the next backup.
+#[derive(Default)]
+struct Secrets<'a> {
+    /// The database's own password, when this run has one in hand.
+    password: Option<&'a Secret>,
+    /// The passphrase that opens the SSH key, when there is one.
+    ssh: Option<&'a Secret>,
+}
+
+impl<'a> Secrets<'a> {
+    /// A registration that holds a database password and nothing else — which is every
+    /// direct one, and is what `db create` always makes.
+    const fn just_the_password(password: &'a Secret) -> Self {
+        Self {
+            password: Some(password),
+            ssh: None,
+        }
+    }
 }
 
 /// A password that is no longer referenced, and where it lives.
@@ -1442,6 +1886,7 @@ fn write(
 /// the *new* route looks right and is not: `db edit --encrypted-file` on a keyring record
 /// writes the password into the file and then asks the file to forget a key it never had,
 /// while the keyring quietly keeps the password for a connection that no longer exists.
+#[derive(Debug)]
 struct Retiring {
     /// Where the old password was kept.
     route: Route,
@@ -1455,14 +1900,42 @@ impl Retiring {
     /// A move of the key or a change of route both orphan the old entry; a change of
     /// neither leaves nothing to do. The new route is not consulted at all — even a move
     /// to `${VAR}`, which stores nothing, has to clear what the old route was holding.
-    fn between(before: &Database, after: &Database) -> Option<Self> {
-        let key = before.credential_key();
-        let orphaned = key != after.credential_key() || before.password != after.password;
+    ///
+    /// **Both credentials, because an edit can move either.** `--ssh-identity` names a
+    /// different key and orphans the passphrase filed under the old one; `--no-ssh` orphans
+    /// it outright; and moving the tunnel moves the *database* password too, because
+    /// [`Database::credential_key`] has the server in it.
+    fn between(before: &Database, after: &Database) -> Vec<Self> {
+        let mut retiring = Vec::new();
 
-        (orphaned && before.password.is_stored()).then(|| Self {
-            route: before.password.clone(),
-            key,
-        })
+        let key = before.credential_key();
+        if before.password.is_stored()
+            && (key != after.credential_key() || before.password != after.password)
+        {
+            retiring.push(Self {
+                route: before.password.clone(),
+                key,
+            });
+        }
+
+        if let Some(was) = before.reach.through()
+            && let Some(route) = &was.secret
+            && route.is_stored()
+        {
+            let key = was.server.credential_key();
+            let kept = after.reach.through().is_some_and(|now| {
+                now.server.credential_key() == key && now.secret.as_ref() == Some(route)
+            });
+
+            if !kept {
+                retiring.push(Self {
+                    route: route.clone(),
+                    key,
+                });
+            }
+        }
+
+        retiring
     }
 }
 
@@ -1607,6 +2080,8 @@ pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
 
     // A name that resolves in the registry is not evidence that the database is there, and
     // "about to destroy X" had better be true before it is printed.
+    super::reachable(&record)?;
+
     let key = record.credential_key();
     let route = record.password.overridden_by(context.password_command);
     let vault = context

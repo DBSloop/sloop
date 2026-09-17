@@ -639,19 +639,26 @@ fn assertions(
     assert_eq!(behind.to, newest - 1);
     assert_eq!(behind.ran, every_name[..one_short]);
 
-    // It really is a release behind: the fourth migration's tables are not there yet.
+    // It really is a release behind: what the last migration adds is not there yet.
+    //
+    // **A column, not a table, since `0006`.** This check moves with whatever the newest
+    // migration happens to do, and pinning it to a table name was what made it need
+    // changing — the point it makes is "the last one has not run here", and the thing to
+    // look for is whatever that one puts in.
     let said = make::ask(
         server,
         &older.as_who(),
         Some(password),
-        "SELECT count(*) FROM information_schema.tables
-          WHERE table_schema = 'public' AND table_name = 'sealed_vault';",
+        "SELECT count(*) FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'registered_database'
+            AND column_name = 'ssh_host';",
     )
     .expect("the older database answers");
     assert_eq!(
         said.trim(),
         "0",
-        "the last migration's table is already there"
+        "what the last migration adds is already there"
     );
 
     // 8. And the real `migrate` carries it forward — the one it is missing, not all four.

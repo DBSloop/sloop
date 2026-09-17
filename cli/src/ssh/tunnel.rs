@@ -227,7 +227,7 @@ impl Tunnels {
     }
     /// The forward for this database, opening one if this session has not already.
     ///
-    /// Keyed by [`super::Server::connection_key`], so two databases on one server share a
+    /// Keyed by [`super::Server::credential_key`], so two databases on one server share a
     /// login and two entries naming different keys do not.
     pub fn to(
         &mut self,
@@ -236,7 +236,7 @@ impl Tunnels {
         database_port: u16,
         secret: Option<&Secret>,
     ) -> Outcome<&Tunnel> {
-        let key = through.server.connection_key();
+        let key = through.server.credential_key();
 
         if !self.held.contains_key(&key) {
             let tunnel = Tunnel::open(through, database_host, database_port, secret, &self.helper)?;

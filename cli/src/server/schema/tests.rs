@@ -61,6 +61,12 @@ const TYPES: [&str; 9] = [
 ];
 
 /// Every column declared by the migrations, as `(table, column)`.
+///
+/// **Both ways a column arrives**: inside a `CREATE TABLE`, and on an `ALTER TABLE … ADD
+/// COLUMN` written on one line. The second is not a nicety — the two rule tests below are
+/// the schema's guard against a credential or a row of somebody's data creeping in, and a
+/// scan that read only `CREATE TABLE` would stop guarding the moment a migration added a
+/// column to a table that already existed. `0006` is the first one that does.
 fn columns_declared() -> Vec<(String, String)> {
     let mut found = Vec::new();
 
@@ -69,6 +75,27 @@ fn columns_declared() -> Vec<(String, String)> {
 
         for line in migration.sql.lines() {
             let line = line.trim();
+
+            if let Some(rest) = line.strip_prefix("ALTER TABLE ") {
+                let mut words = rest.split_whitespace();
+                let (Some(altered), Some("ADD"), Some("COLUMN"), Some(name), Some(kind)) = (
+                    words.next(),
+                    words.next(),
+                    words.next(),
+                    words.next(),
+                    words.next(),
+                ) else {
+                    continue;
+                };
+                assert!(
+                    TYPES.contains(&kind.trim_end_matches(&[',', ';'][..])),
+                    "migration {} adds {altered}.{name} with a type this scan does not know: \
+                     {kind}",
+                    migration.version
+                );
+                found.push((altered.to_owned(), name.to_owned()));
+                continue;
+            }
 
             if let Some(rest) = line.strip_prefix("CREATE TABLE ") {
                 let rest = rest.strip_prefix("IF NOT EXISTS ").unwrap_or(rest);
@@ -268,26 +295,44 @@ fn nothing_in_the_schema_is_named_for_somebody_elses_data() {
 /// one of them is decorative.
 #[test]
 fn the_route_check_matches_the_routes_rust_writes() {
-    let registry = MIGRATIONS
+    // Every migration that declares a `_route` column, so a later one cannot add a
+    // credential column with a looser CHECK than the first one has.
+    let with_routes: Vec<&Migration> = MIGRATIONS
         .iter()
-        .find(|migration| migration.name == "registry")
-        .expect("the registry migration is there");
+        .filter(|migration| migration.sql.contains("_route"))
+        .collect();
+    assert_eq!(
+        with_routes.len(),
+        2,
+        "the registry migration and the ssh one are the two that hold routes"
+    );
 
-    for route in [
-        crate::secret::Route::Keyring,
-        crate::secret::Route::EncryptedFile,
-    ] {
+    for migration in with_routes {
+        for route in [
+            crate::secret::Route::Keyring,
+            crate::secret::Route::EncryptedFile,
+        ] {
+            assert!(
+                migration.sql.contains(&format!("'{}'", route.as_field())),
+                "{} is a route sloop writes and {} does not accept it",
+                route.as_field(),
+                migration.name
+            );
+        }
+
+        // The two that carry a value are matched by pattern rather than by name, so the
+        // CHECK is asserted to be there at all.
         assert!(
-            registry.sql.contains(&format!("'{}'", route.as_field())),
-            "{} is a route sloop writes and the schema does not accept it",
-            route.as_field()
+            migration.sql.contains(r"^\$\{[^$[:space:]]+\}$"),
+            "{} accepts no ${{VARIABLE}} route",
+            migration.name
+        );
+        assert!(
+            migration.sql.contains("^command:[[:space:]]*[^[:space:]]"),
+            "{} accepts no command: route",
+            migration.name
         );
     }
-
-    // The two that carry a value are matched by pattern rather than by name, so the CHECK is
-    // asserted to be there at all.
-    assert!(registry.sql.contains(r"^\$\{[^$[:space:]]+\}$"));
-    assert!(registry.sql.contains("^command:[[:space:]]*[^[:space:]]"));
 }
 
 /// A literal is a literal, including the one character that could end one early.
@@ -361,6 +406,10 @@ fn the_column_scan_actually_reads_the_migrations() {
         ("backup_key", "private_key_route"),
         ("bandwidth_day", "bytes_in"),
         ("schema_migration", "checksum"),
+        // Added by an `ALTER TABLE`, which is the half of the scan `0006` needed and
+        // nothing before it exercised.
+        ("registered_database", "ssh_host"),
+        ("registered_database", "ssh_secret_route"),
     ] {
         assert!(
             columns

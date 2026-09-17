@@ -21,6 +21,7 @@ use crate::engine::{Engine, Target, connection_string};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::secret::{Route, Secret};
+use crate::ssh::{DEFAULT_PORT as SSH_PORT, Reach, Server, Through};
 
 /// The registry file's name, inside `.sloop` or inside the global store.
 pub const FILE: &str = "registry.toml";
@@ -32,6 +33,9 @@ pub const SEALED_FILE: &str = "secrets.sealed";
 const VERSION: u32 = 1;
 
 /// One registered database, exactly as the file holds it.
+///
+/// `ssh` is last because it is a table and every scalar of the same parent has to come
+/// before one — the same constraint that decides the order of [`RawFile`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawDatabase {
@@ -42,6 +46,30 @@ struct RawDatabase {
     database: String,
     user: String,
     password: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ssh: Option<RawSsh>,
+}
+
+/// The SSH server a database is reached through, exactly as the file holds it.
+///
+/// **No registry file ever written has one of these**, because `R19c4` moved the registry
+/// into PostgreSQL before `R19e` existed and [`Registry::to_toml`]'s only readers are the
+/// tests. It is here so the round trip keeps proving what its doc comment claims it proves:
+/// that [`Registry::parse`] reads everything a registry can hold. A shape that quietly
+/// dropped a field would make that test pass while saying nothing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct RawSsh {
+    host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    identity: Option<String>,
+    /// A route, and never a passphrase — the same field `password` is, for the same reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    passphrase: Option<String>,
 }
 
 /// The backup keypair, exactly as the file holds it.
@@ -89,6 +117,13 @@ pub struct Database {
     pub user: String,
     /// Where its password comes from. Never the password.
     pub password: Route,
+    /// Straight at that address, or through an SSH server — `R19e`.
+    ///
+    /// **`host` and `port` above are as the *server* sees them** once this is
+    /// [`Reach::Over`], which is almost always `127.0.0.1` and the engine's default port.
+    /// That is the one sentence about this feature everybody gets backwards once, so it is
+    /// said here, in `--help`, and by `db add` when it writes the record.
+    pub reach: Reach,
 }
 
 impl Database {
@@ -98,15 +133,30 @@ impl Database {
     /// Derived from the connection rather than from the name the user gave it, so
     /// `db rename` moves a label and does not orphan a password. It carries no secret —
     /// it is the same thing that shows up in a connection log.
+    ///
+    /// **The SSH server is part of it, and that is not decoration.** Every database reached
+    /// over a tunnel is registered at the address the *server* sees, which is almost always
+    /// `127.0.0.1:5432` — so two databases behind two different bastions, each called
+    /// `orders` and each reached as `app`, produce the same connection string and would
+    /// otherwise be filed under the same key. One would then be opened with the other's
+    /// password. A direct registration is unaffected, byte for byte, because there is
+    /// nothing to append.
     #[must_use]
     pub fn credential_key(&self) -> String {
-        connection_string(
+        let connection = connection_string(
             self.engine,
             &self.user,
             &self.host,
             self.port,
             &self.database,
-        )
+        );
+
+        match self.reach.through() {
+            None => connection,
+            Some(through) => {
+                format!("{connection} through {}", through.server.credential_key())
+            }
+        }
     }
 
     /// This entry as something an adapter can act on.
@@ -306,6 +356,24 @@ impl Registry {
             let password = Route::parse(entry.password.trim_end())
                 .map_err(|failure| failure.prefixed(&name))?;
 
+            let reach = match entry.ssh {
+                None => Reach::Direct,
+                Some(ssh) => Reach::Over(Box::new(Through {
+                    server: Server {
+                        host: ssh.host,
+                        port: ssh.port.unwrap_or(SSH_PORT),
+                        user: ssh.user,
+                        identity: ssh.identity.map(std::path::PathBuf::from),
+                    },
+                    secret: ssh
+                        .passphrase
+                        .as_deref()
+                        .map(|field| Route::parse(field.trim_end()))
+                        .transpose()
+                        .map_err(|failure| failure.prefixed(format!("{name} ssh")))?,
+                })),
+            };
+
             databases.insert(
                 name,
                 Database {
@@ -315,6 +383,7 @@ impl Registry {
                     database: entry.database,
                     user: entry.user,
                     password,
+                    reach,
                 },
             );
         }
@@ -354,6 +423,20 @@ impl Registry {
                             database: database.database.clone(),
                             user: database.user.clone(),
                             password: database.password.as_field(),
+                            ssh: database.reach.through().map(|through| RawSsh {
+                                host: through.server.host.clone(),
+                                port: Some(through.server.port),
+                                user: through.server.user.clone(),
+                                identity: through
+                                    .server
+                                    .identity
+                                    .as_ref()
+                                    .map(|path| path.display().to_string()),
+                                passphrase: through
+                                    .secret
+                                    .as_ref()
+                                    .map(crate::secret::Route::as_field),
+                            }),
                         },
                     )
                 })

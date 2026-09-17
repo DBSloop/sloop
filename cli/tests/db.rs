@@ -848,3 +848,305 @@ fn the_new_users_password_is_chosen_without_ever_reaching_argv() {
         .expect_code(3)
         .expect_silent_about("--role-password-stdin is missing");
 }
+
+// ---------------------------------------------------------------------------------------
+// reaching it over SSH — R19e
+// ---------------------------------------------------------------------------------------
+
+/// **The whole path, through the real tables.** A database whose port is closed to
+/// everything outside its own server is registered with `--ssh-host`, the five columns land
+/// in `registered_database`, and every one of them comes back out unchanged.
+#[test]
+fn a_database_reached_over_ssh_is_registered_listed_and_read_back() {
+    let sandbox = Sandbox::new("db-ssh-add");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "prod",
+            // The address the SERVER sees, which is the sentence this feature turns on.
+            "--url",
+            "postgres://app@127.0.0.1:5432/orders",
+            "--ssh-host",
+            "bastion.internal",
+            "--ssh-port",
+            "2222",
+            "--ssh-user",
+            "deploy",
+            "--ssh-identity",
+            "/home/me/.ssh/id_ed25519",
+            "--ssh-env",
+            "SSH_KEY_PW",
+            "--env",
+            "PGPASSWORD",
+        ])
+        .expect_code(0)
+        // And it says which way round the two addresses are, at the moment it writes them.
+        .expect_said("127.0.0.1:5432 is as bastion.internal sees it");
+
+    let file = written(&sandbox);
+    for line in [
+        "[databases.prod.ssh]",
+        "host = \"bastion.internal\"",
+        "port = 2222",
+        "user = \"deploy\"",
+        "identity = \"/home/me/.ssh/id_ed25519\"",
+        "passphrase = \"${SSH_KEY_PW}\"",
+    ] {
+        assert!(
+            file.contains(line),
+            "{line} is not in the registry:\n{file}"
+        );
+    }
+
+    // The listing says where it goes and how the key is opened, and neither is a value.
+    sandbox
+        .sloop(&["db", "list"])
+        .expect_code(0)
+        .expect_said("postgres://app@127.0.0.1:5432/orders")
+        .expect_said("over deploy@bastion.internal:2222")
+        .expect_said("the environment variable SSH_KEY_PW");
+}
+
+/// A registration that says nothing about SSH writes nothing about SSH. `Reach::Direct` is
+/// the ordinary state, not a setting left blank — and the columns' own constraints say so.
+#[test]
+fn a_direct_registration_writes_no_ssh_at_all() {
+    let sandbox = Sandbox::new("db-ssh-direct");
+    registered(&sandbox, "orders", "postgres://app@db.internal/orders");
+
+    let file = written(&sandbox);
+    assert!(
+        !file.contains(".ssh]"),
+        "a direct registration named a server:\n{file}"
+    );
+}
+
+/// `--no-ssh` puts a record back to a direct connection, and `db edit` changes one field of
+/// a server without being told the rest.
+#[test]
+fn an_edit_moves_one_ssh_field_and_no_ssh_turns_the_tunnel_off() {
+    let sandbox = Sandbox::new("db-ssh-edit");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "prod",
+            "--url",
+            "postgres://app@127.0.0.1/orders",
+            "--ssh-host",
+            "bastion.internal",
+            "--ssh-user",
+            "deploy",
+            "--env",
+            "PGPASSWORD",
+        ])
+        .expect_code(0);
+
+    sandbox
+        .sloop(&["db", "edit", "prod", "--ssh-port", "2222"])
+        .expect_code(0);
+
+    let file = written(&sandbox);
+    assert!(file.contains("port = 2222"), "{file}");
+    assert!(
+        file.contains("user = \"deploy\""),
+        "the account was dropped by an edit that did not mention it:\n{file}"
+    );
+
+    sandbox
+        .sloop(&["db", "edit", "prod", "--no-ssh"])
+        .expect_code(0);
+
+    let file = written(&sandbox);
+    assert!(
+        !file.contains(".ssh]"),
+        "--no-ssh left the tunnel behind:\n{file}"
+    );
+}
+
+/// An SSH detail with no server to hang it off names the flag that would have given it one,
+/// rather than guessing which machine was meant.
+#[test]
+fn an_ssh_flag_with_no_server_exits_two_and_names_the_flag() {
+    let sandbox = Sandbox::new("db-ssh-orphan");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "prod",
+            "--url",
+            "postgres://app@127.0.0.1/orders",
+            "--ssh-user",
+            "deploy",
+            "--env",
+            "PGPASSWORD",
+        ])
+        .expect_code(2)
+        .expect_said("--ssh-host");
+}
+
+/// Rule 4, on the second credential a record can hold: a passphrase sloop would have to
+/// keep, with no terminal to ask at, exits `2` naming the flag — and it does not hang.
+#[test]
+fn a_passphrase_with_no_terminal_exits_two_and_names_the_flag() {
+    let sandbox = Sandbox::new("db-ssh-no-tty");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "prod",
+            "--url",
+            "postgres://app@127.0.0.1/orders",
+            "--ssh-host",
+            "bastion.internal",
+            "--ssh-keyring",
+            "--env",
+            "PGPASSWORD",
+        ])
+        .expect_code(2)
+        .expect_said("--ssh-passphrase-stdin");
+
+    assert!(
+        !written(&sandbox).contains("prod"),
+        "a registration that could not be completed was written anyway"
+    );
+}
+
+/// A passphrase piped in is filed under the *server* and never written into the registry,
+/// which is the whole of rule 3 applied to the second credential.
+#[test]
+fn a_piped_passphrase_reaches_the_store_and_never_the_registry() {
+    let sandbox = Sandbox::new("db-ssh-piped");
+
+    // Real punctuation, because a passphrase is allowed to hold it and nothing between the
+    // pipe and the sealed store may interpret a byte of it.
+    let passphrase = "key passphrase with >|$# \"quotes\" ";
+    sandbox
+        .command(
+            sandbox.work(),
+            &[
+                "db",
+                "add",
+                "prod",
+                "--url",
+                "postgres://app@127.0.0.1/orders",
+                "--ssh-host",
+                "bastion.internal",
+                "--ssh-encrypted-file",
+                "--ssh-passphrase-stdin",
+                "--env",
+                "PGPASSWORD",
+            ],
+        )
+        .stdin(format!("{passphrase}\n").as_bytes())
+        .run()
+        .expect_code(0)
+        .expect_silent_about(passphrase.trim());
+
+    let file = written(&sandbox);
+    assert!(
+        file.contains("passphrase = \"encrypted-file\""),
+        "the route is what is written:\n{file}"
+    );
+    assert!(
+        !file.contains(passphrase.trim()),
+        "the passphrase reached the registry:\n{file}"
+    );
+
+    // It is in the sealed store, which is ciphertext — so the bytes are there and the
+    // passphrase is not readable in them.
+    let sealed = sandbox.sealed_bytes();
+    assert!(!sealed.is_empty(), "nothing was sealed");
+    assert!(
+        !sealed
+            .windows(passphrase.len())
+            .any(|window| window == passphrase.as_bytes()),
+        "the sealed store is not ciphertext"
+    );
+}
+
+/// A server name `ssh` would read as an option is refused when it is written, rather than
+/// becoming an argument on a command line later.
+#[test]
+fn a_server_name_that_would_become_an_ssh_option_is_refused() {
+    let sandbox = Sandbox::new("db-ssh-bad-host");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "prod",
+            "--url",
+            "postgres://app@127.0.0.1/orders",
+            "--ssh-host",
+            "-oProxyCommand=id",
+            "--env",
+            "PGPASSWORD",
+        ])
+        .expect_code(2);
+
+    assert!(!written(&sandbox).contains("prod"));
+}
+
+/// **The guard with a shelf life, while it has one.** The registry half of `R19e` landed
+/// before the tunnel half, and a tunnelled record's `host` is the address the *server* sees
+/// — usually `127.0.0.1`. A command that simply connected would aim at this machine's
+/// loopback, which is a connection error if nothing is listening and something far worse if
+/// something is. So every command that would connect refuses and says why.
+///
+/// This test goes when the tunnel is wired, along with what it is testing.
+#[test]
+fn a_command_that_would_need_the_tunnel_refuses_rather_than_connecting_locally() {
+    let sandbox = Sandbox::new("db-ssh-guard");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "prod",
+            "--url",
+            "postgres://app@127.0.0.1:5432/orders",
+            "--ssh-host",
+            "bastion.internal",
+            "--env",
+            "PGPASSWORD",
+        ])
+        .expect_code(0);
+
+    // A direct database to copy into, so `mirror` gets past "the source is the destination"
+    // and as far as the source it cannot reach.
+    registered(&sandbox, "copy", "postgres://app@db.internal/orders");
+
+    // `backup` stops at the backup-key question before it reaches any database, and that
+    // ordering is right — so the question is answered here rather than reordered there.
+    sandbox.sloop(&["key", "export"]).expect_code(0);
+
+    for command in [
+        vec!["db", "test", "prod"],
+        vec!["backup", "prod"],
+        vec!["restore", "prod"],
+        // Rule 5 comes first on these two, so the name is typed up front and what is left
+        // to refuse is the source nobody can reach.
+        vec!["mirror", "prod", "--to", "copy", "--confirm", "orders"],
+        vec!["sync", "prod", "--to", "copy", "--confirm", "orders"],
+    ] {
+        let run = sandbox.sloop(&command);
+        assert_eq!(
+            run.code(),
+            Some(2),
+            "`sloop {}` did not refuse:\n{}{}",
+            command.join(" "),
+            run.stdout(),
+            run.stderr()
+        );
+        run.expect_said("does not open the tunnel yet");
+    }
+
+    // And the record is still there afterwards, because a refusal changes nothing.
+    assert!(written(&sandbox).contains("[databases.prod.ssh]"));
+}

@@ -512,6 +512,7 @@ fn holding(names: &[&str]) -> file::Registry {
                 database: "d".to_owned(),
                 user: "a".to_owned(),
                 password: crate::secret::Route::Keyring,
+                reach: crate::ssh::Reach::Direct,
             },
         );
     }

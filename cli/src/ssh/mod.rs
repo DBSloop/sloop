@@ -27,15 +27,17 @@
 //! - **`known_hosts` stays OpenSSH's**, and is not weakened by a single option. See
 //!   [`askpass`] for the part of that which turned out to need defending on purpose.
 //!
-//! **Nothing in the binary opens a tunnel yet**, so most of this module is allowed to sit
-//! unread — the same way `proof` was in `R19d`, and for the same reason. It is the half of
-//! `R19e` that had to be settled before anything else could be built: what `ssh` is actually
-//! run with, and how a passphrase reaches it. What will call it is the registry learning to
-//! hold these settings and every command asking for a target — the next piece. The one part
-//! that *is* reached today is [`askpass`], because `main` checks for it before `clap` runs.
-#![allow(dead_code)]
+//! **The registry now holds these settings** — `db add --ssh-host`, five columns on
+//! `registered_database`, and a [`Reach`] inside every registered database. **Nothing opens
+//! a tunnel yet**, so [`tunnel`] is still allowed to sit unread: what remains is every
+//! command asking for a target routing through it, and `doctor` learning to check `ssh`.
+//! The part that is reached on every run is [`askpass`], because `main` checks for it
+//! before `clap` parses.
 
 pub mod askpass;
+
+/// Allowed to sit unread until a command asks for a target. See the note above.
+#[allow(dead_code)]
 pub mod tunnel;
 
 #[cfg(test)]
@@ -96,22 +98,30 @@ impl Server {
         }
     }
 
-    /// The key two databases on the same server share, so they share one connection.
+    /// Which login this is — the one string that answers two questions.
     ///
     /// **Ten commands against one server authenticate once**, and this is what makes that
-    /// true: the identity is part of it because two entries naming different keys are two
-    /// different logins, and the passphrase route is not, because it opens the same key.
+    /// true: two databases whose servers give the same key share one held connection. The
+    /// identity is part of it because two entries naming different keys are two different
+    /// logins; the passphrase route is not, because it opens the same key.
+    ///
+    /// **It is also where that passphrase is filed**, in the keyring or in the encrypted
+    /// store, for exactly the same reason — a passphrase belongs to a key on a server, not
+    /// to a database, so five databases behind one bastion ask for it once and store it
+    /// once. It is written the way [`crate::engine::connection_string`] writes a database's
+    /// key, because it ends up in the same places: a Credential Manager entry somebody
+    /// reads, a name inside the sealed store.
+    ///
+    /// **It carries no secret**, which is what lets it be printed. A host, a port, a
+    /// username and a path to a key are all in `ps` the moment `ssh` runs.
     #[must_use]
-    pub fn connection_key(&self) -> String {
-        format!(
-            "{}|{}|{}",
-            self.destination(),
-            self.port,
-            self.identity
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default()
-        )
+    pub fn credential_key(&self) -> String {
+        let mut key = format!("ssh://{}:{}", self.destination(), self.port);
+        if let Some(identity) = &self.identity {
+            key.push('#');
+            key.push_str(&identity.display().to_string());
+        }
+        key
     }
 }
 
@@ -129,6 +139,23 @@ pub struct Through {
 }
 
 impl Through {
+    /// How this reads in a listing or a confirmation. Carries no secret — see
+    /// [`Server::credential_key`] for why none of it could.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match &self.secret {
+            Some(route) => format!(
+                "over {}, unlocked from {}",
+                self.server.describe(),
+                route.describe()
+            ),
+            // Said as what it *is* rather than as "nothing", because an empty half of a
+            // sentence reads like a missing setting. A key with no passphrase and a key in
+            // an agent look identical from here and both are correct.
+            None => format!("over {}, from the agent", self.server.describe()),
+        }
+    }
+
     /// The arguments `ssh` is run with to hold one forward open.
     ///
     /// **`-N`** because there is no command to run — the forward is the whole point.
@@ -204,13 +231,11 @@ pub enum Reach {
 }
 
 impl Reach {
-    /// Is this one reached over SSH?
-    #[must_use]
-    pub const fn is_over_ssh(&self) -> bool {
-        matches!(self, Self::Over(_))
-    }
-
     /// The server in between, when there is one.
+    ///
+    /// **The only way to ask.** There was a `is_over_ssh` beside this and it was removed
+    /// rather than kept: two ways to ask one question is how half the call sites end up
+    /// checking the flag and the other half unwrapping the value.
     #[must_use]
     pub fn through(&self) -> Option<&Through> {
         match self {

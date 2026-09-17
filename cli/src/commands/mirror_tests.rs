@@ -30,6 +30,7 @@ fn record(host: &str, port: u16, database: &str) -> Database {
         database: database.to_owned(),
         user: "app".to_owned(),
         password: Route::Keyring,
+        reach: crate::ssh::Reach::Direct,
     }
 }
 

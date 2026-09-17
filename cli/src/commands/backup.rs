@@ -321,6 +321,8 @@ fn one(
     database: &Database,
     mode: Mode,
 ) -> Outcome<Option<Taken>> {
+    super::reachable(database)?;
+
     let key = database.credential_key();
     crate::say!("{}  {}", style::paint(name), style::dim(&key));
 
