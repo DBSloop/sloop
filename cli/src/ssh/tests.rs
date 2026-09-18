@@ -326,11 +326,10 @@ fn a_forward_really_opens_and_the_far_side_answers() {
         .join(if cfg!(windows) { "sloop.exe" } else { "sloop" });
     assert!(sloop.is_file(), "{} is not there", sloop.display());
 
-    let mut held = super::tunnel::Tunnels::with_helper(sloop);
-    let tunnel = held
-        .to(&through, "127.0.0.1", 5432, secret.as_ref())
+    let held = super::tunnel::Tunnels::with_helper(sloop);
+    let port = held
+        .port_for(&through, "127.0.0.1", 5432, || Ok(secret.clone()))
         .expect("the forward should open");
-    let port = tunnel.local_port();
 
     assert!(
         !super::tunnel::is_bindable(port),
@@ -370,9 +369,11 @@ fn a_forward_really_opens_and_the_far_side_answers() {
 
     // **And the same server twice is one login**, which is the owner's whole point.
     let again = held
-        .to(&through, "127.0.0.1", 5432, secret.as_ref())
+        .port_for(&through, "127.0.0.1", 5432, || {
+            panic!("a forward that is already open must not ask for the secret again")
+        })
         .expect("the second ask should reuse the first");
-    assert_eq!(again.local_port(), port);
+    assert_eq!(again, port);
     assert_eq!(held.count(), 1, "two asks, one connection");
 
     // Closed when it goes out of scope, by the type system rather than by remembering.

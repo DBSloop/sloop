@@ -46,6 +46,7 @@ use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::file::Database;
 use crate::registry::{Registries, Scope};
+use crate::ssh::tunnel::Tunnels;
 use crate::style;
 
 use super::backup::{describe_bytes, plural};
@@ -62,6 +63,9 @@ pub struct Context<'a> {
     pub password_command: Option<&'a str>,
     /// What this run was given permission to do — see [`crate::consent`].
     pub consent: Consent<'a>,
+    /// Every SSH forward this session holds — see [`super::reach`]. Shared with every
+    /// other command in the run, so a menu session authenticates once.
+    pub tunnels: &'a Tunnels,
 }
 
 /// Everything `sync` was asked for, named rather than positional.
@@ -120,9 +124,12 @@ fn into_a_registered_database(
         asked.source,
         from,
         destination,
-        &into.host,
-        into.port,
-        &into.database,
+        &mirror::Onto {
+            host: &into.host,
+            port: into.port,
+            database: &into.database,
+            reach: &into.reach,
+        },
         SYNCING_ITSELF,
     )?;
     refuse_across_engines(asked.source, from, destination, &into)?;
@@ -147,17 +154,23 @@ fn into_a_registered_database(
     })?;
     let _held = crate::lock::take(&store, destination, "sync")?;
 
-    let secret = |scope, record: &_| {
-        mirror::secret_for(&context.registries, context.password_command, scope, record)
+    let end = |scope, record: &_| {
+        mirror::secret_for(
+            &context.registries,
+            context.password_command,
+            scope,
+            record,
+            context.tunnels,
+        )
     };
-    let reading = secret(from_scope, from)?;
-    let writing = secret(into_scope, &into)?;
+    let reading = end(from_scope, from)?;
+    let writing = end(into_scope, &into)?;
 
     merge(
         context,
         asked,
-        &from.target(&reading),
-        &into.target(&writing),
+        &from.target_at(&reading.secret, &reading.at.host, reading.at.port),
+        &into.target_at(&writing.secret, &writing.at.host, writing.at.port),
         Some(&destroying),
     )
 }
@@ -188,10 +201,19 @@ fn into_a_new_database(
             consequence: SYNCING_ITSELF,
         },
         |registries| {
-            let secret =
-                mirror::secret_for(registries, context.password_command, from_scope, from)?;
-            super::adapter_for(from.engine, context.global).probe(&from.target(&secret))?;
-            reading = Some(secret);
+            let end = mirror::secret_for(
+                registries,
+                context.password_command,
+                from_scope,
+                from,
+                context.tunnels,
+            )?;
+            super::adapter_for(from.engine, context.global).probe(&from.target_at(
+                &end.secret,
+                &end.at.host,
+                end.at.port,
+            ))?;
+            reading = Some(end);
             Ok(())
         },
     )?;
@@ -209,7 +231,8 @@ fn into_a_new_database(
     merge(
         context,
         asked,
-        &from.target(&reading),
+        &from.target_at(&reading.secret, &reading.at.host, reading.at.port),
+        // Made directly, by the same `db::build` that `db create` is — no forward in front.
         &built.record.target(&built.secret),
         None,
     )

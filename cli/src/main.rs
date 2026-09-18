@@ -247,6 +247,13 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
     // a copy per command drifting apart. See `consent`.
     let consent = Consent::given(cli.yes, cli.force, cli.confirm.as_deref());
 
+    // **Made here so that it is dropped here.** Every forward this run opens is killed when
+    // this value goes out of scope — a local in a function that returns, not a global whose
+    // destructor may or may not run at process exit. A tunnel left open is a port on
+    // somebody's machine that still reaches their database, so the guarantee that closes it
+    // has to be one the language makes rather than one the code remembers.
+    let tunnels = ssh::tunnel::Tunnels::new()?;
+
     dispatch(
         cli,
         World {
@@ -255,6 +262,7 @@ fn with_registry(cli: &Cli, locations: &Locations, command: &Command) -> Outcome
             password_command: cli.password_command.as_deref(),
             consent,
             resolution,
+            tunnels: &tunnels,
         },
         command,
     )
@@ -377,6 +385,8 @@ struct World<'a> {
     password_command: Option<&'a str>,
     consent: Consent<'a>,
     resolution: registry::Resolution,
+    /// Every SSH forward this run holds, shared by every command it dispatches.
+    tunnels: &'a ssh::tunnel::Tunnels,
 }
 
 impl<'a> World<'a> {
@@ -385,6 +395,7 @@ impl<'a> World<'a> {
             registries: self.registries,
             global: self.global,
             password_command: self.password_command,
+            tunnels: self.tunnels,
         }
     }
 
@@ -402,6 +413,7 @@ impl<'a> World<'a> {
             global: self.global,
             password_command: self.password_command,
             consent: self.consent,
+            tunnels: self.tunnels,
         }
     }
 
@@ -411,6 +423,7 @@ impl<'a> World<'a> {
             global: self.global,
             password_command: self.password_command,
             consent: self.consent,
+            tunnels: self.tunnels,
         }
     }
 
@@ -420,6 +433,7 @@ impl<'a> World<'a> {
             global: self.global,
             password_command: self.password_command,
             consent: self.consent,
+            tunnels: self.tunnels,
         }
     }
 
@@ -436,6 +450,7 @@ impl<'a> World<'a> {
             password_command: self.password_command,
             global: self.global,
             consent: self.consent,
+            tunnels: self.tunnels,
         }
     }
 }
@@ -518,6 +533,7 @@ fn doctor(cli: &Cli, world: &World<'_>, offline: bool) -> Exit {
             from: world.resolution.describe(world.global),
             password_command: cli.password_command.as_deref(),
             offline,
+            tunnels: world.tunnels,
         },
     )
 }

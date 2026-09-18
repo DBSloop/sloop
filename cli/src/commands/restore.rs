@@ -41,6 +41,7 @@ use crate::failure::{Failure, Outcome};
 use crate::registry::file::Database;
 use crate::registry::{Registries, Scope};
 use crate::secret::{Lookup, resolve};
+use crate::ssh::tunnel::Tunnels;
 use crate::style;
 use crate::tools::{Inventory, acquire};
 use crate::verify::{self, Side};
@@ -57,6 +58,9 @@ pub struct Context<'a> {
     pub password_command: Option<&'a str>,
     /// What this run was given permission to do — see [`crate::consent`].
     pub consent: Consent<'a>,
+    /// Every SSH forward this session holds — see [`super::reach`]. Shared with every
+    /// other command in the run, so a menu session authenticates once.
+    pub tunnels: &'a Tunnels,
 }
 
 /// Put a backup back.
@@ -71,7 +75,6 @@ fn vault_for(context: &Context<'_>, scope: Scope) -> crate::secret::sealed::Vaul
 pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exit> {
     let (scope, record) = context.registries.find(name)?;
     let record = record.clone();
-    super::reachable(&record)?;
 
     // **The paperwork first, before a password is fetched or a socket opened.** A scheduled
     // restore that named the wrong database should be told so without contacting anything.
@@ -127,7 +130,14 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
         crate::say!("  {}", style::dim(note));
     }
 
-    let target = record.target(&resolved.secret);
+    // **Before the destination is announced**, because what is announced is a server that
+    // answered — and over SSH, answering means the forward is up.
+    let at = super::reach(&record, context.tunnels, &context.registries, scope)?;
+    if let Some(server) = &at.through {
+        crate::say!("  {}", style::dim(&format!("through {server}")));
+    }
+
+    let target = record.target_at(&resolved.secret, &at.host, at.port);
     let adapter = Inventory::for_engine(record.engine, &acquire::fetched_dir(context.global))
         .adapter_for(record.engine);
     announce_destination(adapter.as_ref(), &target, &record.database)?;

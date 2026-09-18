@@ -50,6 +50,7 @@ use crate::failure::{Failure, Outcome};
 use crate::registry::file::{Database, KeyKept};
 use crate::registry::{Registries, Scope};
 use crate::secret::{Lookup, resolve};
+use crate::ssh::tunnel::Tunnels;
 use crate::style;
 use crate::tools::{Inventory, acquire};
 
@@ -65,6 +66,9 @@ pub struct Context<'a> {
     pub global: &'a Path,
     /// `--password-command`, which outranks whatever route a record names.
     pub password_command: Option<&'a str>,
+    /// Every SSH forward this session holds — see [`super::reach`]. Shared with every
+    /// other command in the run, so a menu session authenticates once.
+    pub tunnels: &'a Tunnels,
 }
 
 /// A backup that landed.
@@ -321,8 +325,6 @@ fn one(
     database: &Database,
     mode: Mode,
 ) -> Outcome<Option<Taken>> {
-    super::reachable(database)?;
-
     let key = database.credential_key();
     crate::say!("{}  {}", style::paint(name), style::dim(&key));
 
@@ -349,7 +351,16 @@ fn one(
             .hint("run this against a project registry, or the global store")
     })?;
 
-    let target = database.target(&resolved.secret);
+    // **The forward is opened here, inside the per-database work.** `backup --all` never
+    // stops on a failure, so a server that cannot be reached over SSH fails one database and
+    // the rest of the run carries on — which is what that rule has always meant, and would
+    // not be true if the tunnel were opened once at the top.
+    let at = super::reach(database, context.tunnels, &context.registries, scope)?;
+    if let Some(server) = &at.through {
+        crate::say!("  {}", style::dim(&format!("through {server}")));
+    }
+
+    let target = database.target_at(&resolved.secret, &at.host, at.port);
     let adapter = inventory.adapter_for(database.engine);
 
     let started = Instant::now();

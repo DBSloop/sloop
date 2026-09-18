@@ -138,6 +138,22 @@ pub mod field {
     pub const SAFE: &str = "safe";
     /// Ask no server anything?
     pub const OFFLINE: &str = "offline";
+    /// Reached straight, or through an SSH server?
+    pub const REACH: &str = "reach";
+    /// The SSH server.
+    pub const SSH_HOST: &str = "ssh-host";
+    /// Its port.
+    pub const SSH_PORT: &str = "ssh-port";
+    /// Who to be on it.
+    pub const SSH_USER: &str = "ssh-user";
+    /// A particular private key.
+    pub const SSH_IDENTITY: &str = "ssh-identity";
+    /// Where the key's passphrase comes from, if sloop has to hold one.
+    pub const SSH_ROUTE: &str = "ssh-route";
+    /// The environment variable holding the passphrase.
+    pub const SSH_ENV: &str = "ssh-env";
+    /// The command that prints the passphrase.
+    pub const SSH_FROM_COMMAND: &str = "ssh-from-command";
 }
 
 /// What a yes-or-no question stores.
@@ -625,12 +641,108 @@ fn registering(answers: &Answers) -> Vec<Step> {
     }
 
     plan.extend(password_route(answers));
+    plan.extend(reaching(answers));
     plan.push(yes_or_no(
         field::TEST,
         "Try the connection before saving it?",
         true,
         "a registration that cannot connect is one you find out about at 3am otherwise",
     ));
+    plan
+}
+
+/// How the database is reached: straight at it, or through an SSH server — `R19e`.
+///
+/// **Asked last, after the connection**, because the answer changes what the host above
+/// meant, and a question that rewrites an earlier answer is a question to ask afterwards.
+/// The screen says so in as many words: over SSH the host is the address the *server* sees,
+/// which is the one thing everybody gets backwards once.
+fn reaching(answers: &Answers) -> Vec<Step> {
+    let mut plan = vec![choose(
+        field::REACH,
+        "How does this machine reach it?",
+        &[
+            ("Straight at it", "the usual answer", "direct"),
+            (
+                "Through an SSH server",
+                "for a database whose port is closed to everything outside its server",
+                "ssh",
+            ),
+        ],
+    )];
+
+    if answers.text(field::REACH) != "ssh" {
+        return plan;
+    }
+
+    plan.extend([
+        typed(
+            field::SSH_HOST,
+            "Which SSH server?",
+            "",
+            "the machine sloop logs in to. The host above is the address THAT machine \
+             sees, which is usually 127.0.0.1",
+        ),
+        optional(field::SSH_PORT, "Which SSH port?", "blank for 22"),
+        optional(
+            field::SSH_USER,
+            "Who should sloop be on it?",
+            "blank to leave it to ~/.ssh/config and then your own username",
+        ),
+        optional(
+            field::SSH_IDENTITY,
+            "Which private key?",
+            "blank for the agent and ~/.ssh/config, which is the usual answer",
+        ),
+        choose(
+            field::SSH_ROUTE,
+            "Does that key need a passphrase sloop has to supply?",
+            &[
+                (
+                    "No — an agent holds it, or it has none",
+                    "sloop never sees a secret at all. The usual answer",
+                    "agent",
+                ),
+                (
+                    "Keep it in this machine's keyring",
+                    "Credential Manager, Keychain or Secret Service",
+                    "keyring",
+                ),
+                (
+                    "Keep it in an encrypted file",
+                    "Argon2id, for a machine with no keyring running",
+                    "file",
+                ),
+                (
+                    "Read it from an environment variable",
+                    "nothing is stored; it is read on every run",
+                    "env",
+                ),
+                (
+                    "Run something that prints it",
+                    "a password manager: op read op://vault/ssh/passphrase",
+                    "command",
+                ),
+            ],
+        ),
+    ]);
+
+    match answers.text(field::SSH_ROUTE) {
+        "env" => plan.push(typed(
+            field::SSH_ENV,
+            "Which environment variable holds the passphrase?",
+            "",
+            "the name only, without the $",
+        )),
+        "command" => plan.push(typed(
+            field::SSH_FROM_COMMAND,
+            "Which command prints the passphrase?",
+            "",
+            "run on every connection. Its output is taken as the passphrase",
+        )),
+        _ => {}
+    }
+
     plan
 }
 
@@ -679,6 +791,11 @@ fn editing(answers: &Answers, known: &[String]) -> Vec<Step> {
                 ("The user", "the role sloop connects as", "user"),
                 ("The password", "and where it is kept", "password"),
                 ("The engine", "postgres, mysql or mariadb", "engine"),
+                (
+                    "How it is reached",
+                    "straight at it, or through an SSH server",
+                    "reach",
+                ),
             ],
         ),
     ];
@@ -702,6 +819,7 @@ fn editing(answers: &Answers, known: &[String]) -> Vec<Step> {
         )),
         "engine" => plan.push(engines()),
         "password" => plan.extend(password_route(answers)),
+        "reach" => plan.extend(reaching(answers)),
         _ => {}
     }
 

@@ -22,6 +22,7 @@ use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::locations::Locations;
 use crate::registry::{Disk, Registries, Resolution, resolve};
+use crate::ssh::tunnel::Tunnels;
 use crate::ui::flow::{Answers, Doing, Job, field};
 
 /// Everything a job needs to be able to open the world again.
@@ -35,6 +36,15 @@ pub struct Machine {
     resolution: Resolution,
     /// `--password-command`, which outranks whatever route a record names.
     password_command: Option<String>,
+    /// Every SSH forward this session holds.
+    ///
+    /// **Owned by the machine, not by a job, and that is the owner's whole sentence about
+    /// this feature.** The registry is reopened per job; the forwards are not. Ten
+    /// operations against one server in one menu session authenticate once — *"if he wants
+    /// to query or something like that then it will login after each task which is not a
+    /// proper apprach"* — and every one of them is closed when this value is dropped, which
+    /// is when the session ends.
+    tunnels: Tunnels,
 }
 
 impl Machine {
@@ -58,6 +68,7 @@ impl Machine {
             cwd,
             resolution,
             password_command: password_command.map(ToOwned::to_owned),
+            tunnels: Tunnels::new()?,
         })
     }
 
@@ -125,6 +136,7 @@ impl Machine {
             password_command: self.password_command.as_deref(),
             global: &self.global,
             consent: Consent::given(false, false, None),
+            tunnels: &self.tunnels,
         }
     }
 }
@@ -254,6 +266,7 @@ impl Doing for Machine {
                     global: &self.global,
                     password_command: self.password_command.as_deref(),
                     consent: Consent::given(false, false, None),
+                    tunnels: &self.tunnels,
                 },
                 answers.text(field::NAME),
                 answers.some(field::WHEN),
@@ -278,6 +291,7 @@ impl Doing for Machine {
                     from: self.resolution.describe(&self.global),
                     password_command: self.password_command.as_deref(),
                     offline: !answers.yes(field::OFFLINE),
+                    tunnels: &self.tunnels,
                 },
             )),
         }
@@ -294,7 +308,7 @@ impl Machine {
             by_url.then(|| answers.text(field::URL)),
             &fields(answers, !by_url),
             &password_source(answers),
-            &no_ssh_questions(),
+            &ssh_fields(answers, true),
             answers.yes(field::TEST),
         )
     }
@@ -323,14 +337,14 @@ impl Machine {
     /// `db edit`, from the answers. One detail at a time, so every other field arrives as
     /// `None` and is left exactly as it was.
     fn edit(&self, registries: Registries, answers: &Answers) -> Outcome<Exit> {
-        let changing_the_password = answers.text(field::DETAIL) == "password";
+        let detail = answers.text(field::DETAIL);
         commands::db::edit(
             &mut self.context(registries),
             answers.text(field::NAME),
             None,
-            &fields(answers, !changing_the_password),
+            &fields(answers, detail != "password" && detail != "reach"),
             &password_source(answers),
-            &no_ssh_questions(),
+            &ssh_fields(answers, detail == "reach"),
             answers.yes(field::TEST),
         )
     }
@@ -352,6 +366,7 @@ impl Machine {
                 registries,
                 global: &self.global,
                 password_command: self.password_command.as_deref(),
+                tunnels: &self.tunnels,
             },
             name,
             name.is_none(),
@@ -393,6 +408,7 @@ impl Machine {
                     global: &self.global,
                     password_command: self.password_command.as_deref(),
                     consent: Consent::given(false, false, None),
+                    tunnels: &self.tunnels,
                 },
                 &commands::mirror::Mirroring {
                     source,
@@ -410,6 +426,7 @@ impl Machine {
                     global: &self.global,
                     password_command: self.password_command.as_deref(),
                     consent: Consent::given(false, false, None),
+                    tunnels: &self.tunnels,
                 },
                 &commands::sync::Syncing {
                     source,
@@ -448,15 +465,18 @@ fn fields(answers: &Answers, wanted: bool) -> Fields {
     }
 }
 
-/// The SSH flags, all unset — which is what leaves a record's [`crate::ssh::Reach`] alone.
+/// How the database is reached, as the flag surface names it — `R19e`.
 ///
-/// **The menu does not ask about SSH yet.** `R19e` is being built in pieces and this is the
-/// one that taught the registry to hold a tunnel; the screens that offer one are the next.
-/// Every field is written out rather than defaulted, for the reason [`fields`] is: a flag
-/// added to `SshFields` and silently defaulted here would be a question the menu quietly
-/// stopped asking.
-fn no_ssh_questions() -> SshFields {
-    SshFields {
+/// `wanted` is false when the answers were about something else entirely, and then every
+/// field is unset, which is what leaves a record's [`crate::ssh::Reach`] exactly as it was.
+/// Written out field by field for the reason [`fields`] is: a flag added to `SshFields` and
+/// silently defaulted here would be a question the menu quietly stopped asking.
+///
+/// **`--ssh-passphrase-stdin` is never set**, for the reason `password_stdin` never is: it
+/// is the flag for a run with no terminal, and a menu is the opposite of that. The command
+/// asks, hidden, on the terminal it has been handed.
+fn ssh_fields(answers: &Answers, wanted: bool) -> SshFields {
+    let blank = SshFields {
         ssh_host: None,
         ssh_port: None,
         ssh_user: None,
@@ -466,6 +486,40 @@ fn no_ssh_questions() -> SshFields {
         ssh_encrypted_file: false,
         ssh_env: None,
         ssh_passphrase_from: None,
+        ssh_passphrase_stdin: false,
+    };
+
+    if !wanted {
+        return blank;
+    }
+
+    // **"Straight at it" is `--no-ssh`, not silence.** Somebody who changes a tunnelled
+    // database to a direct one has said something, and a menu that turned that into "leave
+    // it alone" would be a screen that does nothing.
+    if answers.text(field::REACH) != "ssh" {
+        return SshFields {
+            no_ssh: true,
+            ..blank
+        };
+    }
+
+    let route = answers.text(field::SSH_ROUTE);
+    SshFields {
+        ssh_host: answers.some(field::SSH_HOST).map(ToOwned::to_owned),
+        ssh_port: answers.number(field::SSH_PORT),
+        ssh_user: answers.some(field::SSH_USER).map(ToOwned::to_owned),
+        ssh_identity: answers.some(field::SSH_IDENTITY).map(ToOwned::to_owned),
+        no_ssh: false,
+        ssh_keyring: route == "keyring",
+        ssh_encrypted_file: route == "file",
+        ssh_env: (route == "env")
+            .then(|| answers.some(field::SSH_ENV))
+            .flatten()
+            .map(ToOwned::to_owned),
+        ssh_passphrase_from: (route == "command")
+            .then(|| answers.some(field::SSH_FROM_COMMAND))
+            .flatten()
+            .map(ToOwned::to_owned),
         ssh_passphrase_stdin: false,
     }
 }

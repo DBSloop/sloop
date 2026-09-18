@@ -32,6 +32,7 @@ use crate::failure::{Failure, Outcome};
 use crate::registry::file::{Database, check_name};
 use crate::registry::{Registries, Scope};
 use crate::secret::{Lookup, Route, Secret, resolve};
+use crate::ssh::tunnel::Tunnels;
 use crate::ssh::{DEFAULT_PORT as SSH_PORT, Reach, Server, Through};
 use crate::style;
 
@@ -45,6 +46,9 @@ pub struct Context<'a> {
     pub global: &'a Path,
     /// What this run was given permission to do — see [`crate::consent`].
     pub consent: Consent<'a>,
+    /// Every SSH forward this session holds — see [`super::reach`]. Shared with every
+    /// other command in the run, so a menu session authenticates once.
+    pub tunnels: &'a Tunnels,
 }
 
 // ---------------------------------------------------------------------------------------
@@ -89,7 +93,7 @@ pub fn add(
     let passphrase = ssh_secret_for(&database, ssh, context)?;
     if test {
         let reached = probe(&database, secret.as_ref(), context)?;
-        announce_server(&reached);
+        announce_server(&reached.server, reached.at.through.as_deref());
     }
 
     if crate::report::would(&format!("register {name}")) {
@@ -338,7 +342,9 @@ pub fn build(
         password: &admin_password,
     };
     let server = adapter.probe(&maintenance)?;
-    announce_server(&server);
+    // `None`: `db create` makes a database on a server it can already reach, which is why
+    // the record it writes below is `Reach::Direct`.
+    announce_server(&server, None);
 
     let done = adapter.provision(
         &maintenance,
@@ -970,7 +976,7 @@ pub fn test(context: &Context<'_>, name: Option<&str>) -> Outcome<Exit> {
 
         let reached = match connect(database, context, *scope) {
             Ok(server) => {
-                announce_server(&server);
+                announce_server(&server.server, server.at.through.as_deref());
                 Some(server)
             }
             Err(failure) => {
@@ -986,9 +992,12 @@ pub fn test(context: &Context<'_>, name: Option<&str>) -> Outcome<Exit> {
             "registry": scope.label(),
             "connection": database.credential_key(),
             "reached": reached.is_some(),
-            "engine": reached.as_ref().map(|server| server.engine.to_string()),
-            "version": reached.as_ref().map(|server| server.version.to_string()),
-            "tls": reached.as_ref().map(|server| server.tls),
+            "engine": reached.as_ref().map(|it| it.server.engine.to_string()),
+            "version": reached.as_ref().map(|it| it.server.version.to_string()),
+            "tls": reached.as_ref().map(|it| it.server.tls),
+            // **What actually secured it**, which over a tunnel is not what `tls` says. A
+            // script watching a fleet should not have to infer that from two other fields.
+            "through": reached.as_ref().and_then(|it| it.at.through.clone()),
         }));
     }
 
@@ -1057,7 +1066,7 @@ pub fn edit(
 
     if test {
         let reached = probe(&after, secret.as_ref(), context)?;
-        announce_server(&reached);
+        announce_server(&reached.server, reached.at.through.as_deref());
     }
 
     if crate::report::would(&format!("change what {name} points at")) {
@@ -1699,13 +1708,7 @@ fn carry_over(before: &Database, context: &Context<'_>, scope: Scope) -> Option<
 }
 
 /// Connect, using whichever password applies.
-fn connect(
-    database: &Database,
-    context: &Context<'_>,
-    scope: Scope,
-) -> Outcome<crate::engine::ServerInfo> {
-    super::reachable(database)?;
-
+fn connect(database: &Database, context: &Context<'_>, scope: Scope) -> Outcome<Reached> {
     let key = database.credential_key();
     let route = database.password.overridden_by(context.password_command);
     let vault = context
@@ -1724,27 +1727,65 @@ fn connect(
         crate::say!("  {}", style::dim(note));
     }
 
-    super::adapter_for(database.engine, context.global).probe(&database.target(&resolved.secret))
+    // The forward, if this one needs one, before anything dials anything.
+    let at = super::reach(database, context.tunnels, &context.registries, scope)?;
+    announce_tunnel(&at);
+
+    let server = super::adapter_for(database.engine, context.global).probe(&database.target_at(
+        &resolved.secret,
+        &at.host,
+        at.port,
+    ))?;
+    Ok(Reached { server, at })
+}
+
+/// A server that answered, and the address it answered at.
+///
+/// **Both, because what secures the connection depends on the second.** Over a tunnel, the
+/// client is talking to `127.0.0.1` and no certificate can be matched against that — so a
+/// line that said "over TLS" and stopped would be describing a session nobody verified while
+/// the thing actually securing it went unmentioned. See [`announce_server`].
+struct Reached {
+    /// What the server said it is.
+    server: crate::engine::ServerInfo,
+    /// Where the client program was pointed.
+    at: super::At,
+}
+
+/// Say that a connection went through a tunnel, once, where it happened.
+///
+/// **The server, never the port.** A forward's port is different every run, so printing it
+/// would be printing something nobody can reuse — and `R20` prints the `--ssh-*` flags for
+/// the same reason.
+fn announce_tunnel(at: &super::At) {
+    if let Some(server) = &at.through {
+        crate::say!("  {}", style::dim(&format!("through {server}")));
+    }
 }
 
 /// Connect with a password that is in hand rather than stored, for `--test` on a record
 /// that has not been written yet.
-fn probe(
-    database: &Database,
-    secret: Option<&Secret>,
-    context: &Context<'_>,
-) -> Outcome<crate::engine::ServerInfo> {
+fn probe(database: &Database, secret: Option<&Secret>, context: &Context<'_>) -> Outcome<Reached> {
     match secret {
         Some(secret) => {
+            let at = super::reach(
+                database,
+                context.tunnels,
+                &context.registries,
+                context.registries.writes_to(),
+            )?;
+            announce_tunnel(&at);
+
             let target = Target {
                 engine: database.engine,
-                host: &database.host,
-                port: database.port,
+                host: &at.host,
+                port: at.port,
                 database: &database.database,
                 user: &database.user,
                 password: secret,
             };
-            super::adapter_for(database.engine, context.global).probe(&target)
+            let server = super::adapter_for(database.engine, context.global).probe(&target)?;
+            Ok(Reached { server, at })
         }
         // A `${VAR}` or `command:` route: nothing was kept, so go and ask for it the same
         // way every later run will.
@@ -1752,17 +1793,38 @@ fn probe(
     }
 }
 
-fn announce_server(server: &crate::engine::ServerInfo) {
+fn announce_server(server: &crate::engine::ServerInfo, through: Option<&str>) {
+    let over_ssh = through.is_some();
+
+    // **What is actually securing this connection, not what the client negotiated.** Over a
+    // tunnel the client dialled `127.0.0.1`, so whatever certificate the server presented
+    // cannot be matched against the name it was issued for — SSH is what authenticated the
+    // far side, and saying "over TLS" while leaving that out would be describing the weaker
+    // half of the truth. Nothing is turned off to make this message tidier: sloop sets no
+    // TLS mode at all, on a tunnel or off one.
+    let how = match (over_ssh, server.tls) {
+        (true, _) => ", encrypted by SSH",
+        (false, true) => ", over TLS",
+        (false, false) => ", not encrypted",
+    };
+
     crate::say!(
         "  {} {}{}",
         style::paint(&format!("{}", server.engine)),
         server.version,
-        style::dim(if server.tls {
-            ", over TLS"
-        } else {
-            ", not encrypted"
-        })
+        style::dim(how)
     );
+
+    if over_ssh && server.tls {
+        crate::say!(
+            "  {}",
+            style::dim(
+                "the server offered TLS inside the tunnel as well, and no certificate can be \
+                 matched against 127.0.0.1 — so it is the SSH connection that proves which \
+                 machine this is"
+            )
+        );
+    }
 }
 
 /// File the password, then the record — and undo the first if the second fails.
@@ -2080,8 +2142,6 @@ pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
 
     // A name that resolves in the registry is not evidence that the database is there, and
     // "about to destroy X" had better be true before it is printed.
-    super::reachable(&record)?;
-
     let key = record.credential_key();
     let route = record.password.overridden_by(context.password_command);
     let vault = context
@@ -2095,7 +2155,10 @@ pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
             vault: &vault,
         },
     )?;
-    let target = record.target(&resolved.secret);
+    let at = super::reach(&record, context.tunnels, &context.registries, scope)?;
+    announce_tunnel(&at);
+
+    let target = record.target_at(&resolved.secret, &at.host, at.port);
     let adapter = super::adapter_for(record.engine, context.global);
     let server = adapter.probe(&target)?;
 

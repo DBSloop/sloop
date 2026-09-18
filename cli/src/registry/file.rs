@@ -163,12 +163,28 @@ impl Database {
     ///
     /// The one place the registry hands over to `engine`, and the reason nothing in
     /// `engine` has to know what a registry file looks like.
+    ///
+    /// **At the address the record names**, which is right for every direct connection and
+    /// wrong for a tunnelled one — there the record's address is the *server's* idea of it.
+    /// [`Database::target_at`] is what a command uses; this is the shorthand for the case
+    /// where the two are the same.
     #[must_use]
     pub fn target<'a>(&'a self, password: &'a Secret) -> Target<'a> {
+        self.target_at(password, &self.host, self.port)
+    }
+
+    /// The same, at the address a client program should actually dial.
+    ///
+    /// For a tunnelled database that is `127.0.0.1` and whatever port the forward took, and
+    /// **the adapter is never told which** — `psql`, `pg_dump` and `mysqldump` connect to a
+    /// local port and know nothing about SSH. Not one adapter changed for `R19e`; only what
+    /// this function is handed did.
+    #[must_use]
+    pub fn target_at<'a>(&'a self, password: &'a Secret, host: &'a str, port: u16) -> Target<'a> {
         Target {
             engine: self.engine,
-            host: &self.host,
-            port: self.port,
+            host,
+            port,
             database: &self.database,
             user: &self.user,
             password,

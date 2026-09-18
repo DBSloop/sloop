@@ -60,6 +60,8 @@ use crate::failure::{Failure, Outcome};
 use crate::registry::file::{Database, check_name};
 use crate::registry::{Registries, Scope};
 use crate::secret::{Lookup, Secret, resolve};
+use crate::ssh::Reach;
+use crate::ssh::tunnel::Tunnels;
 use crate::style;
 use crate::verify::{self, Side};
 
@@ -77,6 +79,9 @@ pub struct Context<'a> {
     pub password_command: Option<&'a str>,
     /// What this run was given permission to do — see [`crate::consent`].
     pub consent: Consent<'a>,
+    /// Every SSH forward this session holds — see [`super::reach`]. Shared with every
+    /// other command in the run, so a menu session authenticates once.
+    pub tunnels: &'a Tunnels,
 }
 
 /// Everything `mirror` was asked for, named rather than positional.
@@ -300,19 +305,21 @@ fn into_a_registered_database(
         context.password_command,
         from_scope,
         from,
+        context.tunnels,
     )?;
     let writing = secret_for(
         &context.registries,
         context.password_command,
         into_scope,
         &into,
+        context.tunnels,
     )?;
 
     copy(
         context,
         asked,
-        &from.target(&reading),
-        &into.target(&writing),
+        &from.target_at(&reading.secret, &reading.at.host, reading.at.port),
+        &into.target_at(&writing.secret, &writing.at.host, writing.at.port),
         Some(&destroying),
     )
 }
@@ -346,9 +353,19 @@ fn into_a_new_database(
             consequence: MIRRORING_ITSELF,
         },
         |registries| {
-            let secret = secret_for(registries, context.password_command, from_scope, from)?;
-            super::adapter_for(from.engine, context.global).probe(&from.target(&secret))?;
-            reading = Some(secret);
+            let end = secret_for(
+                registries,
+                context.password_command,
+                from_scope,
+                from,
+                context.tunnels,
+            )?;
+            super::adapter_for(from.engine, context.global).probe(&from.target_at(
+                &end.secret,
+                &end.at.host,
+                end.at.port,
+            ))?;
+            reading = Some(end);
             Ok(())
         },
     )?;
@@ -365,7 +382,9 @@ fn into_a_new_database(
     copy(
         context,
         asked,
-        &from.target(&reading),
+        &from.target_at(&reading.secret, &reading.at.host, reading.at.port),
+        // **The destination was made directly**, by the same `db::build` that `db create`
+        // is, so there is no forward in front of it and its record's address is its own.
         &built.record.target(&built.secret),
         None,
     )
@@ -422,9 +441,16 @@ pub(super) fn make_the_destination(
         source,
         from,
         label,
-        &proposed.host,
-        proposed.port,
-        &proposed.database,
+        &Onto {
+            host: &proposed.host,
+            port: proposed.port,
+            database: &proposed.database,
+            // **What `--create` makes is reached directly.** `db::build` runs against a
+            // server it can already reach and records `Reach::Direct`, so a database made on
+            // the far side of an SSH server is a thing this command does not do — and the
+            // guard is told the truth rather than a hopeful `from.reach`.
+            reach: &Reach::Direct,
+        },
         consequence,
     )?;
 
@@ -863,9 +889,12 @@ fn refuse_a_self_mirror(
         source,
         from,
         destination,
-        &into.host,
-        into.port,
-        &into.database,
+        &Onto {
+            host: &into.host,
+            port: into.port,
+            database: &into.database,
+            reach: &into.reach,
+        },
         MIRRORING_ITSELF,
     )
 }
@@ -873,6 +902,23 @@ fn refuse_a_self_mirror(
 /// What a mirror onto itself would have done, which is the half worth reading.
 const MIRRORING_ITSELF: &str =
     "a mirror drops the destination's contents, so this would destroy the source";
+
+/// The far end of a copy, as much of it as is known.
+///
+/// **One value rather than four arguments**, because `--create` compares against a database
+/// that does not exist yet: there is no [`Database`] to pass, only the address it is *going*
+/// to have. Four loose arguments of which two are strings is how a host ends up where a
+/// database name goes.
+pub(super) struct Onto<'a> {
+    /// The server, as the record spells it.
+    pub host: &'a str,
+    /// Its port.
+    pub port: u16,
+    /// The database's own name there.
+    pub database: &'a str,
+    /// How it is reached — see [`same_reach`].
+    pub reach: &'a Reach,
+}
 
 /// The same guard, against a destination that may not exist yet.
 ///
@@ -888,12 +934,20 @@ pub(super) fn refuse_the_same_connection(
     source: &str,
     from: &Database,
     destination: &str,
-    host: &str,
-    port: u16,
-    database: &str,
+    onto: &Onto<'_>,
     consequence: &str,
 ) -> Outcome<()> {
-    if from.port != port || from.database != database || !same_host(&from.host, host) {
+    if from.port != onto.port || from.database != onto.database || !same_host(&from.host, onto.host)
+    {
+        return Ok(());
+    }
+
+    // **And reached the same way, which `R19e` made load-bearing.** Every tunnelled database
+    // is registered at the address its own server sees — almost always `127.0.0.1:5432` — so
+    // two behind two different bastions look identical on host, port and name and are not
+    // remotely the same database. Comparing only those three would refuse an ordinary copy
+    // between two servers, which is the reason somebody would reach for this feature at all.
+    if !same_reach(&from.reach, onto.reach) {
         return Ok(());
     }
 
@@ -910,6 +964,20 @@ pub(super) fn refuse_the_same_connection(
     .hint(consequence))
 }
 
+/// Is this the same way in? Two direct connections are, and two tunnels are when they go
+/// through the same login.
+///
+/// **The identity is part of the comparison because it is part of the login** — see
+/// [`crate::ssh::Server::credential_key`], which is the one place that decides what "the
+/// same server" means, so this cannot drift from what the tunnel set does.
+fn same_reach(one: &Reach, two: &Reach) -> bool {
+    match (one.through(), two.through()) {
+        (None, None) => true,
+        (Some(one), Some(two)) => one.server.credential_key() == two.server.credential_key(),
+        _ => false,
+    }
+}
+
 /// Is this the same machine, however the two were spelled?
 fn same_host(one: &str, two: &str) -> bool {
     /// Every spelling of "this machine" that resolves to the same place.
@@ -919,19 +987,31 @@ fn same_host(one: &str, two: &str) -> bool {
     one.eq_ignore_ascii_case(two) || (here(one) && here(two))
 }
 
-/// Resolve one end's password through whichever of the four routes its record names.
+/// One end of a copy: the password to open it with, and where to dial it.
+///
+/// **Two values because they are decided together and used together.** A record's address is
+/// the *server's* idea of it once there is a tunnel in the way, so a function that handed
+/// back only the password would leave every call site to remember the other half — and the
+/// one that forgot would dial this machine's loopback.
+pub(super) struct End {
+    /// The password, through whichever of the four routes the record names.
+    pub secret: Secret,
+    /// Where a client program should connect, once any forward is up.
+    pub at: super::At,
+}
+
+/// Resolve one end's password, and open its forward if it has one.
 ///
 /// **The pieces rather than a [`Context`]**, because `sync` holds a context of its own shape
-/// and needs exactly this: the registries the record came out of, and whatever
-/// `--password-command` said.
+/// and needs exactly this: the registries the record came out of, whatever
+/// `--password-command` said, and the forwards this session holds.
 pub(super) fn secret_for(
     registries: &Registries,
     password_command: Option<&str>,
     scope: Scope,
     record: &Database,
-) -> Outcome<Secret> {
-    super::reachable(record)?;
-
+    tunnels: &Tunnels,
+) -> Outcome<End> {
     let key = record.credential_key();
     let route = record.password.overridden_by(password_command);
     let vault = registries
@@ -947,7 +1027,16 @@ pub(super) fn secret_for(
     for note in &resolved.notes {
         crate::say!("  {}", style::dim(note));
     }
-    Ok(resolved.secret)
+
+    let at = super::reach(record, tunnels, registries, scope)?;
+    if let Some(server) = &at.through {
+        crate::say!("  {}", style::dim(&format!("through {server}")));
+    }
+
+    Ok(End {
+        secret: resolved.secret,
+        at,
+    })
 }
 
 /// Say what is in the destination now, before the question rather than after it.

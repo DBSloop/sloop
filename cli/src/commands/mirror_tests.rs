@@ -230,9 +230,12 @@ fn creating_the_source_over_again_is_refused_before_anything_is_made() {
         "live",
         &from,
         "copy",
-        &made.host,
-        made.port,
-        &made.database,
+        &super::Onto {
+            host: &made.host,
+            port: made.port,
+            database: &made.database,
+            reach: &crate::ssh::Reach::Direct,
+        },
         "would destroy the source",
     )
     .expect_err("that names the source");
@@ -250,10 +253,81 @@ fn creating_the_source_over_again_is_refused_before_anything_is_made() {
         "live",
         &from,
         "staging",
-        &beside.host,
-        beside.port,
-        &beside.database,
+        &super::Onto {
+            host: &beside.host,
+            port: beside.port,
+            database: &beside.database,
+            reach: &crate::ssh::Reach::Direct,
+        },
         "would destroy the source",
     )
     .expect("a second database on one server is a copy");
+}
+
+// ---------------------------------------------------------------------------------------
+// what a copy compares, now that two databases can share an address — R19e
+// ---------------------------------------------------------------------------------------
+
+/// **The refusal `R19e` would have broken.** Every tunnelled database is registered at the
+/// address its own server sees — almost always `127.0.0.1:5432` — so two behind two
+/// different bastions are identical on host, port and name and are not remotely the same
+/// database. A guard comparing only those three would refuse the ordinary copy that is the
+/// whole reason somebody reaches for this feature.
+#[test]
+fn two_databases_behind_two_servers_are_not_the_same_database() {
+    let over = |host: &str| {
+        let mut record = record("127.0.0.1", 5432, "orders");
+        record.reach = crate::ssh::Reach::Over(Box::new(crate::ssh::Through {
+            server: crate::ssh::Server {
+                host: host.to_owned(),
+                port: 22,
+                user: None,
+                identity: None,
+            },
+            secret: None,
+        }));
+        record
+    };
+
+    let from = over("one.test");
+    let into = over("other.test");
+    refuse_a_self_mirror("live", &from, "copy", &into)
+        .expect("two bastions is two databases, however the addresses read");
+
+    // And the same server still is the same database, which is what the guard is for.
+    let itself = over("one.test");
+    refuse_a_self_mirror("live", &from, "copy", &itself)
+        .expect_err("one server, one address, one database");
+
+    // A direct database and a tunnelled one at the same address are two, as well: the local
+    // `127.0.0.1:5432` and the one on the far side of a bastion are different machines.
+    let here = record("127.0.0.1", 5432, "orders");
+    refuse_a_self_mirror("live", &from, "copy", &here)
+        .expect("one of them is on this machine and the other is not");
+}
+
+/// The identity is part of which login a tunnel is, so it is part of which database a
+/// record names — the one place that decides it is `Server::credential_key`.
+#[test]
+fn the_same_server_under_two_keys_is_still_one_server_to_copy_between() {
+    let with = |identity: Option<&str>| {
+        let mut record = record("127.0.0.1", 5432, "orders");
+        record.reach = crate::ssh::Reach::Over(Box::new(crate::ssh::Through {
+            server: crate::ssh::Server {
+                host: "one.test".to_owned(),
+                port: 22,
+                user: Some("deploy".to_owned()),
+                identity: identity.map(std::path::PathBuf::from),
+            },
+            secret: None,
+        }));
+        record
+    };
+
+    // Two different keys are two different logins, so sloop treats them as two ways in and
+    // does not refuse. Same key, same login, same database: refused.
+    refuse_a_self_mirror("live", &with(Some("/a/key")), "copy", &with(Some("/b/key")))
+        .expect("two keys are two logins");
+    refuse_a_self_mirror("live", &with(Some("/a/key")), "copy", &with(Some("/a/key")))
+        .expect_err("one key, one login, one database");
 }

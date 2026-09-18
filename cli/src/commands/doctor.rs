@@ -44,6 +44,7 @@ use crate::failure::Failure;
 use crate::registry::file::Database;
 use crate::registry::{Registries, Scope};
 use crate::secret::{self, Lookup};
+use crate::ssh::tunnel::Tunnels;
 use crate::style;
 use crate::tools::{Candidate, Inventory, Tool, acquire};
 
@@ -58,6 +59,9 @@ pub struct Registered<'a> {
     pub password_command: Option<&'a str>,
     /// Do not open a connection at all.
     pub offline: bool,
+    /// Every SSH forward this session holds — see [`super::reach`]. Shared with every
+    /// other command in the run, so a menu session authenticates once.
+    pub tunnels: &'a Tunnels,
 }
 
 /// Report, then offer.
@@ -98,6 +102,12 @@ pub fn run(global: &Path, may_install: bool, registered: &Registered<'_>) -> Exi
         print_report(&inventory, &fetched);
     }
 
+    // **Before the roles, because it is the step before them.** A database reached over SSH
+    // cannot be asked anything until the forward is up, so a missing `ssh` or an unreadable
+    // key explains every failure underneath it — and reading that explanation *after* three
+    // connection errors is reading it in the wrong order.
+    let over_ssh = print_ssh(registered);
+
     // Last, and after any install: checking a role needs the client tools that were just
     // fetched, and a section that said "no tools" above an install that just finished
     // would be answering a question nobody still has.
@@ -107,6 +117,7 @@ pub fn run(global: &Path, may_install: bool, registered: &Registered<'_>) -> Exi
     let exit = verdict(&inventory, roles_can_dump);
     crate::report::result(serde_json::json!({
         "tools": tools_as_json(&inventory, &fetched),
+        "ssh": over_ssh,
         "roles": roles,
         // The two things `verdict` acts on, said out loud rather than left to be inferred
         // from the exit code — a script that has to work out *which* of them was wrong from
@@ -291,6 +302,143 @@ fn describe(tool: Tool, candidate: &Candidate) -> String {
 }
 
 // ---------------------------------------------------------------------------------------
+// Over SSH
+// ---------------------------------------------------------------------------------------
+
+/// What this machine can do about SSH, when any registered database needs it to do anything.
+///
+/// **Printed only when something here is reached over SSH**, and that is a deliberate
+/// omission rather than a missing feature. `doctor` describes what this machine has to be
+/// able to do; a section about `ssh` on a machine where nothing goes through one is a
+/// paragraph everybody learns to scroll past, and the paragraphs that matter go with it.
+///
+/// `null` in `--json` says the same thing: nothing here needs it.
+fn print_ssh(registered: &Registered<'_>) -> serde_json::Value {
+    let servers: Vec<(&str, &crate::ssh::Through)> = registered
+        .registries
+        .all()
+        .filter_map(|(_, name, database)| Some((name, database.reach.through()?)))
+        .collect();
+
+    if servers.is_empty() {
+        return serde_json::Value::Null;
+    }
+
+    let keys: Vec<std::path::PathBuf> = servers
+        .iter()
+        .filter_map(|(_, through)| through.server.identity.clone())
+        .collect();
+    let found = crate::ssh::health::look(&keys);
+
+    crate::say!();
+    crate::say!("{}", style::heading("Over SSH"));
+    crate::say!(
+        "{}",
+        style::dim(
+            "  A database whose port is closed to the outside is reached through an SSH \
+             server. sloop runs the system's own ssh, so ~/.ssh/config, ProxyJump, agents \
+             and hardware keys all work exactly as they do for you — and nothing in this \
+             binary can open a socket."
+        )
+    );
+    crate::say!();
+
+    print_ssh_found(&found);
+
+    crate::say!();
+    for (name, through) in &servers {
+        crate::say!(
+            "  {}  {}",
+            style::paint(name),
+            style::dim(&through.describe())
+        );
+    }
+
+    serde_json::json!({
+        "ssh": found.program.as_ref().map(|path| path.display().to_string()),
+        "version": found.version,
+        "agent": found.agent.describe(),
+        "usable": found.usable(),
+        "keys": found
+            .keys
+            .iter()
+            .map(|key| serde_json::json!({
+                "path": key.path.display().to_string(),
+                "readable": key.readable,
+            }))
+            .collect::<Vec<_>>(),
+        "databases": servers
+            .iter()
+            .map(|(name, through)| serde_json::json!({
+                "name": name,
+                "server": through.server.describe(),
+                // A route, never a value — the same property every other credential in this
+                // report has.
+                "passphrase": through.secret.as_ref().map(crate::secret::Route::describe),
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// The three local facts, printed: the program, the agent, and every key a record names.
+fn print_ssh_found(found: &crate::ssh::health::Report) {
+    if let Some(program) = &found.program {
+        crate::say!(
+            "  {} {}",
+            style::paint("ssh"),
+            style::dim(&format!(
+                "— {}",
+                found
+                    .version
+                    .as_deref()
+                    .unwrap_or("it would not say its version")
+            ))
+        );
+        crate::say!("    {}", style::dim(&program.display().to_string()));
+    } else {
+        crate::say!("  {} {}", style::paint("ssh"), style::dim("— not found"));
+        crate::say!(
+            "    {}",
+            style::dim(
+                "→ install OpenSSH. It ships with Windows 10 and later, and with every \
+                 Linux and macOS"
+            )
+        );
+    }
+
+    crate::say!(
+        "  {} {}",
+        style::label("agent"),
+        style::dim(&found.agent.describe())
+    );
+    if !found.agent.can_unlock_a_key() {
+        crate::say!(
+            "    {}",
+            style::dim(
+                "→ a key with a passphrase then needs one stored — `sloop db edit <name> \
+                 --ssh-keyring` — or a scheduled run has nobody to ask"
+            )
+        );
+    }
+
+    for key in &found.keys {
+        crate::say!(
+            "  {} {}",
+            style::label("key"),
+            style::dim(&format!(
+                "{} — {}",
+                key.path.display(),
+                if key.readable {
+                    "readable"
+                } else {
+                    "cannot be read"
+                }
+            ))
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------
 // Privileges
 // ---------------------------------------------------------------------------------------
 
@@ -382,8 +530,6 @@ fn check(
     scope: Scope,
     inventory: &Inventory,
 ) -> Result<Report, Failure> {
-    super::reachable(database)?;
-
     let key = database.credential_key();
     let route = database.password.overridden_by(registered.password_command);
     // The encrypted file sits beside the registry that names the database, so a project
@@ -404,12 +550,21 @@ fn check(
         crate::say!("    {}", style::dim(note));
     }
 
+    // **The forward counts as part of the check.** A role that would be fine and a server
+    // nobody can reach are two different findings, and `doctor` is where the difference is
+    // supposed to be told — a tunnel that will not open fails this database with what `ssh`
+    // said, and the run carries on to the rest.
+    let at = super::reach(database, registered.tunnels, registered.registries, scope)?;
+    if let Some(server) = &at.through {
+        crate::say!("    {}", style::dim(&format!("through {server}")));
+    }
+
     // The inventory this command has already built and already printed, rather than
     // whatever `PATH` happens to hold: a report that says a tool was found and then cannot
     // find it is a report nobody can act on.
     inventory
         .adapter_for(database.engine)
-        .check_privileges(&database.target(&resolved.secret))
+        .check_privileges(&database.target_at(&resolved.secret, &at.host, at.port))
 }
 
 /// One database's findings.

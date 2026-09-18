@@ -1093,17 +1093,27 @@ fn a_server_name_that_would_become_an_ssh_option_is_refused() {
     assert!(!written(&sandbox).contains("prod"));
 }
 
-/// **The guard with a shelf life, while it has one.** The registry half of `R19e` landed
-/// before the tunnel half, and a tunnelled record's `host` is the address the *server* sees
-/// — usually `127.0.0.1`. A command that simply connected would aim at this machine's
-/// loopback, which is a connection error if nothing is listening and something far worse if
-/// something is. So every command that would connect refuses and says why.
+/// **The tunnel is tried, and nothing dials this machine's loopback.**
 ///
-/// This test goes when the tunnel is wired, along with what it is testing.
+/// A tunnelled record's `host` is the address the *server* sees — usually `127.0.0.1` — so
+/// a command that read it off the record would aim at this laptop: a connection error if
+/// nothing is listening there, and something far worse if something is. There is no SSH
+/// server called `bastion.internal`, so what every one of these has to produce is `ssh`
+/// failing to reach it, exit `3`, and `ssh`'s own words. A message about *PostgreSQL*
+/// refusing a connection would mean the address had been used raw.
+///
+/// The happy path needs a real server and is `ssh::tests`, behind `SLOOP_SSH_TEST`.
 #[test]
-fn a_command_that_would_need_the_tunnel_refuses_rather_than_connecting_locally() {
-    let sandbox = Sandbox::new("db-ssh-guard");
+fn a_command_that_needs_the_tunnel_goes_through_ssh_and_never_dials_locally() {
+    let sandbox = Sandbox::new("db-ssh-tunnel");
 
+    // A route that answers, so the run gets past the password and as far as the tunnel.
+    // What is being tested is the order after that.
+    let prints_it = if cfg!(windows) {
+        "cmd /c echo pw"
+    } else {
+        "echo pw"
+    };
     sandbox
         .sloop(&[
             "db",
@@ -1112,9 +1122,10 @@ fn a_command_that_would_need_the_tunnel_refuses_rather_than_connecting_locally()
             "--url",
             "postgres://app@127.0.0.1:5432/orders",
             "--ssh-host",
-            "bastion.internal",
-            "--env",
-            "PGPASSWORD",
+            // Reserved for exactly this: RFC 2606 says it never resolves.
+            "bastion.invalid",
+            "--password-from",
+            prints_it,
         ])
         .expect_code(0);
 
@@ -1129,24 +1140,85 @@ fn a_command_that_would_need_the_tunnel_refuses_rather_than_connecting_locally()
     for command in [
         vec!["db", "test", "prod"],
         vec!["backup", "prod"],
-        vec!["restore", "prod"],
         // Rule 5 comes first on these two, so the name is typed up front and what is left
-        // to refuse is the source nobody can reach.
+        // to fail is the source nobody can reach.
         vec!["mirror", "prod", "--to", "copy", "--confirm", "orders"],
         vec!["sync", "prod", "--to", "copy", "--confirm", "orders"],
     ] {
         let run = sandbox.sloop(&command);
+        let said = format!("{}{}", run.stdout(), run.stderr());
+        let shown = command.join(" ");
+
         assert_eq!(
             run.code(),
-            Some(2),
-            "`sloop {}` did not refuse:\n{}{}",
-            command.join(" "),
-            run.stdout(),
-            run.stderr()
+            Some(3),
+            "`sloop {shown}` did not fail as a connection:\n{said}"
         );
-        run.expect_said("does not open the tunnel yet");
+        assert!(
+            said.contains("bastion.invalid"),
+            "`sloop {shown}` did not say which server it could not reach:\n{said}"
+        );
+        assert!(
+            !said.contains("port 5432"),
+            "`sloop {shown}` dialled this machine's loopback instead of a forward:\n{said}"
+        );
     }
 
-    // And the record is still there afterwards, because a refusal changes nothing.
-    assert!(written(&sandbox).contains("[databases.prod.ssh]"));
+    // **And reading the registry needs no tunnel at all.** A database nobody can reach is
+    // still a database somebody can list, rename and remove — opening a connection to say
+    // what is registered would be the wrong shape entirely.
+    sandbox
+        .sloop(&["db", "list"])
+        .expect_code(0)
+        .expect_said("over bastion.invalid");
+    sandbox
+        .sloop(&["db", "rename", "prod", "old"])
+        .expect_code(0);
+    sandbox
+        .sloop(&["db", "remove", "old", "--yes"])
+        .expect_code(0);
+}
+
+/// **`doctor` reports on SSH only when something here needs it** — and then says everything
+/// the entry asked for: whether `ssh` is there and which version, whether an agent is
+/// running, whether each key named can be read, and which databases go through what.
+#[test]
+fn doctor_says_nothing_about_ssh_until_a_database_goes_through_it() {
+    let sandbox = Sandbox::new("doctor-ssh");
+    registered(&sandbox, "plain", "postgres://app@db.internal/orders");
+
+    // Nothing here is reached over SSH, so a section about it would be a paragraph
+    // everybody learns to scroll past.
+    sandbox
+        .sloop(&["doctor", "--offline"])
+        .expect_code(0)
+        .expect_silent_about("Over SSH");
+
+    sandbox
+        .sloop(&[
+            "db",
+            "add",
+            "prod",
+            "--url",
+            "postgres://app@127.0.0.1/orders",
+            "--ssh-host",
+            "bastion.invalid",
+            "--ssh-user",
+            "deploy",
+            "--ssh-identity",
+            "/no/such/key",
+            "--env",
+            "PW",
+        ])
+        .expect_code(0);
+
+    let run = sandbox.sloop(&["doctor", "--offline"]);
+    run.expect_code(0)
+        .expect_said("Over SSH")
+        .expect_said("agent")
+        // The key a record names, and the answer to the question people actually have.
+        .expect_said("/no/such/key")
+        .expect_said("cannot be read")
+        .expect_said("prod")
+        .expect_said("over deploy@bastion.invalid");
 }

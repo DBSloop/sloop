@@ -9,6 +9,7 @@
 //! kills its `ssh` on drop, so a command that fails half way through does not leave a
 //! forwarded port open on somebody's machine.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::net::TcpListener;
@@ -35,7 +36,6 @@ const POLL_EVERY: Duration = Duration::from_millis(100);
 pub struct Tunnel {
     ssh: Child,
     local_port: u16,
-    describes: String,
 }
 
 impl Tunnel {
@@ -43,15 +43,6 @@ impl Tunnel {
     #[must_use]
     pub const fn local_port(&self) -> u16 {
         self.local_port
-    }
-
-    /// How it reads in a message: the server, never the port it happens to have taken.
-    ///
-    /// **`R20` prints the `--ssh-*` flags, not this port.** A tunnel's port is different every
-    /// run, so a command line naming it would not reproduce anything.
-    #[must_use]
-    pub fn describe(&self) -> &str {
-        &self.describes
     }
 
     /// Open one: pick a local port, spawn `ssh`, and wait until the forward is really bound.
@@ -118,11 +109,7 @@ impl Tunnel {
             let _ = pipe.flush();
         }
 
-        let tunnel = Self {
-            ssh,
-            local_port,
-            describes: through.server.describe(),
-        };
+        let tunnel = Self { ssh, local_port };
 
         tunnel.wait_until_bound(through)
     }
@@ -200,10 +187,16 @@ impl Drop for Tunnel {
     }
 }
 
-/// Every connection this session holds, one per server.
+/// Every forward this session holds.
+///
+/// **Shared rather than borrowed, which is why the map is in a `RefCell`.** One of these is
+/// made in `main` and handed to every command, and a command holds it while it runs a dump
+/// that takes an hour. Handing back a `&Tunnel` would lend out the map for that hour and
+/// stop the next database in a `backup --all` from opening its own; handing back a **port**
+/// lends nothing, and a port is all a client program ever needed.
 #[derive(Debug)]
 pub struct Tunnels {
-    held: BTreeMap<String, Tunnel>,
+    held: RefCell<BTreeMap<String, Tunnel>>,
     /// What `ssh` is pointed at when it needs a passphrase. See [`Tunnel::open`].
     helper: std::path::PathBuf,
 }
@@ -221,37 +214,72 @@ impl Tunnels {
     #[must_use]
     pub fn with_helper(helper: std::path::PathBuf) -> Self {
         Self {
-            held: BTreeMap::new(),
+            held: RefCell::new(BTreeMap::new()),
             helper,
         }
     }
-    /// The forward for this database, opening one if this session has not already.
+
+    /// The local port that comes out at this database, opening a forward if there is not
+    /// one already.
     ///
-    /// Keyed by [`super::Server::credential_key`], so two databases on one server share a
-    /// login and two entries naming different keys do not.
-    pub fn to(
-        &mut self,
+    /// **Keyed by the whole forward, not by the server**, and that is a correction rather
+    /// than a preference. An `ssh -L` names one far-side address for the life of the
+    /// connection, so a set keyed by the server alone would hand the second database on a
+    /// bastion the first one's forward — a `pg_dump` of the wrong database, reported as a
+    /// success. Two databases at the same address on the same server still share one, which
+    /// is the case the owner's sentence is about.
+    ///
+    /// **A second `ssh` process is not a second login anybody performs.** With an agent
+    /// there is nothing to ask; with a passphrase route sloop already holds the secret and
+    /// hands it to the new child down a pipe. The person is asked once per session either
+    /// way, which is what *"it will login after each task"* was about.
+    /// **The secret is a closure, and that is what makes "one login" true of the secret as
+    /// well as of the connection.** Resolving it eagerly would read the keyring, or run
+    /// `op read`, once per database — five times for five databases behind one bastion,
+    /// four of them for a forward that was already up. It is asked for only when there is
+    /// actually a connection to open.
+    pub fn port_for(
+        &self,
         through: &Through,
         database_host: &str,
         database_port: u16,
-        secret: Option<&Secret>,
-    ) -> Outcome<&Tunnel> {
-        let key = through.server.credential_key();
+        secret: impl FnOnce() -> Outcome<Option<Secret>>,
+    ) -> Outcome<u16> {
+        let key = format!(
+            "{}|{database_host}:{database_port}",
+            through.server.credential_key()
+        );
 
-        if !self.held.contains_key(&key) {
-            let tunnel = Tunnel::open(through, database_host, database_port, secret, &self.helper)?;
-            self.held.insert(key.clone(), tunnel);
+        if let Some(open) = self.held.borrow().get(&key) {
+            return Ok(open.local_port());
         }
 
-        self.held
-            .get(&key)
-            .ok_or_else(|| Failure::usage("the tunnel that was just opened is not there"))
+        let secret = secret()?;
+
+        // **Opened outside the borrow.** `Tunnel::open` waits up to forty-five seconds for
+        // a login, and holding a `RefCell` borrow across that would panic the next command
+        // that asked for a forward of its own rather than fail it.
+        let tunnel = Tunnel::open(
+            through,
+            database_host,
+            database_port,
+            secret.as_ref(),
+            &self.helper,
+        )?;
+        let port = tunnel.local_port();
+        self.held.borrow_mut().insert(key, tunnel);
+        Ok(port)
     }
 
-    /// How many are open, for the report and for the tests.
+    /// How many are open.
+    ///
+    /// Only the tests ask — a command takes a forward and forgets about it, which is the
+    /// point. It stays because *"did the second ask reuse the first"* is the whole of the
+    /// owner's sentence about this feature, and nothing outside this module can see it.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub fn count(&self) -> usize {
-        self.held.len()
+        self.held.borrow().len()
     }
 }
 

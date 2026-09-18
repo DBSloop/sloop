@@ -256,10 +256,14 @@ fn every_database_is_backed_up_and_a_broken_one_does_not_stop_the_rest() {
     // them a `sloop_database` of its own would be a second cluster to prove something
     // `registry::cluster_tests` proves once.
     let registries = Registries::of(global_only(), &store, registry, None);
+    // Nothing here is reached over SSH, so no forward is ever opened — but a `Context`
+    // needs one, because every command shares the set the run holds.
+    let tunnels = crate::ssh::tunnel::Tunnels::new().expect("this binary knows where it is");
     let mut context = Context {
         registries,
         global: &store,
         password_command: None,
+        tunnels: &tunnels,
     };
 
     // --- --all, with one of the three unreachable ------------------------------------
@@ -386,10 +390,14 @@ fn what_it_prints_is_in_local_time_and_names_where_the_backup_went() {
     // them a `sloop_database` of its own would be a second cluster to prove something
     // `registry::cluster_tests` proves once.
     let registries = Registries::of(global_only(), &store, registry, None);
+    // Nothing here is reached over SSH, so no forward is ever opened — but a `Context`
+    // needs one, because every command shares the set the run holds.
+    let tunnels = crate::ssh::tunnel::Tunnels::new().expect("this binary knows where it is");
     let mut context = Context {
         registries,
         global: &store,
         password_command: None,
+        tunnels: &tunnels,
     };
 
     assert_eq!(

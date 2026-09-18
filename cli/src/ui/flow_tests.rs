@@ -475,3 +475,127 @@ fn every_box_that_opens_full_is_one_enter_can_answer() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// reaching it over SSH — R19e
+// ---------------------------------------------------------------------------------------
+
+/// **The default answer asks nothing more.** Most databases are reached straight at their
+/// address, and a registration that went through four SSH questions to say so would be a
+/// screen everybody learns to press Enter through.
+#[test]
+fn registering_asks_about_ssh_once_and_stops_there() {
+    let world = Known::empty();
+    let (answers, asked) = walk_it(Job::DbAdd, &world);
+
+    assert_eq!(
+        answers.text(field::REACH),
+        "direct",
+        "the first option is the usual one"
+    );
+    for field in [
+        field::SSH_HOST,
+        field::SSH_PORT,
+        field::SSH_USER,
+        field::SSH_IDENTITY,
+        field::SSH_ROUTE,
+    ] {
+        assert!(
+            !asked.iter().any(|step| step.field == field),
+            "{field} was asked although nothing goes over SSH: {asked:?}"
+        );
+    }
+}
+
+/// And saying so opens exactly the questions a tunnel needs — including the sentence that
+/// everybody gets backwards once, on the question where it matters.
+#[test]
+fn saying_it_goes_over_ssh_asks_for_the_server_and_says_which_host_is_which() {
+    let world = Known::empty();
+    let mut answers = Answers::default();
+    answers.put(field::NAME, "prod");
+    answers.put(field::HOW, "url");
+    answers.put(field::URL, "postgres://app@127.0.0.1/orders");
+    answers.put(field::ROUTE, "keyring");
+    answers.put(field::REACH, "ssh");
+
+    let Next::Ask(step) = Job::DbAdd.next(&answers, &world) else {
+        panic!("the server was not asked for");
+    };
+    assert_eq!(step.field, field::SSH_HOST);
+    let How::Type { help, .. } = &step.how else {
+        panic!("a server is typed, not picked");
+    };
+    assert!(
+        help.contains("THAT machine sees"),
+        "the one sentence everybody needs is not under the question: {help}"
+    );
+
+    // The passphrase question comes after the key, and its first answer is the agent —
+    // which is the documented default and the one where sloop holds no secret at all.
+    answers.put(field::SSH_HOST, "bastion.internal");
+    answers.put(field::SSH_PORT, "");
+    answers.put(field::SSH_USER, "deploy");
+    answers.put(field::SSH_IDENTITY, "");
+
+    let Next::Ask(step) = Job::DbAdd.next(&answers, &world) else {
+        panic!("the passphrase route was not asked for");
+    };
+    assert_eq!(step.field, field::SSH_ROUTE);
+    let How::Pick { values, .. } = &step.how else {
+        panic!("it has to be a list");
+    };
+    assert_eq!(values.first().map(String::as_str), Some("agent"));
+}
+
+/// A passphrase route that holds a value asks where the value is, and one that does not
+/// asks nothing more — the same shape the database password has.
+#[test]
+fn only_a_passphrase_route_that_needs_a_value_asks_for_one() {
+    let world = Known::empty();
+    let mut answers = Answers::default();
+    answers.put(field::NAME, "prod");
+    answers.put(field::HOW, "url");
+    answers.put(field::URL, "postgres://app@127.0.0.1/orders");
+    answers.put(field::ROUTE, "keyring");
+    answers.put(field::REACH, "ssh");
+    answers.put(field::SSH_HOST, "bastion.internal");
+    answers.put(field::SSH_PORT, "");
+    answers.put(field::SSH_USER, "");
+    answers.put(field::SSH_IDENTITY, "");
+
+    for (route, wanted) in [
+        ("env", Some(field::SSH_ENV)),
+        ("command", Some(field::SSH_FROM_COMMAND)),
+        ("agent", None),
+        ("keyring", None),
+        ("file", None),
+    ] {
+        let mut asking = answers.clone();
+        asking.put(field::SSH_ROUTE, route);
+
+        let Next::Ask(step) = Job::DbAdd.next(&asking, &world) else {
+            panic!("{route} ended the plan early");
+        };
+        match wanted {
+            Some(field) => assert_eq!(step.field, field, "{route}"),
+            // Nothing more about SSH: the next question is the last one `db add` asks.
+            None => assert_eq!(step.field, field::TEST, "{route}"),
+        }
+    }
+}
+
+/// `db edit` can change how a database is reached, and that is its own detail rather than
+/// something smuggled into "the server" — which is the database's address, not the tunnel's.
+#[test]
+fn editing_offers_how_it_is_reached_as_a_detail_of_its_own() {
+    let world = Known::with(&["prod"]);
+    let mut answers = Answers::default();
+    answers.put(field::NAME, "prod");
+    answers.put(field::DETAIL, "reach");
+
+    let Next::Ask(step) = Job::DbEdit.next(&answers, &world) else {
+        panic!("changing the reach asked nothing");
+    };
+    assert_eq!(step.field, field::REACH);
+}

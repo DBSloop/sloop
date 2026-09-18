@@ -27,17 +27,15 @@
 //! - **`known_hosts` stays OpenSSH's**, and is not weakened by a single option. See
 //!   [`askpass`] for the part of that which turned out to need defending on purpose.
 //!
-//! **The registry now holds these settings** — `db add --ssh-host`, five columns on
-//! `registered_database`, and a [`Reach`] inside every registered database. **Nothing opens
-//! a tunnel yet**, so [`tunnel`] is still allowed to sit unread: what remains is every
-//! command asking for a target routing through it, and `doctor` learning to check `ssh`.
-//! The part that is reached on every run is [`askpass`], because `main` checks for it
-//! before `clap` parses.
+//! **All of it is wired now.** The registry holds the settings — `db add --ssh-host`, five
+//! columns on `registered_database`, a [`Reach`] inside every registered database — and
+//! every command that reaches a database asks [`crate::commands::reach`] where to dial
+//! instead of reading an address off the record. [`tunnel`] opens and holds the forwards,
+//! [`askpass`] answers `ssh` and refuses the one question it must never answer, and
+//! [`health`] is what `doctor` reports.
 
 pub mod askpass;
-
-/// Allowed to sit unread until a command asks for a target. See the note above.
-#[allow(dead_code)]
+pub mod health;
 pub mod tunnel;
 
 #[cfg(test)]
