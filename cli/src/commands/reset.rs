@@ -356,44 +356,44 @@ fn superuser_password(global: &Path, server: &server::Server) -> Option<crate::s
 
 /// Take sloop itself off the machine.
 ///
-/// **The directory the installer made, and the `PATH` entry that points at it.** The
-/// installer is `R21`'s and so is the uninstall *script*; what is here is the half the owner
-/// asked `uninstall` to share with `reset`, so that the two cannot drift.
+/// **The directory the installer made, and the `PATH` entry that points at it.** Both halves
+/// live in [`crate::pathentry`], which is `R21`'s: the installer chose the directory and
+/// wrote the line, so the installer's module is where what to undo is described. What is
+/// here is the half the owner asked `uninstall` to share with `reset`, so the two cannot
+/// drift into removing different things.
 fn remove_the_binary() {
-    let Some(home) = std::env::var_os(if cfg!(windows) {
-        "LOCALAPPDATA"
-    } else {
-        "HOME"
-    }) else {
-        return;
-    };
-
-    let installed = if cfg!(windows) {
-        PathBuf::from(home).join("Programs").join("sloop")
-    } else {
-        PathBuf::from(home).join(".local").join("bin")
-    };
-
-    // **Never the whole directory on Unix.** `~/.local/bin` is somebody's own bin directory
-    // with somebody's own programs in it; only the one file sloop put there goes.
-    if cfg!(windows) {
-        if installed.is_dir() {
-            said_or_told(std::fs::remove_dir_all(&installed), &installed);
-        }
-    } else {
-        let binary = installed.join("sloop");
-        if binary.exists() {
-            said_or_told(std::fs::remove_file(&binary), &binary);
+    if let Some(installed) = crate::pathentry::installed() {
+        // **Never the whole directory on Unix.** `~/.local/bin` is somebody's own bin
+        // directory with somebody's own programs in it; only the one file sloop put there
+        // goes. On Windows `Programs\sloop` is wholly the installer's and goes whole.
+        match &installed {
+            crate::pathentry::Installed::Tree(path) if path.is_dir() => {
+                said_or_told(std::fs::remove_dir_all(path), path);
+            }
+            crate::pathentry::Installed::File(path) if path.exists() => {
+                said_or_told(std::fs::remove_file(path), path);
+            }
+            _ => {}
         }
     }
 
-    crate::say!(
-        "  {}",
-        style::dim(
-            "the PATH entry is the installer's to remove — `sloop uninstall` from the \
-                    install script takes it with the binary"
-        )
-    );
+    let removal = crate::pathentry::remove();
+    for touched in &removal.touched {
+        crate::say!("  {} {}", style::label("PATH"), touched.said());
+    }
+    for trouble in &removal.trouble {
+        crate::note!(
+            "{}",
+            style::dim(&format!("{trouble} — take it out by hand"))
+        );
+    }
+
+    if !removal.touched.is_empty() {
+        crate::say!(
+            "  {}",
+            style::dim("open shells still have the old PATH; the next one will not")
+        );
+    }
 }
 
 /// Say what went, or say what did not and carry on.

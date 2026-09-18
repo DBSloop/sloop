@@ -15,6 +15,7 @@ mod exit;
 mod failure;
 mod install;
 mod lock;
+mod pathentry;
 mod query;
 mod registry;
 mod report;

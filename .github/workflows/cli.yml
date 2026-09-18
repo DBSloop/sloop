@@ -16,11 +16,13 @@ on:
     paths:
       - cli/**
       - ci/**
+      - install/**
       - .github/workflows/cli.yml
   pull_request:
     paths:
       - cli/**
       - ci/**
+      - install/**
       - .github/workflows/cli.yml
   workflow_dispatch:
 
@@ -244,3 +246,74 @@ jobs:
       - name: cargo tree must contain nothing that can open a socket
         working-directory: .
         run: sh ci/no-http-client.sh
+
+  # The installer is the one piece of a release nobody runs until a stranger runs it, and
+  # rule 14 says a concern that is only stated is a concern that gets forgotten. So it is
+  # run: on all three platforms, against the binary this commit produced, laid out as a
+  # release with its SHA256SUMS beside it. See ci/install-roundtrip.sh for what is asserted.
+  install:
+    name: install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The binary the release would carry
+        run: cargo build --bin sloop
+
+      - name: Install it, then take it off again
+        if: runner.os != 'Windows'
+        working-directory: .
+        shell: bash
+        run: sh ci/install-roundtrip.sh cli/target/debug/sloop
+
+      # Windows PowerShell 5.1, not pwsh 7: `irm | iex` on a stock Windows runs in 5.1, and
+      # that is the parser the script has to survive.
+      - name: Install it, then take it off again
+        if: runner.os == 'Windows'
+        working-directory: .
+        shell: powershell
+        run: .\ci\install-roundtrip.ps1 -Binary cli\target\debug\sloop.exe
+
+  scripts:
+    name: the install scripts hold up
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Non-ASCII in a .ps1 is a parse failure on Windows PowerShell 5.1 whose cause is
+      # invisible in the diff. The check exists because that cost a debugging session once.
+      - name: Every byte of them is ASCII
+        working-directory: .
+        run: sh ci/ascii-scripts.sh
+
+      - name: shellcheck
+        working-directory: .
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update && sudo apt-get install -y shellcheck; }
+          shellcheck --shell=sh --severity=style \
+            install/install.sh install/uninstall.sh \
+            ci/install-roundtrip.sh ci/ascii-scripts.sh ci/no-http-client.sh
+
+      # A syntax error in an installer is a release that cannot be installed, and the file
+      # is only ever read by a machine that has already been told to run it.
+      - name: PowerShell parses both of them
+        working-directory: .
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($file in @('install/install.ps1', 'install/uninstall.ps1', 'ci/install-roundtrip.ps1')) {
+              $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile(
+                  (Resolve-Path $file), [ref] $null, [ref] $errors) | Out-Null
+              if ($errors.Count -gt 0) {
+                  $bad = 1
+                  Write-Host "::error file=$file::$($errors[0].Message)"
+              } else {
+                  Write-Host "$file parses"
+              }
+          }
+          exit $bad
