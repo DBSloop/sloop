@@ -108,8 +108,14 @@ check_for_state() {
     [ "$BINARY_ONLY" -eq 0 ] || return 0
     [ -x "$binary" ] || return 0
 
+    # **`~/.sloop` first, because that is where the store is**, on all three platforms --
+    # `cli/src/registry/locations.rs` settled that. The other two are where a store used to
+    # live and may still be sitting on a machine that has not run sloop since; `adopt` moves
+    # one of those the next time sloop runs, so a script that ignored them would call a
+    # machine clean that is one command away from not being.
     store=""
     for candidate in \
+        "${HOME:-}/.sloop" \
         "${XDG_CONFIG_HOME:-${HOME:-}/.config}/sloop" \
         "${HOME:-}/Library/Application Support/sloop"; do
         if [ -d "$candidate" ]; then

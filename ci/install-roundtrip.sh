@@ -112,6 +112,28 @@ sha256() {
     fi
 }
 
+# Run one of the scripts as if the named directory were the whole of somebody's home.
+#
+#   run_in <home> <log> <login shell> <command...>
+#
+# **`HOME` is not enough, and the difference is a red build.** Both scripts honour
+# `XDG_CONFIG_HOME` and `ZDOTDIR`, which is correct -- and a machine that has either set in
+# its own environment then sends them outside the home this test built. That passed on a
+# Debian container with neither set and failed on a GitHub runner with `XDG_CONFIG_HOME`
+# exported, which is exactly the class of difference a round trip exists to find.
+run_in() {
+    home_dir="$1"
+    log="$2"
+    login_shell="$3"
+    shift 3
+
+    HOME="$home_dir" \
+        XDG_CONFIG_HOME="$home_dir/.config" \
+        ZDOTDIR="$home_dir" \
+        SHELL="$login_shell" \
+        "$@" >"$log" 2>&1
+}
+
 # What `command -v sloop` says in a *new* shell of the kind this platform actually starts --
 # which is the thing `R21` promises, and the reason `install.sh` picks the file it does.
 #
@@ -121,9 +143,11 @@ sha256() {
 # the wrong one here would pass against an installer that writes to a file nothing opens.
 resolves_to() {
     if [ "$(uname -s)" = "Darwin" ]; then
-        HOME="$1" bash -lic 'command -v sloop' 2>/dev/null | tr -d '\r' | tail -n 1
+        HOME="$1" XDG_CONFIG_HOME="$1/.config" bash -lic 'command -v sloop' 2>/dev/null |
+            tr -d '\r' | tail -n 1
     else
-        HOME="$1" bash -ic 'command -v sloop' 2>/dev/null | tr -d '\r' | tail -n 1
+        HOME="$1" XDG_CONFIG_HOME="$1/.config" bash -ic 'command -v sloop' 2>/dev/null |
+            tr -d '\r' | tail -n 1
     fi
 }
 
@@ -144,8 +168,8 @@ printf 'install-roundtrip: %s, from a release laid out in %s\n\n' "$target" "$re
 
 # ----------------------------------------------------------------------------- installing
 
-if ! HOME="$home" SHELL="/bin/bash" sh "$root/install/install.sh" \
-    --from "$release" --dir "$bin" >"$work/install.log" 2>&1; then
+if ! run_in "$home" "$work/install.log" /bin/bash \
+    sh "$root/install/install.sh" --from "$release" --dir "$bin"; then
     sed 's/^/  | /' "$work/install.log" >&2
     printf 'install-roundtrip: install.sh failed\n' >&2
     exit 1
@@ -168,8 +192,8 @@ check "it says the shell has to be restarted" grep -Fq 'Restart your shell' "$wo
 check_same "a new shell resolves sloop" "$(resolves_to "$home")" "$bin/sloop"
 
 # Running it twice is running it once: an upgrade must not append a second block.
-HOME="$home" SHELL="/bin/bash" sh "$root/install/install.sh" \
-    --from "$release" --dir "$bin" >"$work/again.log" 2>&1
+run_in "$home" "$work/again.log" /bin/bash \
+    sh "$root/install/install.sh" --from "$release" --dir "$bin"
 check_same "installing twice leaves one PATH block, not two" \
     "$(grep -c '>>> sloop >>>' "$rc")" "1"
 
@@ -178,7 +202,8 @@ check_same "installing twice leaves one PATH block, not two" \
 # **Under the same HOME the install used.** `uninstall.sh` finds the startup files through
 # `$HOME`, so running it with the runner's own would be asking it about the wrong machine --
 # and would pass while leaving the block exactly where it was.
-if ! HOME="$home" sh "$root/install/uninstall.sh" --dir "$bin" >"$work/uninstall.log" 2>&1; then
+if ! run_in "$home" "$work/uninstall.log" /bin/bash \
+    sh "$root/install/uninstall.sh" --dir "$bin"; then
     sed 's/^/  | /' "$work/uninstall.log" >&2
     printf 'install-roundtrip: uninstall.sh failed\n' >&2
     exit 1
@@ -191,9 +216,10 @@ check_not "not one mention of sloop is left in the startup file" grep -Fq 'sloop
 check_same "a new shell no longer resolves sloop" "$(resolves_to "$home")" ""
 
 check "uninstalling twice is not an error" \
-    sh -c "HOME='$home' sh '$root/install/uninstall.sh' --dir '$bin'"
+    run_in "$home" "$work/uninstall-again.log" /bin/bash \
+    sh "$root/install/uninstall.sh" --dir "$bin"
 check "the second uninstall says there was nothing to remove" \
-    sh -c "HOME='$home' sh '$root/install/uninstall.sh' --dir '$bin' | grep -Fq 'Nothing to remove'"
+    grep -Fq 'Nothing to remove' "$work/uninstall-again.log"
 
 # ------------------------------------------------------------------------- the refusals
 
@@ -205,8 +231,8 @@ cp "$release/SHA256SUMS" "$tampered/"
 printf 'not the release you were looking for' | gzip >"$tampered/$archive"
 
 check_not "a tampered archive is refused" \
-    sh -c "HOME='$tampered' sh '$root/install/install.sh' --from '$tampered' --dir '$tampered/bin' \
-        >'$work/tampered.log' 2>&1"
+    run_in "$tampered" "$work/tampered.log" /bin/bash \
+    sh "$root/install/install.sh" --from "$tampered" --dir "$tampered/bin"
 check_not "nothing is installed when the checksum does not match" test -e "$tampered/bin/sloop"
 check "the refusal says why" grep -Fq 'not what that release published' "$work/tampered.log"
 
@@ -218,15 +244,15 @@ cp "$release/$archive" "$absent/$archive"
 : >"$absent/SHA256SUMS"
 
 check_not "a release with no checksum for this target is refused" \
-    sh -c "HOME='$absent' sh '$root/install/install.sh' --from '$absent' --dir '$absent/bin' \
-        >'$work/absent.log' 2>&1"
+    run_in "$absent" "$work/absent.log" /bin/bash \
+    sh "$root/install/install.sh" --from "$absent" --dir "$absent/bin"
 check "it names the missing entry rather than a 404" grep -Fq 'does not mention' "$work/absent.log"
 
 # --no-modify-path means what it says.
 quiet="$work/quiet"
 mkdir -p "$quiet"
-HOME="$quiet" SHELL="/bin/bash" sh "$root/install/install.sh" \
-    --from "$release" --dir "$quiet/bin" --no-modify-path >"$work/quiet.log" 2>&1
+run_in "$quiet" "$work/quiet.log" /bin/bash \
+    sh "$root/install/install.sh" --from "$release" --dir "$quiet/bin" --no-modify-path
 check "--no-modify-path installs" test -x "$quiet/bin/sloop"
 check_not "--no-modify-path writes no startup file at all" \
     sh -c "ls -A '$quiet' | grep -q '^\\.'"
@@ -241,22 +267,23 @@ check_exit "an unknown option exits 2" 2 sh "$root/install/install.sh" --wat
 # with `command not found`.
 zsh_home="$work/zsh"
 mkdir -p "$zsh_home"
-HOME="$zsh_home" SHELL="/usr/bin/zsh" sh "$root/install/install.sh" \
-    --from "$release" --dir "$zsh_home/bin" >"$work/zsh.log" 2>&1
+run_in "$zsh_home" "$work/zsh.log" /usr/bin/zsh \
+    sh "$root/install/install.sh" --from "$release" --dir "$zsh_home/bin"
 check "a zsh login gets its block in .zshrc" grep -Fq '>>> sloop >>>' "$zsh_home/.zshrc"
 
 # fish is not a POSIX shell: a `case` block is a syntax error in it, so what it gets is a
 # file of its own in `conf.d` using its own command.
 fish_home="$work/fish"
 mkdir -p "$fish_home"
-HOME="$fish_home" SHELL="/usr/bin/fish" sh "$root/install/install.sh" \
-    --from "$release" --dir "$fish_home/bin" >"$work/fish.log" 2>&1
+run_in "$fish_home" "$work/fish.log" /usr/bin/fish \
+    sh "$root/install/install.sh" --from "$release" --dir "$fish_home/bin"
 check "a fish login gets a conf.d file, not a case block" \
     grep -Fq 'fish_add_path' "$fish_home/.config/fish/conf.d/sloop.fish"
 check_not "and no case statement fish cannot parse" \
     grep -Fq 'case ' "$fish_home/.config/fish/conf.d/sloop.fish"
 
-HOME="$fish_home" sh "$root/install/uninstall.sh" --dir "$fish_home/bin" >/dev/null 2>&1
+run_in "$fish_home" "$work/fish-uninstall.log" /usr/bin/fish \
+    sh "$root/install/uninstall.sh" --dir "$fish_home/bin"
 check_not "uninstall takes the fish file with it" \
     test -e "$fish_home/.config/fish/conf.d/sloop.fish"
 
@@ -266,20 +293,31 @@ check_not "uninstall takes the fish file with it" \
 # a script that removed the binary first would strand a PostgreSQL behind a command that can
 # no longer be run. With no terminal to ask, it names the flag and exits 2.
 stateful="$work/stateful"
-mkdir -p "$stateful/.config/sloop" "$stateful/bin"
+mkdir -p "$stateful/.sloop" "$stateful/bin"
 cp "$binary" "$stateful/bin/sloop"
 check_exit "uninstall stops when sloop's own state is still there" 2 \
-    sh -c "HOME='$stateful' sh '$root/install/uninstall.sh' --dir '$stateful/bin' \
-        >'$work/stateful.log' 2>&1"
+    run_in "$stateful" "$work/stateful.log" /bin/bash \
+    sh "$root/install/uninstall.sh" --dir "$stateful/bin"
 check "the binary is still there to run it with" test -x "$stateful/bin/sloop"
 check "it names the command that does know what to remove" \
     grep -Fq 'uninstall' "$work/stateful.log"
 check "and the flag that says take only the binary" \
     grep -Fq -- '--binary-only' "$work/stateful.log"
 check "--binary-only then does exactly that" \
-    sh -c "HOME='$stateful' sh '$root/install/uninstall.sh' --dir '$stateful/bin' --binary-only"
-check "the state it was told to leave alone is still there" test -d "$stateful/.config/sloop"
+    run_in "$stateful" "$work/binary-only.log" /bin/bash \
+    sh "$root/install/uninstall.sh" --dir "$stateful/bin" --binary-only
+check "the state it was told to leave alone is still there" test -d "$stateful/.sloop"
 check_not "and the binary is gone" test -e "$stateful/bin/sloop"
+
+# A store that has not been adopted yet is still state. `~/.config/sloop` is where one used
+# to live, and the next run of sloop moves it -- so a machine holding one is a machine this
+# script must not call clean.
+legacy="$work/legacy"
+mkdir -p "$legacy/.config/sloop" "$legacy/bin"
+cp "$binary" "$legacy/bin/sloop"
+check_exit "an un-adopted store in the old place stops it too" 2 \
+    run_in "$legacy" "$work/legacy.log" /bin/bash \
+    sh "$root/install/uninstall.sh" --dir "$legacy/bin"
 
 # ----------------------------------------------------------------------------------- end
 

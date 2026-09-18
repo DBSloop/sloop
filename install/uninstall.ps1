@@ -157,9 +157,18 @@ if (-not $Dir) {
 
 $binary = Join-Path $Dir 'sloop.exe'
 
-if (-not $BinaryOnly -and $env:APPDATA -and (Test-Path -LiteralPath $binary)) {
-    $store = Join-Path $env:APPDATA 'sloop'
-    if (Test-Path -LiteralPath $store) {
+# %USERPROFILE%\.sloop first, because that is where the store is -- the same ~/.sloop as on
+# the other two platforms, settled in cli/src/registry/locations.rs. %APPDATA%\sloop is where
+# it used to live and may still be sitting on a machine that has not run sloop since; the
+# next run adopts it, so a script that ignored it would call such a machine clean.
+if (-not $BinaryOnly -and (Test-Path -LiteralPath $binary)) {
+    $candidates = @()
+    if ($env:USERPROFILE) { $candidates += (Join-Path $env:USERPROFILE '.sloop') }
+    if ($env:APPDATA) { $candidates += (Join-Path $env:APPDATA 'sloop') }
+
+    $store = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+
+    if ($store) {
         Stop-Here "sloop still has state on this machine, and $binary can still remove it:" `
             '' `
             "  $store" `

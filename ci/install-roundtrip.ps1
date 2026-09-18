@@ -77,10 +77,24 @@ function CheckSame([string] $Label, $Got, $Want) {
 # Run one of the scripts in a PowerShell of its own, so an `exit` inside it ends that process
 # rather than this one -- and so the PATH key it is told to use is set for it alone.
 function Invoke-Script {
-    param([string] $Script, [string[]] $ScriptArguments, [string] $PathKey, [string] $Log)
+    param(
+        [string] $Script,
+        [string[]] $ScriptArguments,
+        [string] $PathKey,
+        [string] $Log,
+        # A home directory this test built, for the checks about what is still on the
+        # machine. The child inherits it; the parent's own is put back either way.
+        [string] $UserProfile
+    )
 
     $previous = $env:SLOOP_TEST_PATH_KEY
+    $previousProfile = $env:USERPROFILE
+    $previousAppData = $env:APPDATA
     $env:SLOOP_TEST_PATH_KEY = $PathKey
+    if ($UserProfile) {
+        $env:USERPROFILE = $UserProfile
+        $env:APPDATA = Join-Path $UserProfile 'AppData\Roaming'
+    }
     try {
         $arguments = @(
             '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
@@ -95,6 +109,8 @@ function Invoke-Script {
         return $run.ExitCode
     } finally {
         $env:SLOOP_TEST_PATH_KEY = $previous
+        $env:USERPROFILE = $previousProfile
+        $env:APPDATA = $previousAppData
     }
 }
 
@@ -255,6 +271,38 @@ try {
         -PathKey $quietKey -Log (Join-Path $work 'quiet.log')
     CheckSame '-NoModifyPath installs' $code 0
     Check '-NoModifyPath writes no PATH entry' { $null -eq (Get-TestPath $quietKey) }
+
+    # ----------------------------------------------------------------- state in the way
+
+    # Rule 4's shape, in a script. `sloop uninstall` is the one that knows what sloop built;
+    # a script that removed the binary first would strand a PostgreSQL behind a command that
+    # can no longer be run. With no console to ask, it names the parameter and exits 2.
+    $stateful = Join-Path $work 'stateful'
+    New-Item -ItemType Directory -Path (Join-Path $stateful '.sloop'), (Join-Path $stateful 'bin') -Force | Out-Null
+    Copy-Item -LiteralPath $Binary -Destination (Join-Path $stateful 'bin\sloop.exe')
+
+    $log = Join-Path $work 'stateful.log'
+    $code = Invoke-Script -Script (Join-Path $root 'install\uninstall.ps1') `
+        -ScriptArguments @('-Dir', (Join-Path $stateful 'bin')) -PathKey $pathKey -Log $log `
+        -UserProfile $stateful
+    CheckSame "uninstall stops when sloop's own state is still there" $code 2
+    Check 'the binary is still there to run it with' {
+        Test-Path -LiteralPath (Join-Path $stateful 'bin\sloop.exe')
+    }
+    Check 'it names the parameter that says take only the binary' {
+        (Get-Content -LiteralPath $log -Raw) -match '-BinaryOnly'
+    }
+
+    $code = Invoke-Script -Script (Join-Path $root 'install\uninstall.ps1') `
+        -ScriptArguments @('-Dir', (Join-Path $stateful 'bin'), '-BinaryOnly') `
+        -PathKey $pathKey -Log (Join-Path $work 'binary-only.log') -UserProfile $stateful
+    CheckSame '-BinaryOnly then does exactly that' $code 0
+    Check 'the state it was told to leave alone is still there' {
+        Test-Path -LiteralPath (Join-Path $stateful '.sloop')
+    }
+    Check 'and the binary is gone' {
+        -not (Test-Path -LiteralPath (Join-Path $stateful 'bin\sloop.exe'))
+    }
 
     Write-Host ''
     Write-Host "install-roundtrip: $passed of $checks checks passed."
