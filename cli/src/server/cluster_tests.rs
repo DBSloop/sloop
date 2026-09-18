@@ -459,7 +459,12 @@ fn a_supplied_password_outranks_the_one_already_there(
     let hba = data.join("pg_hba.conf");
     let hardened = std::fs::read_to_string(&hba).expect("pg_hba.conf is there");
 
-    let chosen = "o'brien \\ $PATH; \"quoted\" #1";
+    // **Shell-safe, because the route is a shell command and the shell is not what is being
+    // tested here.** `--db-password-command` is handed to `cmd /c` on Windows and `sh -c`
+    // everywhere else, and the two disagree about quoting long before any of this reaches
+    // PostgreSQL — a password full of punctuation delivered this way tests `sh`. What a
+    // punctuation-heavy one does to the *statement* is the check below, which needs no shell.
+    let chosen = "Supplied0Password9";
     let supplied = own::ensure(
         global,
         &ready.server,
@@ -503,6 +508,27 @@ fn a_supplied_password_outranks_the_one_already_there(
             file.display()
         );
     }
+
+    // **And a password full of the punctuation a real one has, against the real server.**
+    // Set through the same statement Setup sets one with, so what is proved is that
+    // `make::literal` escapes rather than refuses — and that what PostgreSQL stored is what
+    // was handed to it, character for character. No shell anywhere in this half.
+    let awkward =
+        crate::secret::Secret::new("o'brien';DROP TABLE x;-- \\ $PATH \"q\" #1".to_owned());
+    own::set_password(
+        &ready.server,
+        &ready.password,
+        &supplied.own,
+        &awkward,
+        true,
+    )
+    .expect("a password with a quote in it is escaped into the statement");
+
+    let opened = own::opens(&ready.server, &supplied.own, &awkward);
+    assert!(
+        opened.as_ref().is_ok_and(|yes| *yes),
+        "a password full of punctuation did not survive the statement: {opened:?}"
+    );
 
     assert_eq!(
         std::fs::read_to_string(&hba).expect("pg_hba.conf is still there"),

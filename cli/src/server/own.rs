@@ -318,7 +318,11 @@ fn exists(server: &Server, superuser: &Secret, query: &str) -> Outcome<bool> {
 /// which is exactly the spelling that has to be right every time. The value goes in as a
 /// literal [`make::literal`] has escaped, and on standard input rather than in `argv`, so
 /// `ps` never sees it.
-fn set_password(
+///
+/// `pub(super)` for one caller outside this module: `cluster_tests` drives it against a real
+/// server with a password full of punctuation, which is the only way to prove that what
+/// `make::literal` escapes is what PostgreSQL ends up holding.
+pub(super) fn set_password(
     server: &Server,
     superuser: &Secret,
     own: &Own,
