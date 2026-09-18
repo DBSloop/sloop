@@ -331,6 +331,24 @@ pub enum Command {
         command: ServerCommand,
     },
 
+    /// Keep sloop running in the background, so it works with nobody logged in.
+    ///
+    /// Registers sloop with whatever this machine uses to run things at boot — systemd on
+    /// Linux, launchd on macOS, the Service Control Manager on Windows. Once it is
+    /// installed and started, it comes back by itself after a restart.
+    ///
+    /// **This is for a server, not for a laptop you are working on.** On a machine you use
+    /// yourself, running `sloop backup` when you want a backup is the simpler thing and
+    /// nothing here improves on it.
+    ///
+    /// It never opens a port. Nothing listens, nothing can be reached from the network,
+    /// and what it records is read back with `sloop service status` from a file on this
+    /// machine.
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
+
     /// Put this machine back to the moment sloop was installed.
     ///
     /// Removes sloop's own database and everything it knows. A PostgreSQL that sloop
@@ -376,6 +394,65 @@ pub enum ServerCommand {
         /// terminal — `--force` prints it anyway.
         #[arg(long)]
         show_password: bool,
+    },
+}
+
+/// `sloop service …` — sloop running in the background, without anybody logged in.
+///
+/// **One name per machine and no options to get wrong.** Every subcommand here works on the
+/// one service sloop installs; there is no `--name`, because two sloop services on one
+/// machine would sample the same databases twice and nobody has asked for that.
+#[derive(Debug, Subcommand)]
+pub enum ServiceCommand {
+    /// Register sloop with this machine, so it starts at boot.
+    ///
+    /// Writes the unit, the agent or the service entry, whichever this platform uses, and
+    /// starts it unless told not to. Needs administrator rights, because starting something
+    /// at boot is a machine-wide change on all three platforms.
+    Install {
+        /// Register it, and leave it stopped.
+        ///
+        /// Without this it is started as well, which is what almost everybody wants.
+        #[arg(long)]
+        no_start: bool,
+
+        /// Run as this account instead of the one installing it. Linux and macOS only.
+        ///
+        /// The account has to be able to read sloop's own store. Windows services run as
+        /// `LocalSystem` and are told where the store is instead.
+        #[arg(long, value_name = "USER")]
+        user: Option<String>,
+    },
+
+    /// Take it off this machine.
+    ///
+    /// Stops it, removes the unit or the service entry, and removes the key file it reads
+    /// its credentials with. Nothing sloop has recorded is deleted — attachments and history
+    /// stay, so installing again picks up where this left off.
+    Uninstall,
+
+    /// Start it now.
+    Start,
+
+    /// Stop it now. It still starts again at the next boot.
+    Stop,
+
+    /// Is it installed, is it running, and when did it last do anything.
+    ///
+    /// Answers honestly when it is stopped, and when it was never installed at all — the
+    /// two are different states and a monitoring system needs them apart.
+    Status,
+
+    /// The body the service manager runs. Not for typing.
+    ///
+    /// Hidden because it is the far side of `install`: it talks to systemd, launchd or the
+    /// Service Control Manager over their own protocols, and run from a terminal it does
+    /// nothing a person wants.
+    #[command(hide = true)]
+    Run {
+        /// The store to work from, since a service does not get the installing user's home.
+        #[arg(long, value_name = "PATH")]
+        store: Option<std::path::PathBuf>,
     },
 }
 
@@ -1047,9 +1124,25 @@ impl Command {
             Self::Key { command } => command.path(),
             Self::Query { .. } => "query",
             Self::Server { command } => command.path(),
+            Self::Service { command } => command.path(),
             Self::Setup { .. } => "setup",
             Self::Reset => "reset",
             Self::Uninstall => "uninstall",
+        }
+    }
+}
+
+impl ServiceCommand {
+    /// What the user typed.
+    #[must_use]
+    pub fn path(&self) -> &'static str {
+        match self {
+            Self::Install { .. } => "service install",
+            Self::Uninstall => "service uninstall",
+            Self::Start => "service start",
+            Self::Stop => "service stop",
+            Self::Status => "service status",
+            Self::Run { .. } => "service run",
         }
     }
 }
@@ -1293,6 +1386,7 @@ mod tests {
                 "key",
                 "setup",
                 "server",
+                "service",
                 "reset",
                 "uninstall",
             ]

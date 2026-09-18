@@ -12,6 +12,7 @@ pub mod query;
 pub mod reset;
 pub mod restore;
 pub mod server;
+pub mod service;
 pub mod sync;
 pub mod tables;
 

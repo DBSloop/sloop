@@ -284,6 +284,35 @@ jobs:
         shell: powershell
         run: .\ci\install-roundtrip.ps1 -Binary cli\target\debug\sloop.exe
 
+  # A systemd unit systemd refuses, a launchd plist launchd will not load, a Windows service
+  # that never reports RUNNING and is killed for it -- none of those are visible in the text
+  # of the definition, and the text is all a unit test can see. So the real service manager is
+  # asked, on each of the three machines that has one. Rule 14.
+  service:
+    name: it registers as a service (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: cargo build --bin sloop
+
+      - name: Register it, drive it, remove it
+        if: runner.os != 'Windows'
+        working-directory: .
+        shell: bash
+        run: sudo sh ci/service-roundtrip.sh cli/target/debug/sloop
+
+      # Windows PowerShell 5.1, and the runner's own account is already an administrator.
+      - name: Register it, drive it, remove it
+        if: runner.os == 'Windows'
+        working-directory: .
+        shell: powershell
+        run: .\ci\service-roundtrip.ps1 -Sloop cli\target\debug\sloop.exe
+
   scripts:
     name: the install scripts hold up
     runs-on: ubuntu-latest
@@ -310,7 +339,7 @@ jobs:
           shellcheck --shell=sh --severity=style \
             install/install.sh install/uninstall.sh \
             ci/install-roundtrip.sh ci/ascii-scripts.sh ci/no-http-client.sh \
-            ci/release-targets.sh
+            ci/release-targets.sh ci/service-roundtrip.sh
 
       # A syntax error in an installer is a release that cannot be installed, and the file
       # is only ever read by a machine that has already been told to run it.
@@ -319,7 +348,7 @@ jobs:
         shell: pwsh
         run: |
           $bad = 0
-          foreach ($file in @('install/install.ps1', 'install/uninstall.ps1', 'ci/install-roundtrip.ps1')) {
+          foreach ($file in @('install/install.ps1', 'install/uninstall.ps1', 'ci/install-roundtrip.ps1', 'ci/service-roundtrip.ps1')) {
               $errors = $null
               [System.Management.Automation.Language.Parser]::ParseFile(
                   (Resolve-Path $file), [ref] $null, [ref] $errors) | Out-Null

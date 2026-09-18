@@ -21,6 +21,7 @@ mod registry;
 mod report;
 mod secret;
 mod server;
+mod service;
 mod ssh;
 mod style;
 mod tools;
@@ -139,6 +140,10 @@ fn run(cli: &Cli) -> Outcome<Exit> {
         // **Before `uses_registry`, because a machine with no registry can still install a
         // server.** This is the command somebody reaches for on a fresh machine, and failing
         // it with "run `sloop setup`" would be refusing to help for the wrong reason.
+        // Before `uses_registry`: a service is registered with the machine, not with a
+        // registry, and `service run` is started by something that has no terminal at all.
+        Some(Command::Service { command }) => commands::service::run(&locations, command),
+
         Some(Command::Server { command }) => {
             let global = registry::adopt::global(&locations)?;
             server_command(&global, command, cli.yes, cli.force)
