@@ -222,9 +222,23 @@ pub struct Resolved {
 }
 
 /// Go and get the password.
+///
+/// **One fallback, and only a service ever takes it.** A Windows service runs as
+/// `LocalSystem` and Credential Manager is per user, so a route that says `keyring` is a
+/// route the daemon cannot follow — it would install cleanly and then fail at every
+/// connection, silently, for ever. `sloop service install` puts a copy of the password in the
+/// encrypted store and points the unit at the passphrase file that opens it, and this is where
+/// that copy gets used.
+///
+/// It is reachable **only** when [`sealed::PASSPHRASE_FILE_VAR`] is set, which nothing but a
+/// unit file sets — so an interactive run whose keyring is locked still fails, loudly, the way
+/// it always did. The route in the record is left alone, so the person who set this machine up
+/// carries on using the keyring without knowing any of this happened.
 pub fn resolve(route: &Route, lookup: &Lookup<'_>) -> Outcome<Resolved> {
     let secret = match route {
-        Route::Keyring => os_keyring::get(lookup.key)?,
+        Route::Keyring => {
+            os_keyring::get(lookup.key).or_else(|why| the_services_copy(lookup, why))?
+        }
         Route::EncryptedFile => sealed::get(lookup.vault, lookup.key)?,
         Route::Environment(name) => from_environment(name)?,
         Route::Command(command) => command::run(command)?,
@@ -232,6 +246,23 @@ pub fn resolve(route: &Route, lookup: &Lookup<'_>) -> Outcome<Resolved> {
 
     let notes = secret.notes();
     Ok(Resolved { secret, notes })
+}
+
+/// The copy `sloop service install` left in the encrypted store, when this is a service.
+///
+/// Hands back the original failure otherwise, because that is the true one: a keyring that
+/// would not answer is what went wrong, and reporting a missing encrypted store instead would
+/// send somebody looking in the wrong place.
+fn the_services_copy(lookup: &Lookup<'_>, why: Failure) -> Outcome<Secret> {
+    if !sealed::the_passphrase_is_in_a_file() {
+        return Err(why);
+    }
+
+    sealed::get(lookup.vault, lookup.key).map_err(|second| {
+        second.hint(
+            "this is running as a service, so the keyring is not readable and the copy              `sloop service install` makes was not there either. Run `sloop service install`              again, as the user whose keyring holds it.",
+        )
+    })
 }
 
 /// Read a variable, literally.

@@ -34,6 +34,10 @@ const VERSION: u32 = 2;
 /// two sloops on one machine with clusters on different ports keep different passwords, and
 /// neither can read the other's by accident.
 #[must_use]
+pub fn credential_key_of(server: &Server) -> String {
+    credential_key(server)
+}
+
 fn credential_key(server: &Server) -> String {
     format!(
         "sloop-server:{}@{}:{}",

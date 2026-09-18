@@ -29,6 +29,7 @@
 //! Everything the daemon records goes into sloop's own PostgreSQL and is read back by a CLI
 //! running on the same machine.
 
+pub mod credentials;
 pub mod daemon;
 pub mod key;
 pub mod manage;

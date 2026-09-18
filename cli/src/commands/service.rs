@@ -25,7 +25,7 @@ use crate::registry::store::Store;
 use crate::service::mechanism::{Mechanism, State};
 use crate::service::unit::Definition;
 use crate::service::watch::{self, Attached, Attachment};
-use crate::service::{daemon, key, manage};
+use crate::service::{credentials, daemon, key, manage};
 use crate::style;
 
 /// Run one of them.
@@ -59,7 +59,7 @@ pub fn run(locations: &Locations, command: &ServiceCommand) -> Outcome<Exit> {
         ServiceCommand::Install { no_start, user } => {
             install(locations, mechanism, *no_start, user.as_deref())
         }
-        ServiceCommand::Uninstall => Ok(uninstall(mechanism)),
+        ServiceCommand::Uninstall => Ok(uninstall(locations, mechanism)),
         ServiceCommand::Start => {
             already(mechanism, true)?;
             manage::start(mechanism)?;
@@ -120,6 +120,16 @@ fn install(
     );
 
     let key_file = key::write(account.as_deref())?;
+
+    // **Before the unit, because it is the half that actually makes the service work.** A
+    // service runs as another account and cannot read the keyring this session can; this is
+    // the one moment both are true, so the copy is made now or never. See
+    // `service::credentials`.
+    credentials::announce(
+        credentials::copy_for_the_service(&store, &key_file)?,
+        &store,
+    );
+
     let definition = Definition {
         program,
         store,
@@ -152,7 +162,7 @@ fn install(
 }
 
 /// Take it off, and say what would not go.
-fn uninstall(mechanism: Mechanism) -> Exit {
+fn uninstall(locations: &Locations, mechanism: Mechanism) -> Exit {
     if !manage::state(mechanism).installed() {
         crate::say!(
             "{}",
@@ -167,7 +177,15 @@ fn uninstall(mechanism: Mechanism) -> Exit {
         style::dim(&format!("from {}", mechanism.spoken()))
     );
 
-    let mut trouble = manage::uninstall(mechanism);
+    // **The copies before the key file**, because reading them back needs the passphrase that
+    // file holds. Best effort: a store that will not open is one this machine put there for
+    // another reason, and it is left alone.
+    let mut trouble = Vec::new();
+    if let Ok(store) = crate::registry::adopt::global(locations) {
+        trouble.extend(credentials::remove_the_copies(&store, &key::path()));
+    }
+
+    trouble.extend(manage::uninstall(mechanism));
     trouble.extend(key::remove());
 
     for what in &trouble {

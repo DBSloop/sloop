@@ -203,7 +203,30 @@ pub fn get(vault: &Vault<'_>, key: &str) -> Outcome<Secret> {
 
 /// Store a password under `key`, rewriting the store.
 pub fn put(vault: &Vault<'_>, key: &str, secret: &Secret) -> Outcome<()> {
-    rewrite(vault, key, Some(secret))
+    rewrite(vault, key, Some(secret), None)
+}
+
+/// The same, under a passphrase the caller already has in its hand.
+///
+/// **For `sloop service install`, which holds one and must not ask for another.** It has just
+/// written the passphrase into the key file the daemon will read; sealing under anything else
+/// would put the password somewhere the service cannot open.
+pub fn put_under(vault: &Vault<'_>, key: &str, secret: &Secret, passphrase: &str) -> Outcome<()> {
+    rewrite(
+        vault,
+        key,
+        Some(secret),
+        Some(Zeroizing::new(passphrase.to_owned())),
+    )
+}
+
+/// Does the passphrase come from a file, rather than from a variable or a person?
+///
+/// **Only a unit file sets this**, which is what makes it a reliable answer to *is this
+/// process a service*. See [`crate::secret::resolve`], which is the one place that asks.
+#[must_use]
+pub fn the_passphrase_is_in_a_file() -> bool {
+    std::env::var_os(PASSPHRASE_FILE_VAR).is_some_and(|value| !value.is_empty())
 }
 
 /// Take a password out of the store.
@@ -215,12 +238,38 @@ pub fn forget(vault: &Vault<'_>, key: &str) -> Outcome<()> {
     if vault.bytes()?.is_empty() {
         return Ok(());
     }
-    rewrite(vault, key, None)
+    rewrite(vault, key, None, None)
+}
+
+/// The same, under a passphrase the caller already has.
+///
+/// **For `sloop service uninstall`**, which takes out the copies it put in and has the key
+/// file's passphrase in its hand. A store that passphrase does not open belongs to somebody
+/// else — a headless machine that was using the encrypted file before the service arrived —
+/// and the failure to open it is what leaves that store alone.
+pub fn forget_under(vault: &Vault<'_>, key: &str, passphrase: &str) -> Outcome<()> {
+    if vault.bytes()?.is_empty() {
+        return Ok(());
+    }
+    rewrite(
+        vault,
+        key,
+        None,
+        Some(Zeroizing::new(passphrase.to_owned())),
+    )
 }
 
 /// Read the whole store, replace or drop one entry, and write it back.
-fn rewrite(vault: &Vault<'_>, key: &str, secret: Option<&Secret>) -> Outcome<()> {
-    let passphrase = passphrase(true)?;
+fn rewrite(
+    vault: &Vault<'_>,
+    key: &str,
+    secret: Option<&Secret>,
+    given: Option<Zeroizing<String>>,
+) -> Outcome<()> {
+    let passphrase = match given {
+        Some(held) => held,
+        None => passphrase(true)?,
+    };
 
     let bytes = vault.bytes()?;
     let mut stored: Vec<(String, Secret)> = if bytes.is_empty() {

@@ -335,3 +335,126 @@ fn wait_until(mut settled: impl FnMut() -> bool) -> bool {
     }
     false
 }
+
+/// **The credential gap, closed and driven.** *(owner, 2026-09-19: "go with 1")*
+///
+/// A service runs as another account and cannot read the keyring an interactive session used,
+/// so `sloop service install` seals a copy of sloop's own two passwords into the encrypted
+/// store under the key file's passphrase. This runs the real function against a real store and
+/// opens what it wrote.
+///
+/// The key file is a temporary one, never `C:\ProgramData\sloop\service.key` — a stale
+/// passphrase left at the real path would be kept by `key::write` on the next install and
+/// would open nothing, which is the bug this is fixing.
+#[test]
+fn the_service_gets_a_copy_of_both_passwords_that_its_key_file_opens() {
+    let scratch = Scratch::new("copy");
+    let global = scratch.path().to_path_buf();
+    let data = crate::server::data_dir(&global);
+
+    if !this_machine_can_keep_a_secret(&global) {
+        return;
+    }
+
+    let Some(ready) = cluster(&global, a_free_port()) else {
+        return;
+    };
+    record::write(&global, &ready.server, &ready.password).expect("it can keep a secret");
+
+    let opened = match own::ensure(
+        &global,
+        &ready.server,
+        &ready.password,
+        &own::Choosing::unsupplied(),
+    ) {
+        Ok(opened) => opened,
+        Err(why) => {
+            stop(&ready.server.bin, &data);
+            panic!("sloop's own database could not be made: {}", why.message());
+        }
+    };
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let key_file = global.join("service-key-for-this-test");
+        std::fs::write(&key_file, "a passphrase the unit points at\r\n").expect("writable");
+
+        let copied =
+            super::credentials::copy_for_the_service(&global, &key_file).expect("the copy is made");
+        assert_eq!(copied, super::credentials::Copied::Both);
+
+        // Both keys are in the store, and the key file's passphrase is what opens it — with
+        // the CRLF an editor leaves on the end taken off, which is the whole reason that
+        // trim exists.
+        let sealed = global.join(crate::registry::file::SEALED_FILE);
+        let bytes = std::fs::read(&sealed).expect("the sealed store was written");
+        let entries =
+            crate::secret::sealed::open_for_test(&bytes, "a passphrase the unit points at")
+                .expect("the key file's passphrase opens it");
+
+        let superuser = record::credential_key_of(&ready.server);
+        let database = opened.own.credential_key(&ready.server);
+        for wanted in [&superuser, &database] {
+            assert!(
+                entries.iter().any(|(key, _)| key == wanted),
+                "{wanted} is not in the copy: {:?}",
+                entries.iter().map(|(key, _)| key).collect::<Vec<_>>()
+            );
+        }
+
+        // And they are the real passwords, not placeholders — this is what the daemon opens
+        // the cluster and the database with.
+        let held = |wanted: &str| {
+            entries
+                .iter()
+                .find(|(key, _)| key == wanted)
+                .map(|(_, secret)| secret.expose().to_owned())
+                .unwrap_or_default()
+        };
+        assert_eq!(held(&superuser), ready.password.expose());
+        assert_eq!(held(&database), opened.password.expose());
+
+        // **Rule 3 still holds**: what is on disk is ciphertext, and neither password is in it.
+        for password in [ready.password.expose(), opened.password.expose()] {
+            assert!(
+                !bytes
+                    .windows(password.len())
+                    .any(|window| window == password.as_bytes()),
+                "a password is readable in {}",
+                sealed.display()
+            );
+        }
+
+        // A wrong passphrase opens nothing, which is what stops the file being the weak half.
+        assert!(
+            crate::secret::sealed::open_for_test(&bytes, "not the passphrase").is_err(),
+            "the store opened under a passphrase that is not its own"
+        );
+
+        // Uninstalling takes the copies out again, and leaves the store readable.
+        assert_eq!(
+            super::credentials::remove_the_copies(&global, &key_file),
+            None,
+            "the copies could not be removed"
+        );
+        let after = std::fs::read(&sealed).unwrap_or_default();
+        let left = if after.is_empty() {
+            Vec::new()
+        } else {
+            crate::secret::sealed::open_for_test(&after, "a passphrase the unit points at")
+                .expect("what is left still opens")
+        };
+        assert!(
+            !left
+                .iter()
+                .any(|(key, _)| *key == superuser || *key == database),
+            "a copy survived the uninstall"
+        );
+    }));
+
+    stop(&ready.server.bin, &data);
+    let _ = std::fs::remove_dir_all(scratch.path());
+
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}

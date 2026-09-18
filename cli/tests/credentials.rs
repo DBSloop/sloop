@@ -376,3 +376,63 @@ fn a_passphrase_file_that_cannot_be_used_is_refused_rather_than_prompted_around(
         run.expect_said(expected);
     }
 }
+
+/// **The gap `R25` found, closed and driven.** *(owner, 2026-09-19: "go with 1")*
+///
+/// A service runs as another account and cannot read the keyring the interactive session
+/// used, so `sloop service install` seals a copy of sloop's own passwords into the encrypted
+/// store under the key file's passphrase. `secret::resolve` reaches that copy only when a
+/// passphrase *file* is set, which nothing but a unit file does.
+///
+/// What is checked here is that seam: a password sealed under a key file's passphrase is
+/// readable by a process given only `SLOOP_PASSPHRASE_FILE`, and unreadable without it.
+#[test]
+fn a_password_sealed_under_a_key_file_is_readable_by_a_process_given_only_that_file() {
+    let sandbox = Sandbox::new("service-copy");
+    if !sandbox.has_a_registry() {
+        support::skipping("the service's copy: this machine has no PostgreSQL server");
+        return;
+    }
+
+    // Sealed with one passphrase, exactly as `service install` seals its copy.
+    sandbox
+        .command(
+            sandbox.work(),
+            &[
+                "db",
+                "add",
+                "copied",
+                "--global",
+                "--url",
+                "postgres://app@db.internal/orders",
+                "--encrypted-file",
+                "--password-stdin",
+            ],
+        )
+        .env("SLOOP_PASSPHRASE", "what the key file holds")
+        .stdin(b"the password\n")
+        .run()
+        .expect_code(0);
+
+    let key_file = sandbox.home().join("service.key");
+    std::fs::write(&key_file, "what the key file holds\r\n").expect("the key file is writable");
+
+    // A process with the file and no variable — which is what the unit gives a daemon.
+    sandbox
+        .command(sandbox.work(), &["db", "test", "copied"])
+        .env_remove("SLOOP_PASSPHRASE")
+        .env("SLOOP_PASSPHRASE_FILE", &key_file.display().to_string())
+        .run()
+        // It cannot reach db.internal, so it fails to *connect* — which is proof the password
+        // came out: a passphrase that had not opened the store would have failed before that,
+        // with exit 2 and a complaint about the passphrase rather than about the host.
+        .expect_code(3);
+
+    // And with neither, it cannot get at the password at all.
+    let blind = sandbox
+        .command(sandbox.work(), &["db", "test", "copied"])
+        .env_remove("SLOOP_PASSPHRASE")
+        .run();
+    blind.expect_not_code(3);
+    blind.expect_said("passphrase");
+}
