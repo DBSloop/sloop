@@ -98,17 +98,41 @@ fn a_port_already_promised_to_a_stopped_server_is_stepped_over() {
 
 /// A machine with nothing in the way gets the port everybody expects, because somebody who
 /// sees 5432 knows what it is.
+///
+/// **Tried several times, because the port this asks about is deliberately not held.** The
+/// test frees an ephemeral port and then asks for it back, and every check in between —
+/// `is_free` binds twice, `choose` binds again — hands it to the operating system and takes
+/// it again. On a busy runner something else can be given it in one of those gaps, which is
+/// the race the module's header says the server starting is what settles. It went red on
+/// macOS once for exactly that.
+///
+/// One attempt agreeing is the whole proof, so the loop stops there. Only a run in which
+/// every attempt saw a free port and still got a different one back is a defect in
+/// [`port::choose`] — and that is what fails.
 #[test]
 fn the_usual_port_is_the_first_choice_when_it_is_free() {
-    let free = TcpListener::bind("127.0.0.1:0").expect("a port");
-    let number = free.local_addr().expect("an address").port();
-    drop(free);
+    let mut looked = 0;
 
-    // Only meaningful while nothing has raced in and taken it, which is exactly the race the
-    // module's header says the server starting is what settles.
-    if port::is_free(number) {
-        assert_eq!(port::choose(number, &[]).expect("free"), number);
+    for _ in 0..20 {
+        let free = TcpListener::bind("127.0.0.1:0").expect("a port");
+        let number = free.local_addr().expect("an address").port();
+        drop(free);
+
+        if !port::is_free(number) {
+            continue;
+        }
+        looked += 1;
+
+        if port::choose(number, &[]).expect("free") == number {
+            return;
+        }
     }
+
+    assert_eq!(
+        looked, 0,
+        "choose stepped over a free port {looked} times running"
+    );
+    eprintln!("skipping: no ephemeral port on this machine stayed free long enough to ask");
 }
 
 /// **Rule 3, and the record is where it would be broken.** What goes in the file is a route —
