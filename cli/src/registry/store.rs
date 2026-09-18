@@ -314,6 +314,40 @@ impl Store {
     /// what that costs an attachment is noted in `docs/OWNER-DECISIONS.md` rather than fixed
     /// under an entry that is about something else.
     pub fn write(&self, which: &Which, registry: &Registry) -> Outcome<()> {
+        self.run(&Self::script_for(which, registry)?)
+    }
+
+    /// Rename an entry, keeping the row it is.
+    ///
+    /// **An `UPDATE` in front of the ordinary write, in one transaction.** [`write`] is handed
+    /// the registry *after* the change and cannot tell a rename from a remove-and-add — so it
+    /// would delete the old label's row and insert a new one, and `monitored_database` and
+    /// `bandwidth_day` would cascade away with it. This relabels first, so by the time the
+    /// write runs the row already carries the new label and the upsert merely updates it.
+    ///
+    /// `--single-transaction`, which [`run`] passes, is what makes the two one thing: a rename
+    /// that dies between them would otherwise leave a relabelled row and a registry that still
+    /// says the old name.
+    ///
+    /// [`write`]: Self::write
+    /// [`run`]: Self::run
+    pub fn rename(&self, which: &Which, from: &str, to: &str, registry: &Registry) -> Outcome<()> {
+        let mut script = format!(
+            "UPDATE registered_database
+                SET label = {to}, updated_at = now()
+              WHERE {belongs} AND label = {from};
+",
+            to = literal(to)?,
+            from = literal(from)?,
+            belongs = Self::belongs_to(which, "registered_database"),
+        );
+        script.push_str(&Self::script_for(which, registry)?);
+
+        self.run(&script)
+    }
+
+    /// The statements [`Self::write`] runs, without running them.
+    fn script_for(which: &Which, registry: &Registry) -> Outcome<String> {
         let mut script = String::new();
 
         // The project row first: everything below points at it, and a project that has just
@@ -359,7 +393,7 @@ impl Store {
             );
         }
 
-        self.run(&script)
+        Ok(script)
     }
 
     /// The `registered_database` half of a write: what is gone goes, what is here is upserted.

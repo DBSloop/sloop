@@ -243,6 +243,15 @@ impl Sandbox {
         cluster.ask(database, sql)
     }
 
+    /// Run a statement against this sandbox's own database, for what a command cannot set up.
+    ///
+    /// **A separate name from [`Sandbox::ask`] because a write is not a question.** `R26` is
+    /// what will put rows in `bandwidth_day`; until then a test about what survives a rename
+    /// has to put one there itself.
+    pub fn run_sql(&self, sql: &str) {
+        let _ = self.ask(sql);
+    }
+
     /// Whether this sandbox has a registry to read at all.
     ///
     /// A test that needs one asks first and skips out loud otherwise, the way the cluster

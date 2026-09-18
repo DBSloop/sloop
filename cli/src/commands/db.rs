@@ -22,7 +22,7 @@
 //! that hangs on an invisible question is the worst failure this tool can have.
 
 use std::io::{IsTerminal as _, Read as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::cli::{Fields, PasswordSource, SshFields};
 use crate::consent::{Consent, Destroying};
@@ -1071,12 +1071,16 @@ pub fn edit(
 
 /// Give a registered database a different name.
 ///
-/// **Only the label moves.** The password is filed under the connection — see
-/// [`Database::credential_key`] — precisely so that this command cannot orphan one, which
-/// is why it is four lines and `edit` is forty.
+/// **The whole database moves, not just the label.** *(owner, 2026-09-19: "make it real")* The
+/// row keeps its `id`, so everything keyed to it stays — the service attachment and the
+/// activity days, both of which cascade off it — and the backups on disk move with it, because
+/// they live at `backups/<engine>/<label>/` and a listing that could no longer find them would
+/// be the visible half of the same bug. The password never moves at all: it is filed under the
+/// connection, see [`Database::credential_key`].
 pub fn rename(context: &mut Context<'_>, from: &str, to: &str) -> Outcome<Exit> {
     check_name(to)?;
-    let (scope, _) = context.registries.find(from)?;
+    let (scope, entry) = context.registries.find(from)?;
+    let engine = entry.engine;
 
     if context
         .registries
@@ -1093,15 +1097,31 @@ pub fn rename(context: &mut Context<'_>, from: &str, to: &str) -> Outcome<Exit> 
     // `staging`, and renaming it has to take the qualifier off first.
     let stored = crate::registry::Qualified::parse(from)?.name().to_owned();
 
+    // **Asked before anything is written**, so a collision on disk is a refusal rather than
+    // half a rename. Backups of a database that was unregistered stay where they were, so a
+    // directory under the new name can exist with nothing registered under it.
+    let moving = backups_to_move(context, scope, engine, &stored, to)?;
+
     if crate::report::would(&format!("rename {from} to {to}")) {
         return Ok(Exit::Success);
     }
 
-    context
-        .registries
-        .update(scope, |registry| registry.rename(&stored, to.to_owned()))?;
+    context.registries.rename(scope, &stored, to)?;
 
-    crate::report::result(serde_json::json!({ "from": stored, "to": to }));
+    // **After the registry, and reported rather than rolled back.** The registry rename is one
+    // transaction and either happened or did not; a directory that will not move after it is
+    // something to be told about with both paths, because undoing the rename would leave the
+    // opposite half-state and no more information.
+    let moved = moving.map(|(old, new)| {
+        let done = std::fs::rename(&old, &new);
+        (old, new, done)
+    });
+
+    crate::report::result(serde_json::json!({
+        "from": stored,
+        "to": to,
+        "backups_moved": moved.as_ref().is_some_and(|(_, _, done)| done.is_ok()),
+    }));
     crate::say!(
         "{} {} {} {}",
         style::paint("renamed"),
@@ -1113,7 +1133,72 @@ pub fn rename(context: &mut Context<'_>, from: &str, to: &str) -> Outcome<Exit> 
         "  {}",
         style::dim("the password is filed under the connection, so it did not move")
     );
-    Ok(Exit::Success)
+
+    match moved {
+        None => Ok(Exit::Success),
+        Some((old, new, Ok(()))) => {
+            crate::say!(
+                "  {}",
+                style::dim(&format!(
+                    "the backups moved with it: {} → {}",
+                    old.display(),
+                    new.display()
+                ))
+            );
+            Ok(Exit::Success)
+        }
+        Some((old, new, Err(error))) => Err(Failure::new(
+            Exit::Failure,
+            format!(
+                "renamed, but the backups could not be moved from {} to {}: {error}",
+                old.display(),
+                new.display()
+            ),
+        )
+        .hint(
+            "the registry entry is renamed. Move that directory by hand and `sloop backups \
+             list` will find them again.",
+        )),
+    }
+}
+
+/// Where this database's backups are and where they have to end up, or `None` when it has
+/// none.
+///
+/// Refuses rather than merges when something is already under the new name: two databases'
+/// backups in one directory is a state nothing else in this tool can tell apart afterwards.
+fn backups_to_move(
+    context: &Context<'_>,
+    scope: crate::registry::Scope,
+    engine: Engine,
+    from: &str,
+    to: &str,
+) -> Outcome<Option<(PathBuf, PathBuf)>> {
+    let Some(root) = context.registries.root_in(scope) else {
+        return Ok(None);
+    };
+
+    let directory = |label: &str| {
+        root.join(crate::backup::DIR)
+            .join(engine.scheme())
+            .join(label)
+    };
+    let (old, new) = (directory(from), directory(to));
+
+    // **The destination first, and whether or not there is anything to move.** Driving it found
+    // this the other way round: a database with *no* backups renaming onto a name that has some
+    // went straight through, and afterwards `backups list` attributed somebody else's backups
+    // to a live registration. The hazard is the directory being taken, not the move failing.
+    if new.exists() {
+        return Err(Failure::usage(format!(
+            "{} already holds backups, so renaming {from} to {to} would mix two databases' \
+             backups together",
+            new.display()
+        ))
+        .hint("move or delete that directory first, then rename"));
+    }
+
+    Ok(old.is_dir().then_some((old, new)))
 }
 
 // ---------------------------------------------------------------------------------------

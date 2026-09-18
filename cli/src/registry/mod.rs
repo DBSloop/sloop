@@ -474,6 +474,29 @@ impl Registries {
         store.write(&side.which, &side.registry)?;
         Ok(outcome)
     }
+
+    /// Give an entry a different name, keeping the row it is.
+    ///
+    /// **Not [`Self::update`], and that is the whole of it.** `update` hands the store the
+    /// registry *after* the change, which cannot tell a rename from a remove-and-add — so the
+    /// old label's row would be deleted and a new one inserted, and everything keyed to that
+    /// row would cascade away with it. [`store::Store::rename`] relabels the row first, in the
+    /// same transaction as the write.
+    pub fn rename(&mut self, scope: Scope, from: &str, to: &str) -> Outcome<()> {
+        let side = match scope {
+            Scope::Project => self
+                .project
+                .as_mut()
+                .ok_or_else(|| Failure::usage("there is no project registry here"))?,
+            Scope::Global => &mut self.global,
+        };
+
+        side.registry.rename(from, to.to_owned())?;
+        let store = self.store.as_ref().ok_or_else(|| {
+            Failure::usage("these registries were opened without a database to write back to")
+        })?;
+        store.rename(&side.which, from, to, &side.registry)
+    }
 }
 
 /// The questions resolution asks of the world outside the process.

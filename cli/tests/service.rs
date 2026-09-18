@@ -290,15 +290,15 @@ fn a_dry_run_says_what_it_would_attach_and_changes_nothing() {
     );
 }
 
-/// **Renaming is still a delete and an insert, and this says so out loud.**
+/// **A rename keeps the attachment, because the row keeps its `id`.** *(owner, 2026-09-19:
+/// "make it real")*
 ///
-/// `Store::write` is handed the registry *after* the change, so it cannot tell a rename from a
-/// remove-and-add — the old label is not in the list any more, its row goes, and
-/// `monitored_database` and `bandwidth_day` cascade with it. Recorded in
-/// `docs/OWNER-DECISIONS.md` under `R25` as the owner's to decide about, and asserted here so
-/// that whoever changes it finds this test rather than finding out later.
+/// `Store::write` is handed the registry *after* the change and cannot tell a rename from a
+/// remove-and-add, so it used to delete the old label's row and insert a new one — and
+/// `monitored_database` and `bandwidth_day` both cascade off that `id`. `Store::rename`
+/// relabels the row first, in the same transaction, so nothing keyed to it ever goes.
 #[test]
-fn renaming_a_database_still_detaches_it() {
+fn renaming_an_attached_database_keeps_it_attached_under_the_new_name() {
     let sandbox = Sandbox::new("service-rename");
     if !sandbox.has_a_registry() {
         support::skipping("sloop service attach: this machine has no PostgreSQL server");
@@ -310,13 +310,109 @@ fn renaming_a_database_still_detaches_it() {
         .sloop(&["service", "attach", "orders"])
         .expect_code(0);
 
+    // A day of activity, as `R26` will write it — the thing a rename must not take with it.
+    sandbox.run_sql(
+        "INSERT INTO bandwidth_day (registered_database_id, day, bytes_in, bytes_out)
+         SELECT d.id, DATE '2026-09-18', 1024, 2048
+           FROM registered_database d
+          WHERE d.label = 'orders' AND d.project_id IS NULL;",
+    );
+
+    sandbox
+        .sloop(&["db", "rename", "orders", "orders-prod", "--global"])
+        .expect_code(0);
+
+    assert_eq!(
+        attached(&sandbox),
+        vec!["orders-prod".to_owned()],
+        "the rename detached it"
+    );
+    assert_eq!(
+        sandbox.ask(
+            "SELECT count(*) FROM bandwidth_day b
+               JOIN registered_database d ON d.id = b.registered_database_id
+              WHERE d.label = 'orders-prod' AND d.project_id IS NULL;"
+        ),
+        "1",
+        "the rename took the activity history with it"
+    );
+
+    // And `status` finds it under the name it has now.
+    let run = sandbox.sloop(&["service", "status"]);
+    run.expect_code(0);
+    run.expect_said("orders-prod");
+}
+
+/// **The backups move with it**, because they live at `backups/<engine>/<label>/` and a
+/// listing that could no longer find them is the visible half of the same bug.
+#[test]
+fn renaming_a_database_takes_its_backups_with_it() {
+    let sandbox = Sandbox::new("rename-backups");
+    if !sandbox.has_a_registry() {
+        support::skipping("sloop db rename: this machine has no PostgreSQL server");
+        return;
+    }
+
+    registered(&sandbox, "orders");
+
+    // A backup directory, as `sloop backup` would have left one. Made by hand because what is
+    // being checked is where a rename puts it, not how it got there.
+    let backups = sandbox.global_dir().join("backups").join("postgres");
+    let taken = backups.join("orders").join("20260918T031500Z");
+    std::fs::create_dir_all(&taken).expect("the backup directory is creatable");
+    std::fs::write(taken.join("dump"), b"not really a dump").expect("writable");
+
     sandbox
         .sloop(&["db", "rename", "orders", "orders-prod", "--global"])
         .expect_code(0);
 
     assert!(
-        attached(&sandbox).is_empty(),
-        "a rename kept the attachment — if that is deliberate now, update R25 in \
-         docs/OWNER-DECISIONS.md, which records that it does not"
+        !backups.join("orders").exists(),
+        "the backups were left under the old name"
     );
+    assert!(
+        backups
+            .join("orders-prod")
+            .join("20260918T031500Z")
+            .join("dump")
+            .is_file(),
+        "the backups did not arrive under the new name"
+    );
+}
+
+/// A rename onto a name whose backups are already on disk is refused rather than merged. Two
+/// databases' backups in one directory is a state nothing in this tool can tell apart after.
+#[test]
+fn a_rename_that_would_mix_two_databases_backups_is_refused() {
+    let sandbox = Sandbox::new("rename-collide");
+    if !sandbox.has_a_registry() {
+        support::skipping("sloop db rename: this machine has no PostgreSQL server");
+        return;
+    }
+
+    registered(&sandbox, "orders");
+
+    let backups = sandbox.global_dir().join("backups").join("postgres");
+    std::fs::create_dir_all(backups.join("orders").join("20260918T031500Z")).expect("creatable");
+    // Left behind by a database that was unregistered: nothing is registered under this name,
+    // so the registry check above cannot see it.
+    std::fs::create_dir_all(backups.join("orders-prod").join("20260101T000000Z"))
+        .expect("creatable");
+
+    let run = sandbox.sloop(&["db", "rename", "orders", "orders-prod", "--global"]);
+    run.expect_code(2);
+    run.expect_said("mix two databases");
+
+    // Nothing moved, and nothing was renamed.
+    assert!(backups.join("orders").exists());
+    assert!(sandbox.registry_text().contains("orders"));
+
+    // **And from the other side, which is how driving it found the bug.** A database with no
+    // backups of its own renaming onto a name that has some went straight through, and
+    // afterwards `backups list` attributed those to a live registration.
+    registered(&sandbox, "reporting");
+    let other = sandbox.sloop(&["db", "rename", "reporting", "orders-prod", "--global"]);
+    other.expect_code(2);
+    other.expect_said("mix two databases");
+    assert!(sandbox.registry_text().contains("reporting"));
 }
