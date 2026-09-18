@@ -75,24 +75,68 @@ function CheckSame([string] $Label, $Got, $Want) {
 
 # What `sloop service status` says on its State line.
 function Get-State {
-    $line = (& $Sloop service status 2>$null | Select-String -Pattern '^\s*State\s+(.*)$').Matches
-    if ($line.Count -ge 1) { return $line[0].Groups[1].Value.Trim() }
-    return ''
+    $strict = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $line = (& $Sloop service status | Select-String -Pattern '^\s*State\s+(.*)$').Matches
+        if ($line.Count -ge 1) { return $line[0].Groups[1].Value.Trim() }
+        return ''
+    } finally {
+        $ErrorActionPreference = $strict
+    }
 }
 
+# Everything a sloop command printed, both streams, without a refusal becoming fatal.
+function Invoke-SloopSaying {
+    param([string[]] $SloopArguments)
+
+    $strict = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        return (& $Sloop @SloopArguments 2>&1 | Out-String)
+    } finally {
+        $ErrorActionPreference = $strict
+    }
+}
+
+# `sc.exe`, likewise. Querying a service that does not exist is a *result* here rather than a
+# fault -- it is how "the entry is gone" is checked -- and under `Stop` that would throw.
+function Invoke-Sc {
+    param([string[]] $ScArguments)
+
+    $strict = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        return (& sc.exe @ScArguments 2>&1 | Out-String)
+    } finally {
+        $ErrorActionPreference = $strict
+    }
+}
+
+# Run sloop and return only its exit code.
+#
+# **No `2>&1`, and `ErrorActionPreference` goes back to Continue for the call.** Windows
+# PowerShell turns a native program's standard error into an ErrorRecord, and under `Stop`
+# that is a terminating error -- so every sloop command that correctly printed a refusal would
+# kill this script instead of being measured. Which is precisely what the commands under test
+# are supposed to do.
 function Invoke-Sloop {
     param([string[]] $SloopArguments)
-    $previous = $LASTEXITCODE
-    & $Sloop @SloopArguments 2>&1 | Out-String | Write-Verbose
-    $code = $LASTEXITCODE
-    $global:LASTEXITCODE = $previous
-    return $code
+
+    $strict = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Sloop @SloopArguments | Out-Null
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $strict
+    }
 }
 
 # Left clean whatever happens: a half-installed service on a reused runner makes every later
 # step lie.
 function Remove-Everything {
-    try { & $Sloop service uninstall 2>&1 | Out-Null } catch { }
+    try { Invoke-SloopSaying @('service', 'uninstall') | Out-Null } catch { }
 }
 
 try {
@@ -107,7 +151,7 @@ try {
 
     # ---------------------------------------------------------------------- install
 
-    $log = & $Sloop service install 2>&1 | Out-String
+    $log = Invoke-SloopSaying @('service', 'install')
     if ($LASTEXITCODE -ne 0) {
         Write-Host $log
         Write-Host 'service-roundtrip: install failed' -ForegroundColor Red
@@ -118,12 +162,12 @@ try {
 
     # The SCM's own answer, not sloop's: a service that never reported RUNNING would be
     # killed, and only the manager knows whether it did.
-    $query = (sc.exe query sloop | Out-String)
+    $query = Invoke-Sc @('query', 'sloop')
     Check 'the Service Control Manager has it' { $query -notmatch '1060' }
     Check 'and it reached RUNNING under its own control handler' { $query -match 'RUNNING' }
     CheckSame 'sloop agrees it is running' (Get-State) 'running'
     Check 'the start type is AUTO_START, which is what a reboot depends on' {
-        (sc.exe qc sloop | Out-String) -match 'AUTO_START'
+        (Invoke-Sc @('qc', 'sloop')) -match 'AUTO_START'
     }
 
     Check 'the key file is there' { Test-Path -LiteralPath $key }
@@ -131,7 +175,7 @@ try {
     # passphrase must not be in it.
     Check 'the service definition does not contain the passphrase' {
         $secret = Get-Content -LiteralPath $key -Raw
-        -not ((sc.exe qc sloop | Out-String).Contains($secret.Trim()))
+        -not ((Invoke-Sc @('qc', 'sloop')).Contains($secret.Trim()))
     }
     # `Users` must not be able to read it. ProgramData grants them read by inheritance, so
     # this is the check that the inheritance was actually broken.
@@ -145,7 +189,7 @@ try {
     Invoke-Sloop @('service', 'stop') | Out-Null
     CheckSame 'stopped, and not confused with never installed' (Get-State) 'installed, stopped'
     Check 'still registered for the next boot while stopped' {
-        (sc.exe qc sloop | Out-String) -match 'AUTO_START'
+        (Invoke-Sc @('qc', 'sloop')) -match 'AUTO_START'
     }
 
     Invoke-Sloop @('service', 'start') | Out-Null
@@ -154,11 +198,11 @@ try {
 
     # --------------------------------------------------------------------- uninstall
 
-    $log = & $Sloop service uninstall 2>&1 | Out-String
+    $log = Invoke-SloopSaying @('service', 'uninstall')
     $log.TrimEnd() -split "`n" | ForEach-Object { Write-Host "  | $_" }
     Write-Host ''
 
-    Check 'the service entry is gone' { (sc.exe query sloop | Out-String) -match '1060' }
+    Check 'the service entry is gone' { (Invoke-Sc @('query', 'sloop')) -match '1060' }
     Check 'the key file is gone' { -not (Test-Path -LiteralPath $key) }
     CheckSame 'and status says so' (Get-State) 'not installed'
     CheckSame 'uninstalling twice is not an error' (Invoke-Sloop @('service', 'uninstall')) 0

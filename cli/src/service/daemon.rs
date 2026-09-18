@@ -39,6 +39,13 @@ fn one_round(store: &PathBuf) {
 }
 
 /// Run as a service, in whatever way this platform means by that.
+///
+/// **The `Outcome` is for Windows, and the signature cannot vary.** Handing the thread to the
+/// Service Control Manager fails on a machine where this was run from a terminal rather than
+/// started as a service, and that has to be reportable. The Unix branch has no such step and
+/// so can only succeed -- which clippy correctly notices when it compiles for Linux, and which
+/// is not a reason for the caller to have to know which platform it is on.
+#[cfg_attr(not(windows), allow(clippy::unnecessary_wraps))]
 pub fn run(store: Option<PathBuf>) -> Outcome<Exit> {
     let store = store.unwrap_or_else(|| PathBuf::from("."));
 

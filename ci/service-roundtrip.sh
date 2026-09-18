@@ -93,7 +93,7 @@ state() {
 # **Left clean whatever happens.** A CI runner is reused within a job, and a half-installed
 # service left behind by a failed assertion would make every later step lie.
 #
-# shellcheck disable=SC2329  # invoked by the trap below, which shellcheck cannot see
+# shellcheck disable=SC2317,SC2329  # invoked by the trap below, which shellcheck cannot see
 cleanup() {
     "$sloop" service uninstall >/dev/null 2>&1 || true
 }

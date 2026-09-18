@@ -37,6 +37,16 @@ pub fn install(mechanism: Mechanism, definition: &Definition) -> Outcome<()> {
             )?;
         }
         Mechanism::Launchd => {
+            // **Unloaded first, because `bootstrap` refuses a daemon launchd already has.**
+            // Installing over an install is what an upgrade is, and launchd answers that with
+            // "service already loaded" rather than replacing it. Best effort: on a machine
+            // where nothing is loaded this fails, and that is the ordinary first install.
+            let _ = run(
+                "launchctl",
+                &["bootout", &format!("system/{LAUNCHD_LABEL}")],
+                "unloading the previous daemon",
+            );
+
             // `bootstrap` both loads it and starts it, and `RunAtLoad` in the plist is what
             // brings it back at the next boot.
             run(
