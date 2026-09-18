@@ -8,6 +8,7 @@ pub mod init;
 pub mod key;
 pub mod menu;
 pub mod mirror;
+pub mod query;
 pub mod reset;
 pub mod restore;
 pub mod server;
@@ -115,6 +116,41 @@ pub fn reach(
         port,
         through: Some(through.server.describe()),
     })
+}
+
+/// Everything a client program needs to open a registered database: where it is right now,
+/// and the password that opens it.
+///
+/// **One resolution, because two commands were about to have one each.** The password comes
+/// off whichever of `R3`'s four routes the record names, `--password-command` outranks it,
+/// and the forward is opened if the record describes one — and getting any of those three
+/// subtly different in a second place is the kind of difference nothing fails on until
+/// somebody's password manager is the one that is locked.
+pub fn open(
+    database: &Database,
+    scope: Scope,
+    registries: &Registries,
+    tunnels: &Tunnels,
+    password_command: Option<&str>,
+) -> Outcome<(At, crate::secret::Secret)> {
+    let route = database.password.overridden_by(password_command);
+    let vault = registries
+        .vault_in(scope)
+        .unwrap_or_else(crate::secret::sealed::Vault::nowhere);
+
+    let resolved = crate::secret::resolve(
+        &route,
+        &Lookup {
+            key: &database.credential_key(),
+            vault: &vault,
+        },
+    )?;
+    for note in &resolved.notes {
+        crate::say!("  {}", crate::style::dim(note));
+    }
+
+    let at = reach(database, tunnels, registries, scope)?;
+    Ok((at, resolved.secret))
 }
 
 /// The adapter for an engine, pointed at the client tools this machine actually has.

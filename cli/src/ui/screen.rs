@@ -545,6 +545,17 @@ const HOME: &[Shelf] = &[
         ],
     ),
     Shelf(
+        "READING",
+        &[Leaf {
+            title: "Look inside a database",
+            blurb: "pick a table and tick the columns — no SQL, and nothing it runs can write",
+            command: "sloop query <name>",
+            job: Job::Query,
+            under: "Reading",
+            run_it: "Open it",
+        }],
+    ),
+    Shelf(
         "BACKUP KEY",
         &[
             Leaf {

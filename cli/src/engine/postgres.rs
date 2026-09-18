@@ -21,8 +21,8 @@ use crate::failure::{Failure, Outcome};
 
 use super::privileges::{self, Finding, Report, Verdict, verdict_from};
 use super::{
-    Adapter, Capabilities, Engine, Merged, Provisioned, Provisioning, ServerInfo, Table,
-    TableCount, TableShape, Target, Version,
+    Adapter, Capabilities, Cell, Engine, ForeignKey, Merged, Provisioned, Provisioning, Reading,
+    Rows, ServerInfo, Table, TableCount, TableShape, Target, Version,
 };
 
 /// A separator that cannot turn up inside an identifier or a number.
@@ -1148,6 +1148,155 @@ impl Adapter for Postgres {
             findings,
         })
     }
+
+    fn read(&self, target: &Target<'_>, asked: &Reading<'_>) -> Outcome<Rows> {
+        // **A statement of psql's own is not a statement.** Given a string beginning with a
+        // backslash, `--command` reads it as a meta-command rather than sending it to the
+        // server — and `\!` runs a program. `--sql` promises SQL, so anything that is not
+        // SQL is a refusal here rather than a surprise on the way to a shell.
+        let sql = asked.sql.trim();
+        if sql.starts_with('\\') {
+            return Err(Failure::new(
+                Exit::Usage,
+                "that is a psql command rather than SQL, and sloop only ever sends SQL",
+            )
+            .hint("run it in psql if that is what you meant"));
+        }
+
+        let mut command = Self::spawn(&self.tools.query, target);
+        command
+            .args(Self::connection_args(target))
+            .arg("--no-psqlrc")
+            .arg("--quiet")
+            .arg("--no-align")
+            .args(["--pset", "footer=off"])
+            .args(["--pset", &format!("null={NULL}")])
+            .arg("--field-separator")
+            .arg(FIELD)
+            // **The record separator, so a value with a newline in it is still one row.**
+            // `--no-align` otherwise ends a record with a newline, and a `text` column
+            // holding an address would be read back as three rows of the wrong width.
+            .arg("--record-separator")
+            .arg(RECORD)
+            .arg("--variable")
+            .arg("ON_ERROR_STOP=1")
+            // **Three `--command`s in one session, and the fence is the first.** psql runs
+            // them in order on one connection, so the transaction the first one opens is
+            // still open for the second — which is what makes the server, rather than
+            // anything here, the thing that refuses a write. Only the middle one produces
+            // rows, so only its output has to be parsed.
+            .arg("--command")
+            .arg(format!(
+                "BEGIN; SET TRANSACTION READ ONLY; SET LOCAL statement_timeout = {};",
+                asked.timeout.as_millis()
+            ))
+            .arg("--command")
+            .arg(sql)
+            .arg("--command")
+            .arg("ROLLBACK;");
+
+        let output = command
+            .output()
+            .map_err(|error| missing_tool(&self.tools.query, &error))?;
+
+        if !output.status.success() {
+            return Err(from_tool(&self.tools.query, &output, Exit::Usage, target));
+        }
+
+        Ok(rows_from(&String::from_utf8_lossy(&output.stdout)))
+    }
+
+    fn foreign_keys(&self, target: &Target<'_>) -> Outcome<Vec<ForeignKey>> {
+        let rows = self.query(target, FOREIGN_KEYS_SQL)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let listed = |at: usize| -> Vec<String> {
+                    row.get(at)
+                        .filter(|value| !value.is_empty())
+                        .map(|value| value.split(INNER).map(str::to_owned).collect())
+                        .unwrap_or_default()
+                };
+                Some(ForeignKey {
+                    from: Table {
+                        schema: row.first()?.clone(),
+                        name: row.get(1)?.clone(),
+                    },
+                    columns: listed(2),
+                    to: Table {
+                        schema: row.get(3)?.clone(),
+                        name: row.get(4)?.clone(),
+                    },
+                    to_columns: listed(5),
+                })
+            })
+            .filter(|key| !key.columns.is_empty() && key.columns.len() == key.to_columns.len())
+            .collect())
+    }
+
+    fn quoted_name(&self, name: &str) -> String {
+        quote_identifier(name)
+    }
+
+    fn quoted_value(&self, value: &str) -> String {
+        sql_literal(value)
+    }
+}
+
+/// What psql is told to print where the server said `NULL`.
+///
+/// **A character no value can contain**, which is the whole point: without it a `NULL` and
+/// an empty string arrive as the same empty field, and a grid cannot tell the reader which
+/// one is really there.
+const NULL: &str = "\u{1c}";
+
+/// What separates one row from the next.
+///
+/// Not a newline, because a value is allowed to contain one — see [`Adapter::read`].
+const RECORD: &str = "\u{1e}";
+
+/// Take psql's delimited output apart into a header and rows.
+///
+/// **Windows puts a `\r` in front of every `\n` psql writes**, including the ones inside a
+/// value, because the client's standard output is a text-mode handle and there is no flag
+/// that turns that off. So a `\r\n` inside a cell is put back to the `\n` it started as. The
+/// one thing this cannot tell apart is a value that really did contain `\r\n` — on this
+/// platform, through this client, the two are the same bytes.
+fn rows_from(said: &str) -> Rows {
+    let body = said.trim_end_matches(['\n', '\r']);
+    if body.is_empty() {
+        return Rows::default();
+    }
+
+    let mut records = body.split(RECORD).map(|record| {
+        record
+            .split(FIELD)
+            .map(|field| {
+                if field == NULL {
+                    Cell::Null
+                } else if cfg!(windows) {
+                    Cell::Text(field.replace("\r\n", "\n"))
+                } else {
+                    Cell::Text(field.to_owned())
+                }
+            })
+            .collect::<Vec<Cell>>()
+    });
+
+    let columns = records
+        .next()
+        .map(|heading| {
+            heading
+                .into_iter()
+                .map(|cell| cell.shown().to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Rows {
+        rows: records.collect(),
+        columns,
+    }
 }
 
 /// The row of [`PRIVILEGES_SQL`] that carries the role rather than a finding.
@@ -1417,6 +1566,34 @@ SELECT n.nspname, c.relname, coalesce(cols.names, ''), \
   LEFT JOIN fk ON fk.conrelid = c.oid \
  WHERE c.relkind = 'r' AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%' \
  ORDER BY 1, 2";
+
+/// Every foreign key, column by column, so a join can be offered from one.
+///
+/// **The columns come back in key order and the two lists line up**, which is what
+/// `WITH ORDINALITY` is doing: `conkey` and `confkey` are arrays whose nth entries are a
+/// pair, and aggregating either without the ordinal would leave the builder joining the
+/// wrong column to the wrong column on any key of more than one.
+///
+/// A self-reference is kept here, unlike in `SHAPES_SQL`. `sync` leaves it out because it is
+/// ordering tables and a table cannot come before itself; a join of a table to itself is an
+/// ordinary thing to want — every employee beside their manager — and is worth offering.
+const FOREIGN_KEYS_SQL: &str = "\
+SELECT n.nspname, c.relname, \
+       (SELECT string_agg(a.attname, E'\\x1e' ORDER BY k.ord) \
+          FROM unnest(con.conkey) WITH ORDINALITY AS k(num, ord) \
+          JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.num), \
+       pn.nspname, pc.relname, \
+       (SELECT string_agg(a.attname, E'\\x1e' ORDER BY k.ord) \
+          FROM unnest(con.confkey) WITH ORDINALITY AS k(num, ord) \
+          JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.num) \
+  FROM pg_constraint con \
+  JOIN pg_class c ON c.oid = con.conrelid \
+  JOIN pg_namespace n ON n.oid = c.relnamespace \
+  JOIN pg_class pc ON pc.oid = con.confrelid \
+  JOIN pg_namespace pn ON pn.oid = pc.relnamespace \
+ WHERE con.contype = 'f' \
+   AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%' \
+ ORDER BY 1, 2, con.conname";
 
 /// Put every sequence back above the rows that are now in the column it feeds.
 ///

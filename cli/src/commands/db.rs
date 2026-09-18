@@ -1677,33 +1677,17 @@ fn carry_over(before: &Database, context: &Context<'_>, scope: Scope) -> Option<
 
 /// Connect, using whichever password applies.
 fn connect(database: &Database, context: &Context<'_>, scope: Scope) -> Outcome<Reached> {
-    let key = database.credential_key();
-    let route = database.password.overridden_by(context.password_command);
-    let vault = context
-        .registries
-        .vault_in(scope)
-        .unwrap_or_else(crate::secret::sealed::Vault::nowhere);
-
-    let resolved = resolve(
-        &route,
-        &Lookup {
-            key: &key,
-            vault: &vault,
-        },
+    let (at, secret) = super::open(
+        database,
+        scope,
+        &context.registries,
+        context.tunnels,
+        context.password_command,
     )?;
-    for note in &resolved.notes {
-        crate::say!("  {}", style::dim(note));
-    }
-
-    // The forward, if this one needs one, before anything dials anything.
-    let at = super::reach(database, context.tunnels, &context.registries, scope)?;
     announce_tunnel(&at);
 
-    let server = super::adapter_for(database.engine, context.global).probe(&database.target_at(
-        &resolved.secret,
-        &at.host,
-        at.port,
-    ))?;
+    let server = super::adapter_for(database.engine, context.global)
+        .probe(&database.target_at(&secret, &at.host, at.port))?;
     Ok(Reached { server, at })
 }
 

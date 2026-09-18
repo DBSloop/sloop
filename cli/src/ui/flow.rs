@@ -61,6 +61,8 @@ pub enum Job {
     KeyExport,
     /// `key import`
     KeyImport,
+    /// `query`
+    Query,
     /// `doctor`
     Doctor,
     /// `setup` — the one job that runs before there is a registry to read.
@@ -369,6 +371,7 @@ impl Job {
                 | Self::BackupsPrune
                 | Self::Mirror
                 | Self::Sync
+                | Self::Query
         )
     }
 
@@ -446,6 +449,13 @@ impl Job {
             Self::DbAdd => registering(answers),
             Self::DbCreate => making(),
             Self::DbTest => vec![one_or_all("Which one should sloop try?", known)],
+
+            // **One question here and the rest on the real terminal.** Which table, which
+            // columns, which conditions is a checklist and a loop, and the menu's own
+            // machinery is a flat list of answers — so the builder asks for itself on the
+            // terminal the menu hands back, exactly as `db create`'s passwords and `server
+            // install`'s version do. See this module's header for the rule.
+            Self::Query => vec![pick_one("Which database should sloop read?", known)],
             Self::DbEdit => editing(answers, known),
 
             Self::DbRename => vec![

@@ -305,6 +305,91 @@ impl fmt::Display for Table {
     }
 }
 
+/// One foreign key, column by column.
+///
+/// **`TableShape::references` says *that* one table points at another; this says *how*.**
+/// `sync` only ever needed the first, because an order is all a merge plans with. `R19a`
+/// needs the second: a join is offered from the keys a table actually has, and offering it
+/// means knowing which column lines up with which.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignKey {
+    /// The table holding the key.
+    pub from: Table,
+    /// Its columns, in key order.
+    pub columns: Vec<String>,
+    /// The table it points at.
+    pub to: Table,
+    /// That table's columns, in the same order.
+    pub to_columns: Vec<String>,
+}
+
+impl ForeignKey {
+    /// The pairs a join is made of, one per column.
+    #[must_use]
+    pub fn pairs(&self) -> Vec<(String, String)> {
+        self.columns
+            .iter()
+            .cloned()
+            .zip(self.to_columns.iter().cloned())
+            .collect()
+    }
+}
+
+/// One value in a result.
+///
+/// **`Null` is its own thing, and that is not fussiness.** A grid that shows an empty cell
+/// where the server said `NULL` is a grid that lies about the data, and the one job of this
+/// screen is to show what is really there. Every adapter has to answer the question; how it
+/// gets the answer out of its client is its own business.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cell {
+    /// The server said `NULL`.
+    Null,
+    /// A value, as text.
+    Text(String),
+}
+
+impl Cell {
+    /// How it reads in a grid. `NULL` is drawn as a word so that an empty string beside it
+    /// is visibly a different thing.
+    #[must_use]
+    pub fn shown(&self) -> &str {
+        match self {
+            Self::Null => "NULL",
+            Self::Text(text) => text,
+        }
+    }
+
+    /// Is this the absence of a value rather than a value?
+    #[must_use]
+    pub const fn is_null(&self) -> bool {
+        matches!(self, Self::Null)
+    }
+}
+
+/// What one read returned.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Rows {
+    /// The column headings, in the order the server gave them.
+    pub columns: Vec<String>,
+    /// The rows, each as wide as `columns`.
+    pub rows: Vec<Vec<Cell>>,
+}
+
+/// One statement, and the fence it runs inside.
+///
+/// **The fence is not optional and is not a parameter of the statement.** Every read this
+/// program makes runs in a transaction the server has been told is read-only, with a
+/// statement timeout — see [`Adapter::read`]. Keeping the two here rather than in each
+/// caller is what stops one caller forgetting.
+#[derive(Debug, Clone, Copy)]
+pub struct Reading<'a> {
+    /// The statement. From the builder it is SQL nobody typed; from `--sql` it is theirs.
+    pub sql: &'a str,
+    /// How long the server may spend on it before giving up.
+    pub timeout: std::time::Duration,
+}
+
 /// A table and how many rows are really in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableCount {
@@ -783,6 +868,44 @@ pub trait Adapter {
     /// changes nothing — including nothing about the role's own privileges, which are an
     /// administrator's to grant and never a backup tool's to take.
     fn check_privileges(&self, target: &Target<'_>) -> Outcome<privileges::Report>;
+
+    /// Run one statement **inside a read-only transaction** and hand back what it returned.
+    ///
+    /// **The server refuses a write; nothing here inspects the text to decide.** `R19a`'s
+    /// flag form takes `--sql`, so the statement can be anything somebody typed — and a
+    /// keyword blacklist misses `WITH moved AS (DELETE FROM … RETURNING *) SELECT * FROM
+    /// moved`, which is a data-modifying statement whose first word is `WITH`. A transaction
+    /// the engine has been told is read-only refuses that one too, because the engine knows
+    /// what its own statements do. A regex is a guess; the engine refusing is proof.
+    ///
+    /// **And a statement timeout, set inside the same transaction.** A read that never
+    /// finishes is a session somebody has to kill from another terminal, and a query builder
+    /// is exactly where an accidental cross join gets written.
+    ///
+    /// The transaction is always rolled back. There is nothing in it to commit.
+    fn read(&self, target: &Target<'_>, asked: &Reading<'_>) -> Outcome<Rows>;
+
+    /// Every foreign key on this database, column by column.
+    ///
+    /// What [`Adapter::shapes`] reports as *"this table points at that one"*, spelled out far
+    /// enough to build a join from: which columns, against which.
+    fn foreign_keys(&self, target: &Target<'_>) -> Outcome<Vec<ForeignKey>>;
+
+    /// This engine's spelling of a table or column name.
+    ///
+    /// **A built query names things the catalogue gave it**, and a column called `order` or
+    /// `Select` has to survive being put in a statement. Quoting is per engine — double
+    /// quotes for PostgreSQL, backticks for the MySQL family — so it lives behind this trait
+    /// rather than in the builder, which knows nothing about either.
+    fn quoted_name(&self, name: &str) -> String;
+
+    /// This engine's spelling of a string literal.
+    ///
+    /// **The one thing in a built query that somebody typed.** Everything else — tables,
+    /// columns, operators, the joiner — is chosen from a list, so a value is the only place
+    /// a stray quote can arrive. The read-only transaction is what makes a value that got
+    /// through harmless; this is what stops one getting through.
+    fn quoted_value(&self, value: &str) -> String;
 }
 
 /// What to create, for [`Adapter::provision`].

@@ -190,6 +190,45 @@ impl Sandbox {
         .expect("writing the record");
     }
 
+    /// Register this sandbox's own `sloop_database` as something to read, and say its name.
+    ///
+    /// **A real database on a real server, which is what `R19a` needs and nothing before it
+    /// did.** Every other integration test points at `127.0.0.1:1` on purpose — the part
+    /// worth checking there is what sloop refuses before it dials. A query has to *arrive*:
+    /// what is being proved is that a write is refused by the engine, and an engine has to be
+    /// on the other end to refuse it.
+    ///
+    /// It is sloop's own schema, so the tables are the ones `R19c3` created and the rows are
+    /// whatever this sandbox has registered — which is enough to read, join and filter.
+    pub fn register_its_own_database(&self, name: &str) -> String {
+        let cluster = cluster::available().expect("a sandbox with a registry has a cluster");
+        let database = self
+            .database
+            .as_deref()
+            .expect("a sandbox with a registry has a database");
+
+        self.sloop(&[
+            "db",
+            "add",
+            name,
+            "--engine",
+            "postgres",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &cluster.port().to_string(),
+            "--database",
+            database,
+            "--user",
+            cluster::ROLE,
+            "--env",
+            cluster::PASSWORD_VAR,
+        ])
+        .expect_code(0);
+
+        database.to_owned()
+    }
+
     /// Whether this sandbox has a registry to read at all.
     ///
     /// A test that needs one asks first and skips out loud otherwise, the way the cluster

@@ -254,6 +254,28 @@ pub enum Command {
         safe: bool,
     },
 
+    /// Read a database without writing SQL.
+    ///
+    /// Pick a table, tick the columns, choose the test — everything comes off a list and
+    /// the only thing you type is the value you are looking for. The results open in a
+    /// grid you can scroll, two hundred rows at a time.
+    ///
+    /// Everything it runs, including `--sql`, runs inside a transaction the server has
+    /// been told is read-only. Nothing this command sends can change anything, and it is
+    /// the server that guarantees that rather than a list of forbidden words.
+    #[command(after_long_help = QUERY_NOTES)]
+    Query {
+        /// Which registered database. Left out, the ones sloop knows are listed.
+        name: Option<String>,
+
+        /// Run this one statement instead of building one.
+        ///
+        /// For a script, or for somebody who would rather write the SQL. It is printed
+        /// rather than shown in the grid, so the output can be piped somewhere.
+        #[arg(long, value_name = "STATEMENT")]
+        sql: Option<String>,
+    },
+
     /// Move the backup encryption key between machines.
     Key {
         #[command(subcommand)]
@@ -495,6 +517,31 @@ pub enum DbCommand {
 
 /// What `db create --help` says under the flags: where each password comes from, and
 /// which of them sloop keeps.
+const QUERY_NOTES: &str = "\
+Nothing is typed that is not a value. The table, the columns, the operator and the joiner
+all come off a list, and joins are offered from the foreign keys a table actually has —
+with column-to-column pickers for the joins no key describes. A statement that changes
+something is not on any of those lists, so there is none to refuse.
+
+Conditions are a flat list joined by one chosen AND or OR. There are no nested
+parentheses: nesting needs a tree editor, and that is where a screen a beginner can
+operate stops being one.
+
+Read-only is enforced by the server, not by reading the text. Every statement runs inside
+a read-only transaction with a statement timeout, so a data-modifying CTE — whose first
+word is WITH — is refused by the engine rather than missed by a keyword check.
+
+Examples:
+  sloop query orders
+      Builds one by asking, and opens the results in a grid.
+
+  sloop query orders --sql \"select id, total from orders where total > 100\"
+      Runs that statement and prints what came back.
+
+  sloop query orders --sql \"select * from orders\" --json
+      The same result as one JSON document, for a script.
+";
+
 const CREATE_NOTES: &str = "\
 Two passwords are involved and they are treated completely differently.
 
@@ -981,6 +1028,7 @@ impl Command {
                 | Self::Mirror { .. }
                 | Self::Sync { .. }
                 | Self::Key { .. }
+                | Self::Query { .. }
         )
     }
 
@@ -997,6 +1045,7 @@ impl Command {
             Self::Mirror { .. } => "mirror",
             Self::Sync { .. } => "sync",
             Self::Key { command } => command.path(),
+            Self::Query { .. } => "query",
             Self::Server { command } => command.path(),
             Self::Setup { .. } => "setup",
             Self::Reset => "reset",
@@ -1240,6 +1289,7 @@ mod tests {
                 "restore",
                 "mirror",
                 "sync",
+                "query",
                 "key",
                 "setup",
                 "server",

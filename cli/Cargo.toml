@@ -71,6 +71,14 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 age = { version = "0.12.1", default-features = false }
 inquire = { version = "0.9.4", default-features = false, features = ["crossterm"] }
 crossterm = "0.29.0"
+# The result grid, and nothing else. `CLAUDE.md` allows this crate "only when panes or
+# in-place progress arrive", and `R19a` is that condition arriving: a scrollable,
+# column-aligned table over a paged result set is not an `inquire` prompt. Every other screen
+# in this program stays `inquire` + `crossterm`. Pinned to `crossterm_0_29` rather than the
+# default feature so the graph holds one crossterm and not two — `cargo tree` is meant to be
+# read, and a duplicated terminal library is the first thing that makes it unreadable.
+# Nothing it brings can open a socket; `ci/no-http-client.sh` is unchanged by it.
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
 
 [workspace.lints.rust]
 # There is no reason for this tool to contain unsafe code, and "no reason yet" is how it

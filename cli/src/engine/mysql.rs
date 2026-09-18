@@ -37,8 +37,8 @@ use crate::failure::{Failure, Outcome};
 
 use super::privileges::{self, Finding, Report, Verdict, verdict_from};
 use super::{
-    Adapter, Capabilities, Engine, Merged, Provisioned, Provisioning, ServerInfo, Table,
-    TableCount, TableShape, Target, Version,
+    Adapter, Capabilities, Cell, Engine, ForeignKey, Merged, Provisioned, Provisioning, Reading,
+    Rows, ServerInfo, Table, TableCount, TableShape, Target, Version,
 };
 
 /// Long enough to cross a slow link, short enough that a scheduled run does not sit on a
@@ -282,6 +282,31 @@ impl MysqlFamily {
             format!("--user={}", target.user),
             format!("--default-character-set={CHARSET}"),
         ]
+    }
+
+    /// How this engine says *"give up on a statement after this long"*.
+    ///
+    /// **Two spellings, and neither server has the other's.** MySQL has
+    /// `MAX_EXECUTION_TIME`, in milliseconds, and applies it to `SELECT`; MariaDB has
+    /// `max_statement_time`, in seconds, and applies it to everything. This is exactly the
+    /// kind of difference [`Family`] exists for.
+    ///
+    /// **Wrapped in a version comment**, which is how the MySQL family's own tools write a
+    /// statement an older server should skip: `/*!50704 … */` runs on 5.7.4 and up,
+    /// `/*M!100100 … */` on MariaDB 10.1 and up. Without it a server too old to know the
+    /// variable fails the whole read over the fence rather than over the query — and a
+    /// timeout is a courtesy, not the thing being asked for.
+    fn timeout_statement(&self, timeout: std::time::Duration) -> String {
+        match self.family {
+            Family::Mysql => format!(
+                "/*!50704 SET SESSION MAX_EXECUTION_TIME = {} */;",
+                timeout.as_millis()
+            ),
+            Family::Mariadb => format!(
+                "/*M!100100 SET SESSION max_statement_time = {} */;",
+                timeout.as_secs().max(1)
+            ),
+        }
     }
 
     /// A child process with the password in its environment and nowhere else.
@@ -1375,6 +1400,93 @@ impl Adapter for MysqlFamily {
             findings,
         })
     }
+
+    fn read(&self, target: &Target<'_>, asked: &Reading<'_>) -> Outcome<Rows> {
+        let mut command = self.spawn(&self.tools.client, target);
+        command
+            .args(Self::connection_args(target))
+            .arg(format!("--connect-timeout={CONNECT_TIMEOUT_SECONDS}"))
+            .arg(format!("--database={}", target.database))
+            .arg("--batch")
+            .arg("--execute")
+            // **The fence, the statement, and the rollback, in one session.** The client
+            // sends them one at a time and prints each result set, so only the middle one
+            // has any output — and the transaction the first opens is the one the second
+            // runs inside, which is what makes the *server* refuse a write.
+            .arg(format!(
+                "START TRANSACTION READ ONLY; {} {}; ROLLBACK;",
+                self.timeout_statement(asked.timeout),
+                asked.sql.trim().trim_end_matches(';')
+            ));
+
+        let output = command
+            .output()
+            .map_err(|error| self.missing_tool(&self.tools.client, &error))?;
+
+        if !output.status.success() {
+            return Err(from_tool(&self.tools.client, &output, Exit::Usage, target));
+        }
+
+        Ok(rows_from(&String::from_utf8_lossy(&output.stdout)))
+    }
+
+    fn foreign_keys(&self, target: &Target<'_>) -> Outcome<Vec<ForeignKey>> {
+        // **One row per column, folded here rather than by `GROUP_CONCAT`.** The same reason
+        // `shapes` gives: `group_concat_max_len` is 1024 bytes by default and truncates
+        // without saying so, and a join built from half a key is a join that returns the
+        // wrong rows rather than an error.
+        let rows = self.query(target, KEY_COLUMNS_SQL)?;
+        let mut keys: Vec<ForeignKey> = Vec::new();
+        let mut last: Option<(String, String)> = None;
+
+        for row in rows {
+            let [
+                schema,
+                table,
+                constraint,
+                column,
+                to_schema,
+                to_table,
+                to_column,
+            ] = <[String; 7]>::try_from(row).unwrap_or_default();
+            if table.is_empty() || column.is_empty() {
+                continue;
+            }
+
+            let here = (table.clone(), constraint);
+            if last.as_ref() == Some(&here)
+                && let Some(key) = keys.last_mut()
+            {
+                key.columns.push(column);
+                key.to_columns.push(to_column);
+                continue;
+            }
+
+            last = Some(here);
+            keys.push(ForeignKey {
+                from: Table {
+                    schema,
+                    name: table,
+                },
+                columns: vec![column],
+                to: Table {
+                    schema: to_schema,
+                    name: to_table,
+                },
+                to_columns: vec![to_column],
+            });
+        }
+
+        Ok(keys)
+    }
+
+    fn quoted_name(&self, name: &str) -> String {
+        quote_identifier(name)
+    }
+
+    fn quoted_value(&self, value: &str) -> String {
+        sql_literal(value)
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2143,6 +2255,75 @@ fn skip_a_name(line: &[u8], from: usize) -> usize {
         at += 1;
     }
     at
+}
+
+/// Every foreign key column, one row each, for [`Adapter::foreign_keys`].
+///
+/// `DATABASE()` rather than a name in the text: the connection is already on the database
+/// being asked about, and a key in some *other* schema is not something a join here could
+/// use. `ORDINAL_POSITION` is what keeps a two-column key's two lists lined up.
+const KEY_COLUMNS_SQL: &str = "\
+SELECT k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME, k.COLUMN_NAME, \
+       k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME \
+  FROM information_schema.KEY_COLUMN_USAGE k \
+ WHERE k.REFERENCED_TABLE_NAME IS NOT NULL AND k.TABLE_SCHEMA = DATABASE() \
+ ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION";
+
+/// Take the client's batch output apart into a header and rows.
+///
+/// **`--batch` escapes, and this puts the escaping back.** A tab, a newline, a backslash or
+/// a NUL inside a value arrives as two characters, which is exactly what makes the format
+/// safe to read a line at a time — so a value containing a newline is one row here, not two.
+///
+/// **The one thing this format cannot answer is `NULL` against the four letters `NULL`.**
+/// The client prints both the same way and offers no flag that does otherwise: `--raw` turns
+/// the escaping off without disambiguating anything, and `--xml` trades this for having to
+/// decode entities correctly, which is a worse thing to get wrong. So an unescaped `NULL` is
+/// read as the absence of a value, and a row holding the literal string is shown as though
+/// it were empty. Said out loud rather than papered over — it is the client's format, and
+/// the alternative was a quieter inaccuracy in more places.
+fn rows_from(said: &str) -> Rows {
+    let cells = |line: &str| -> Vec<Cell> {
+        line.split('\t')
+            .map(|field| {
+                if field == "NULL" {
+                    return Cell::Null;
+                }
+                let mut text = String::with_capacity(field.len());
+                let mut letters = field.chars();
+                while let Some(letter) = letters.next() {
+                    if letter != '\\' {
+                        text.push(letter);
+                        continue;
+                    }
+                    match letters.next() {
+                        Some('n') => text.push('\n'),
+                        Some('t') => text.push('\t'),
+                        Some('r') => text.push('\r'),
+                        Some('0') => text.push('\0'),
+                        Some(other) => text.push(other),
+                        None => text.push('\\'),
+                    }
+                }
+                Cell::Text(text)
+            })
+            .collect()
+    };
+
+    // `lines` already drops `\n` and `\r\n`, which is the whole of what has to come off: a
+    // newline *inside* a value arrived escaped and is put back above, not split on here.
+    let mut lines = said.lines();
+    let Some(heading) = lines.next() else {
+        return Rows::default();
+    };
+
+    Rows {
+        columns: cells(heading)
+            .into_iter()
+            .map(|cell| cell.shown().to_owned())
+            .collect(),
+        rows: lines.map(cells).collect(),
+    }
 }
 
 /// Quote a string for SQL.

@@ -15,6 +15,7 @@ mod exit;
 mod failure;
 mod install;
 mod lock;
+mod query;
 mod registry;
 mod report;
 mod secret;
@@ -355,6 +356,16 @@ fn dispatch(cli: &Cli, world: World<'_>, command: &Command) -> Outcome<Exit> {
         );
     }
 
+    if let Some(Command::Query { name, sql }) = &cli.command {
+        return commands::query::run(
+            &world.querying(),
+            &commands::query::Asking {
+                name: name.as_deref(),
+                sql: sql.as_deref(),
+            },
+        );
+    }
+
     if let Some(Command::Key { command }) = &cli.command {
         return key(&mut world.keeping_a_key(), command);
     }
@@ -447,6 +458,15 @@ impl<'a> World<'a> {
         commands::key::Context {
             registries: self.registries,
             global: self.global,
+        }
+    }
+
+    fn querying(self) -> commands::query::Context<'a> {
+        commands::query::Context {
+            registries: self.registries,
+            password_command: self.password_command,
+            global: self.global,
+            tunnels: self.tunnels,
         }
     }
 

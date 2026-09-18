@@ -267,6 +267,19 @@ impl Doing for Machine {
                 global: &self.global,
             }),
 
+            Job::Query => commands::query::run(
+                &commands::query::Context {
+                    registries,
+                    password_command: self.password_command.as_deref(),
+                    global: &self.global,
+                    tunnels: &self.tunnels,
+                },
+                &commands::query::Asking {
+                    name: answers.some(field::NAME),
+                    sql: None,
+                },
+            ),
+
             Job::Doctor => Ok(commands::doctor::run(
                 &self.global,
                 true,

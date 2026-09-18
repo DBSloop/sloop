@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU16, Ordering};
 
 use super::postgres::{Postgres, Tools};
-use super::{Adapter, Engine, Target, Version};
+use super::{Adapter, Cell, Engine, Reading, Target, Version};
 use crate::secret::Secret;
 
 /// High enough to be out of the way, and stepped per cluster so two tests never collide.
@@ -792,4 +792,120 @@ fn the_reported_minimum_is_exactly_what_a_dump_needs() {
         after.gaps_in(Phase::Restore).next().is_some(),
         "a read-only remedy handed out write privileges"
     );
+}
+
+/// **The two methods `R19a` added, against a real server.**
+///
+/// `read` and `foreign_keys` are the whole of what the query builder asks an engine for, and
+/// neither can be checked without one: what a read-only transaction refuses is PostgreSQL's
+/// decision, and what a key looks like column by column is in its catalogue.
+#[test]
+fn a_read_is_read_only_and_a_key_says_which_columns_match() {
+    let Some(cluster) = Cluster::start("reading") else {
+        skip("initdb is not on this machine");
+        return;
+    };
+
+    let adapter = Postgres::new(cluster.tools());
+    let password = Secret::new(ALPHA_PASSWORD.to_owned());
+    let source = cluster.database("source_db", "alpha");
+    let target = source.target(&password);
+
+    // A parent and a child, with a key of two columns — enough to catch a pairing that has
+    // been crossed, which a single-column key never would.
+    cluster
+        .psql(
+            "source_db",
+            "CREATE TABLE public.shop (region text, code int, name text, \
+                                       PRIMARY KEY (region, code)); \
+             CREATE TABLE public.sale (id int PRIMARY KEY, region text, shop_code int, \
+                                       total numeric, memo text, \
+                                       FOREIGN KEY (region, shop_code) \
+                                           REFERENCES public.shop (region, code)); \
+             INSERT INTO public.shop VALUES ('north', 1, 'Ada'), ('south', 2, 'Bo'); \
+             INSERT INTO public.sale VALUES (10, 'north', 1, 99.5, 'first'), \
+                                            (11, 'north', 1, 10, ''), \
+                                            (12, 'south', 2, 5.25, NULL); \
+             ALTER TABLE public.shop OWNER TO alpha; \
+             ALTER TABLE public.sale OWNER TO alpha;",
+        )
+        .expect("seeding the two tables");
+
+    let reading = |sql: &str| {
+        adapter.read(
+            &target,
+            &Reading {
+                sql,
+                timeout: std::time::Duration::from_secs(30),
+            },
+        )
+    };
+
+    // --- a read comes back with its heading and its rows ----------------------------
+    let rows = reading("SELECT id, memo FROM public.sale ORDER BY id").expect("a plain read");
+    assert_eq!(rows.columns, vec!["id".to_owned(), "memo".to_owned()]);
+    assert_eq!(rows.rows.len(), 3);
+
+    // **A `NULL` and an empty string are told apart**, which is the property a grid is
+    // useless without.
+    assert_eq!(rows.rows[1][1], Cell::Text(String::new()));
+    assert_eq!(rows.rows[2][1], Cell::Null);
+
+    // --- the server refuses a write, and refuses the CTE a blacklist would miss ------
+    for statement in [
+        "UPDATE public.sale SET memo = 'moved'",
+        "DELETE FROM public.sale",
+        "CREATE TABLE public.sneaky (id int)",
+        "WITH gone AS (DELETE FROM public.sale RETURNING *) SELECT * FROM gone",
+    ] {
+        let refused = reading(statement).expect_err(statement);
+        assert!(
+            refused.message().contains("read-only transaction")
+                || refused
+                    .hint_text()
+                    .is_some_and(|hint| hint.contains("read-only transaction")),
+            "{statement} was refused for the wrong reason: {}",
+            refused.message()
+        );
+    }
+
+    // And nothing moved: three rows before, three rows after.
+    let after = reading("SELECT count(*) FROM public.sale").expect("counting afterwards");
+    assert_eq!(after.rows[0][0], Cell::Text("3".to_owned()));
+
+    // --- a psql command is not SQL ---------------------------------------------------
+    let refused = reading(r"\! echo hello").expect_err("a meta-command is not a statement");
+    assert!(
+        refused.message().contains("psql command"),
+        "{}",
+        refused.message()
+    );
+
+    // --- the key, column by column, in key order -------------------------------------
+    let keys = adapter.foreign_keys(&target).expect("reading the keys");
+    let found = keys
+        .iter()
+        .find(|key| key.from.name == "sale")
+        .unwrap_or_else(|| panic!("no key on sale: {keys:?}"));
+
+    assert_eq!(found.to.name, "shop");
+    assert_eq!(
+        found.pairs(),
+        vec![
+            ("region".to_owned(), "region".to_owned()),
+            ("shop_code".to_owned(), "code".to_owned()),
+        ],
+        "the two lists are crossed"
+    );
+
+    // --- and the join that key describes returns the right rows ----------------------
+    let joined = reading(
+        "SELECT s.name, l.total FROM public.sale l \
+         LEFT JOIN public.shop s ON l.region = s.region AND l.shop_code = s.code \
+         WHERE s.name = 'Ada' AND l.total > '50' \
+         LIMIT 201 OFFSET 0",
+    )
+    .expect("the join runs");
+    assert_eq!(joined.rows.len(), 1, "{:?}", joined.rows);
+    assert_eq!(joined.rows[0][0], Cell::Text("Ada".to_owned()));
 }
