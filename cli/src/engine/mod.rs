@@ -552,9 +552,60 @@ pub struct DumpSummary {
 }
 
 /// Everything sloop asks of a database engine.
+/// What a server's own counters said about one database, at one moment — `R26`.
+///
+/// **Cumulative, and therefore not the answer on its own.** `rows_in` and `rows_out` are
+/// totals since the engine last reset its statistics, so what gets recorded is the difference
+/// from the reading before. `size_bytes` is the opposite: a level, meaningless to add up.
+///
+/// **`None` is not zero, and the distinction is the entry's whole subject.** An engine that
+/// will not say how many rows moved has not said none moved. `R27`'s rule — *"a period with no
+/// samples in it is shown as having none rather than drawn as a zero"* — starts here.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Activity {
+    /// Rows written into the database: inserted, updated and deleted.
+    pub rows_in: Option<i64>,
+    /// Rows read out of it.
+    pub rows_out: Option<i64>,
+    /// How big it is now, in bytes on disk. This one really is bytes — it is a size, not
+    /// traffic, and nothing built on it may present it as traffic.
+    pub size_bytes: Option<i64>,
+    /// Why a number is missing, when there is something a person could do about it.
+    ///
+    /// **Because the commonest reason is fixable and invisible.** On MySQL the row counters
+    /// live in `performance_schema`, and an ordinary application role has no `SELECT` on it —
+    /// which is the role somebody registers a database with. Without this the numbers would
+    /// simply never appear and nothing would say why.
+    pub note: Option<String>,
+}
+
+impl Activity {
+    /// Did the engine say anything at all?
+    ///
+    /// A reading with nothing in it is recorded as having happened and contributing nothing,
+    /// rather than being dropped — the count of readings is what lets `R27` tell a quiet hour
+    /// from an hour nobody was watching.
+    #[must_use]
+    pub const fn said_anything(&self) -> bool {
+        self.rows_in.is_some() || self.rows_out.is_some() || self.size_bytes.is_some()
+    }
+}
+
 pub trait Adapter {
     /// Which engine this is.
     fn engine(&self) -> Engine;
+
+    /// What this engine's own counters say about the database right now — `R26`.
+    ///
+    /// **Rows and size, because per-database bytes do not exist.** PostgreSQL publishes no
+    /// per-database network counter: `pg_stat_database` carries rows, `blks_read` is disk
+    /// blocks, and `pg_database_size` is growth. MySQL's `Bytes_sent` and `Bytes_received` are
+    /// server-global status variables and, through `performance_schema`, per *account* — never
+    /// per database. Counting real packets needs root and a capture library and still cannot
+    /// attribute a byte to a database. So this returns what is true, labelled as what it is.
+    ///
+    /// Whatever an engine will not answer comes back `None` rather than `0`.
+    fn activity(&self, target: &Target<'_>) -> Outcome<Activity>;
 
     /// What it can do.
     fn capabilities(&self) -> Capabilities;

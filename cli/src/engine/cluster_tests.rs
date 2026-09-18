@@ -967,3 +967,98 @@ fn a_read_is_read_only_and_a_key_says_which_columns_match() {
     assert_eq!(joined.rows.len(), 1, "{:?}", joined.rows);
     assert_eq!(joined.rows[0][0], Cell::Text("Ada".to_owned()));
 }
+
+/// **`R26`: what a real PostgreSQL will say about a database, and what it will not.**
+///
+/// The numbers come off `pg_stat_database` and `pg_database_size`, and neither can be checked
+/// without a server: whether a counter moves when rows move is the server's business, and the
+/// whole entry rests on it moving.
+#[test]
+fn activity_counts_rows_and_size_and_moves_when_rows_move() {
+    let Some(cluster) = Cluster::start("activity") else {
+        skip("initdb is not on this machine");
+        return;
+    };
+
+    let adapter = Postgres::new(cluster.tools());
+    let password = Secret::new(ALPHA_PASSWORD.to_owned());
+    let source = cluster.database("source_db", "alpha");
+    let target = source.target(&password);
+
+    cluster
+        .psql(
+            "source_db",
+            "CREATE TABLE public.note (id int PRIMARY KEY, body text); \
+             ALTER TABLE public.note OWNER TO alpha;",
+        )
+        .expect("seeding a table");
+
+    let first = adapter.activity(&target).expect("a server answers");
+    assert!(
+        first.said_anything(),
+        "PostgreSQL said nothing at all: {first:?}"
+    );
+    assert!(
+        first.size_bytes.is_some_and(|bytes| bytes > 0),
+        "a database with a table in it reported no size: {first:?}"
+    );
+
+    // **Rows in.** A thousand of them, so the counter cannot move by chance.
+    cluster
+        .psql(
+            "source_db",
+            "INSERT INTO public.note SELECT n, repeat('x', 200) FROM generate_series(1, 1000) n;",
+        )
+        .expect("writing rows");
+
+    // The statistics collector reports asynchronously, so the counter is waited for rather
+    // than read once — a fixed sleep would be flaky on a slow machine and slow on a fast one.
+    let moved = wait_for(|| {
+        adapter
+            .activity(&target)
+            .ok()
+            .and_then(|now| Some((now.rows_in? > first.rows_in?, now)))
+            .filter(|(moved, _)| *moved)
+            .map(|(_, now)| now)
+    });
+    let Some(after_writing) = moved else {
+        panic!("tup_inserted did not move after a thousand inserts");
+    };
+
+    // **Rows out**, which is a different counter and has to be seen moving separately —
+    // otherwise one number standing in for both would pass this test.
+    cluster
+        .psql("source_db", "SELECT count(*) FROM public.note;")
+        .expect("reading rows");
+
+    let read_more = wait_for(|| {
+        adapter
+            .activity(&target)
+            .ok()
+            .filter(|now| now.rows_out > after_writing.rows_out)
+    });
+    assert!(
+        read_more.is_some(),
+        "tup_returned did not move after the table was read"
+    );
+
+    // And the size grew, because a thousand rows of two hundred bytes is not nothing.
+    let now = adapter.activity(&target).expect("a server answers");
+    assert!(
+        now.size_bytes > first.size_bytes,
+        "the database did not grow after a thousand rows went in: {first:?} then {now:?}"
+    );
+}
+
+/// Poll until `settled` gives an answer, or give up. The counters below are updated by the
+/// statistics collector on its own schedule, so the wait is for it rather than for the work.
+fn wait_for<T>(mut settled: impl FnMut() -> Option<T>) -> Option<T> {
+    let waited = std::time::Instant::now();
+    while waited.elapsed() < std::time::Duration::from_secs(20) {
+        if let Some(answer) = settled() {
+            return Some(answer);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    None
+}

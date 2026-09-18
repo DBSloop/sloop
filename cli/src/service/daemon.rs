@@ -29,11 +29,26 @@ use std::time::Duration;
 use crate::exit::Exit;
 use crate::failure::Outcome;
 
-/// How often the daemon wakes to do its round.
+/// How often the daemon wakes to do its round, when nothing said otherwise.
 ///
-/// `R26` will make this the sampling interval and give it a setting; until there is something
-/// to sample, it is how often the attachment list is read and the heartbeat written.
-pub const INTERVAL: Duration = Duration::from_secs(60);
+/// **`R26`'s default, and it is a default rather than a constant now**: `service install
+/// --interval` writes the real one into the definition, because a service manager hands the
+/// daemon nothing but a command line.
+pub const INTERVAL_SECONDS: u64 = 60;
+
+/// The shortest round this will accept.
+///
+/// **Rule 0d, from the other side.** A round opens a client process per attached database, so
+/// one second across ten databases is ten processes a second for ever. Clamped rather than
+/// refused: somebody who asked for one second wants readings as often as possible, and telling
+/// them no would be the feature refusing.
+const FLOOR_SECONDS: u64 = 5;
+
+/// What `--interval` means, once it has been read.
+#[must_use]
+pub fn interval(seconds: u64) -> Duration {
+    Duration::from_secs(seconds.max(FLOOR_SECONDS))
+}
 
 /// Run as a service, in whatever way this platform means by that.
 ///
@@ -43,17 +58,18 @@ pub const INTERVAL: Duration = Duration::from_secs(60);
 /// so can only succeed -- which clippy correctly notices when it compiles for Linux, and which
 /// is not a reason for the caller to have to know which platform it is on.
 #[cfg_attr(not(windows), allow(clippy::unnecessary_wraps))]
-pub fn run(store: Option<PathBuf>) -> Outcome<Exit> {
+pub fn run(store: Option<PathBuf>, seconds: u64) -> Outcome<Exit> {
     let store = store.unwrap_or_else(|| PathBuf::from("."));
+    let every = interval(seconds);
 
     #[cfg(windows)]
     {
-        windows::run(store)
+        windows::run(store, every)
     }
 
     #[cfg(not(windows))]
     {
-        unix::run(&store);
+        unix::run(&store, every);
         Ok(Exit::Success)
     }
 }
@@ -68,18 +84,23 @@ pub fn run(store: Option<PathBuf>) -> Outcome<Exit> {
 #[cfg(not(windows))]
 mod unix {
     use std::path::Path;
+    use std::time::Duration;
 
     use crate::service::watch::Round;
 
-    pub fn run(store: &Path) {
-        crate::note!("sloop service started, reading {}", store.display());
+    pub fn run(store: &Path, every: Duration) {
+        crate::note!(
+            "sloop service started, reading {} every {} seconds",
+            store.display(),
+            every.as_secs()
+        );
 
-        // Made once, outside the loop: it remembers what the last round read and what the
-        // last one complained about, which is what keeps a journal readable.
+        // Made once, outside the loop: it holds the SSH forwards, what the last round read and
+        // what the last one complained about — which is what keeps a journal readable.
         let mut round = Round::at(store);
         loop {
             round.turn();
-            std::thread::sleep(super::INTERVAL);
+            std::thread::sleep(every);
         }
     }
 }
@@ -123,9 +144,13 @@ mod windows {
     /// uses and which a service restarted by recovery settings would not get anyway.
     static STORE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
+    /// How long a round waits, for the same reason [`STORE`] is here.
+    static EVERY: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+
     /// Hand this thread to the SCM. It comes back when the service has stopped.
-    pub fn run(store: PathBuf) -> Outcome<Exit> {
+    pub fn run(store: PathBuf, every: Duration) -> Outcome<Exit> {
         let _ = STORE.set(store);
+        let _ = EVERY.set(every);
 
         service_dispatcher::start(SERVICE_NAME, ffi_service_main).map_err(|error| {
             Failure::new(
@@ -142,14 +167,18 @@ mod windows {
 
     fn service_main(_arguments: Vec<std::ffi::OsString>) {
         let store = STORE.get().cloned().unwrap_or_else(|| PathBuf::from("."));
-        if let Err(error) = serve(&store) {
+        let every = EVERY
+            .get()
+            .copied()
+            .unwrap_or_else(|| super::interval(super::INTERVAL_SECONDS));
+        if let Err(error) = serve(&store, every) {
             // Nowhere useful to print: the SCM has this process's streams. The service simply
             // reports that it stopped, and the exit code is what the machine sees.
             let _ = error;
         }
     }
 
-    fn serve(store: &Path) -> Result<(), windows_service::Error> {
+    fn serve(store: &Path, every: Duration) -> Result<(), windows_service::Error> {
         let (stopping, stopped) = mpsc::channel();
 
         let handle =
@@ -187,7 +216,7 @@ mod windows {
         let mut round = Round::at(store);
         loop {
             round.turn();
-            if stopped.recv_timeout(super::INTERVAL).is_ok() {
+            if stopped.recv_timeout(every).is_ok() {
                 break;
             }
         }

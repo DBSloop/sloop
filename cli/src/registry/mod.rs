@@ -81,6 +81,21 @@ pub struct Resolution {
 }
 
 impl Resolution {
+    /// The global store, and nothing else.
+    ///
+    /// **For a process with no working directory.** A service is started at `/` by systemd and
+    /// at `C:\Windows\System32` by the Service Control Manager, so the walk up the tree finds
+    /// nothing every time — and calling [`resolve`] from a directory that means nothing would
+    /// be asking a question whose answer is already known. It reads back as `--global` because
+    /// that is the same registry, arrived at for a different reason.
+    #[must_use]
+    pub const fn global_only() -> Self {
+        Self {
+            project: None,
+            reason: Reason::GlobalFlag,
+        }
+    }
+
     /// The project's registry directory — the `.sloop` itself.
     #[must_use]
     pub fn registry_dir(&self) -> Option<PathBuf> {
@@ -364,6 +379,16 @@ impl Registries {
             Scope::Project => self.project.as_ref(),
             Scope::Global => Some(&self.global),
         }
+    }
+
+    /// The store these registries were opened onto.
+    ///
+    /// **So that one round of the service opens one store.** `R26`'s daemon needs both — the
+    /// registry, to know where a database is, and the store, to write what it read — and
+    /// opening two means resolving sloop's own password twice a minute for ever.
+    #[must_use]
+    pub fn store(&self) -> Option<&std::rc::Rc<store::Store>> {
+        self.store.as_ref()
     }
 
     /// Where a scope's encrypted passwords live.

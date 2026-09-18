@@ -32,8 +32,8 @@ use crate::style;
 pub fn run(locations: &Locations, command: &ServiceCommand) -> Outcome<Exit> {
     // The daemon first, and before anything that could print: on Windows this hands the
     // thread to the Service Control Manager, which owns the process's streams from then on.
-    if let ServiceCommand::Run { store } = command {
-        return daemon::run(store.clone());
+    if let ServiceCommand::Run { store, interval } = command {
+        return daemon::run(store.clone(), *interval);
     }
 
     // **Before the machine is asked what runs things at boot**, because an attachment is a
@@ -56,9 +56,11 @@ pub fn run(locations: &Locations, command: &ServiceCommand) -> Outcome<Exit> {
     };
 
     match command {
-        ServiceCommand::Install { no_start, user } => {
-            install(locations, mechanism, *no_start, user.as_deref())
-        }
+        ServiceCommand::Install {
+            no_start,
+            user,
+            interval,
+        } => install(locations, mechanism, *no_start, user.as_deref(), *interval),
         ServiceCommand::Uninstall => Ok(uninstall(locations, mechanism)),
         ServiceCommand::Start => {
             already(mechanism, true)?;
@@ -89,6 +91,7 @@ fn install(
     mechanism: Mechanism,
     no_start: bool,
     user: Option<&str>,
+    interval: u64,
 ) -> Outcome<Exit> {
     let program = std::env::current_exe().map_err(|error| {
         Failure::new(
@@ -135,6 +138,10 @@ fn install(
         store,
         account,
         key_file,
+        // Clamped here rather than at the flag, so what goes in the unit is what the daemon
+        // will actually do — a definition that says 1 and a service that waits 5 is a unit
+        // file that lies to whoever reads it.
+        interval: daemon::interval(interval).as_secs(),
     };
 
     manage::install(mechanism, &definition)?;

@@ -18,6 +18,7 @@
 //! `SLOOP_TEST_MYSQL_BIN` or `SLOOP_TEST_MARIADB_BIN` and it **fails** instead: a test that
 //! quietly skips because a variable was mistyped is a green tick that proved nothing.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -1540,4 +1541,128 @@ fn a_write_is_refused_twice_over(
         !named.contains(&"sneaky".to_owned()),
         "{family:?}: DDL got through: {named:?}"
     );
+}
+
+/// **`R26`: what a real MySQL or MariaDB will say, and what it will not.**
+///
+/// One function, two engines, and the difference between them is the whole point of running it
+/// twice: `performance_schema` is **on** by default in MySQL 8 and **off** by default in
+/// MariaDB, so the same code reports rows on one and `None` on the other — and a `None` that
+/// had quietly become a zero would be the one dishonest number in this tool.
+///
+/// Size is the half that is always answerable, so it is the half that is always asserted.
+fn activity_reports_size_always_and_rows_when_the_server_counts_them(family: Family) {
+    let Some(server) = Server::start(family, "activity") else {
+        skip(family, "no server on this machine");
+        return;
+    };
+
+    let adapter = MysqlFamily::new(family, server.tools());
+    let password = Secret::new(ALPHA_PASSWORD.to_owned());
+    let source = server.database("source_db", "alpha");
+    let target = source.target(&password);
+
+    server
+        .sql(
+            "source_db",
+            "CREATE TABLE note (id INT PRIMARY KEY, body TEXT);",
+        )
+        .expect("seeding a table");
+
+    let first = adapter.activity(&target).expect("a server answers");
+    assert!(
+        first.size_bytes.is_some(),
+        "{family:?} would not say how big a database with a table in it is: {first:?}"
+    );
+
+    // A thousand rows, so anything that moves cannot have moved by chance.
+    let mut rows = String::from("INSERT INTO note (id, body) VALUES ");
+    for id in 1..=1_000 {
+        if id > 1 {
+            rows.push(',');
+        }
+        let _ = write!(rows, "({id}, repeat('x', 200))");
+    }
+    rows.push(';');
+    server.sql("source_db", &rows).expect("writing rows");
+    server
+        .sql("source_db", "ANALYZE TABLE note;")
+        .expect("settling the table statistics");
+
+    let after = adapter.activity(&target).expect("a server answers");
+    assert!(
+        after.size_bytes.is_some_and(|bytes| bytes > 0),
+        "{family:?} reported no size for a database holding a thousand rows: {after:?}"
+    );
+
+    // **Rows come back as `None` for an ordinary role, and it says why.** The counters live in
+    // `performance_schema`, and an application role has no `SELECT` on it — which is exactly
+    // the role somebody registers a database with. Driving it is what showed that: read, this
+    // looked like a path that simply worked.
+    assert_eq!(after.rows_in, None, "{after:?}");
+    assert_eq!(after.rows_out, None, "{after:?}");
+    assert!(
+        after
+            .note
+            .as_deref()
+            .is_some_and(|note| note.contains("performance_schema")),
+        "{family:?} said nothing about why the rows are missing: {after:?}"
+    );
+    assert!(
+        after.size_bytes.is_some(),
+        "the size went missing along with the rows: {after:?}"
+    );
+
+    // **And with the grant**, which is the half that would otherwise ship having never run.
+    server
+        .sql(
+            "source_db",
+            "GRANT SELECT ON performance_schema.* TO 'alpha'@'%';",
+        )
+        .expect("granting the counters");
+    server
+        .sql(
+            "source_db",
+            "UPDATE note SET body = 'changed' WHERE id <= 100;",
+        )
+        .expect("moving some rows");
+
+    let granted = adapter.activity(&target).expect("a server answers");
+    assert!(
+        granted.size_bytes.is_some(),
+        "the size went missing: {granted:?}"
+    );
+
+    if granted.rows_in.is_some() || granted.rows_out.is_some() {
+        assert!(
+            granted.rows_in.is_some_and(|moved| moved > 0),
+            "{family:?} counts rows but reported none after a thousand inserts: {granted:?}"
+        );
+        assert!(
+            granted.note.is_none(),
+            "{family:?} counted the rows and complained anyway: {granted:?}"
+        );
+        eprintln!("{family:?}: with the grant, rows are counted — {granted:?}");
+    } else {
+        // MariaDB keeps `performance_schema` off by default whatever the grant says. What is
+        // asserted there is that it still explains itself rather than inventing a zero.
+        assert!(
+            granted
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("performance_schema")),
+            "{family:?} has performance_schema off and did not say so: {granted:?}"
+        );
+        eprintln!("{family:?}: performance_schema is off on this server, and it says so");
+    }
+}
+
+#[test]
+fn mysql_activity_reports_size_and_rows() {
+    activity_reports_size_always_and_rows_when_the_server_counts_them(Family::Mysql);
+}
+
+#[test]
+fn mariadb_activity_reports_size_and_rows() {
+    activity_reports_size_always_and_rows_when_the_server_counts_them(Family::Mariadb);
 }

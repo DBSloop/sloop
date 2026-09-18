@@ -458,3 +458,248 @@ fn the_service_gets_a_copy_of_both_passwords_that_its_key_file_opens() {
         std::panic::resume_unwind(panic);
     }
 }
+
+/// **`R26`'s `Done when`, against a real cluster and a real database.**
+///
+/// *"A day of samples rolls up to a daily figure matching the sum of its hours, a restart
+/// mid-day loses no completed rollup, and a month of samples is still something somebody can
+/// read."* All three, in order, on one cluster — and the database being sampled is sloop's own,
+/// which is a real PostgreSQL with real counters rather than a fixture.
+#[test]
+fn samples_accumulate_into_hours_that_a_day_is_the_sum_of_and_a_restart_keeps() {
+    let scratch = Scratch::new("sampling");
+    let global = scratch.path().to_path_buf();
+    let data = crate::server::data_dir(&global);
+
+    if !this_machine_can_keep_a_secret(&global) {
+        return;
+    }
+
+    let Some(ready) = cluster(&global, a_free_port()) else {
+        return;
+    };
+    record::write(&global, &ready.server, &ready.password).expect("it can keep a secret");
+
+    let opened = match own::ensure(
+        &global,
+        &ready.server,
+        &ready.password,
+        &own::Choosing::unsupplied(),
+    ) {
+        Ok(opened) => opened,
+        Err(why) => {
+            stop(&ready.server.bin, &data);
+            panic!("sloop's own database could not be made: {}", why.message());
+        }
+    };
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        schema::migrate(&ready.server, &opened.own, &opened.password)
+            .expect("a fresh database migrates");
+        schema::reconcile_engines(&ready.server, &opened.own, &opened.password)
+            .expect("the engines are recorded");
+
+        let store = Store::open(&global)
+            .expect("the record reads back")
+            .expect("a machine with a record has a store");
+
+        // The database being watched is this cluster's own `sloop_database`: a real server, a
+        // real role, and counters that really move. `echo` is the one password route a test
+        // may use — the keyring is the developer's own and outside any sandbox.
+        let mut registry = Registry::default();
+        registry.insert(
+            String::from("itself"),
+            Database {
+                engine: Engine::Postgres,
+                host: String::from("127.0.0.1"),
+                port: ready.server.port,
+                database: opened.own.database.clone(),
+                user: opened.own.role.clone(),
+                password: Route::Command(format!("echo {}", opened.password.expose())),
+                reach: crate::ssh::Reach::Direct,
+            },
+        );
+        store
+            .write(&Which::Global, &registry)
+            .expect("the registry is writable");
+
+        assert_eq!(
+            watch::attach(&store, "itself").expect("it attaches"),
+            Attached::Now
+        );
+
+        sampling(&global, &store);
+    }));
+
+    stop(&ready.server.bin, &data);
+    let _ = std::fs::remove_dir_all(scratch.path());
+
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn sampling(global: &std::path::Path, store: &Store) {
+    // **A fresh `Round` per pass is a restarted daemon.** Nothing is carried in this process
+    // between them, so what survives is what the tables hold — which is the point of the
+    // baseline being a column rather than a field.
+    let a_round = || {
+        let mut round = Round::at(global);
+        round.turn();
+    };
+
+    // 1. The first reading has no baseline, so it opens an hour with nothing in it. Charging a
+    //    database's whole history to one minute is the failure that avoids.
+    a_round();
+
+    assert_eq!(
+        store
+            .ask("SELECT count(*) FROM activity_hour;")
+            .expect("the server answers")
+            .trim(),
+        "1",
+        "the first round did not open an hour"
+    );
+
+    let first = read_hour(store);
+    assert_eq!(first.0, 0, "a first reading was counted as traffic");
+
+    // And the baseline was written down, which is what makes the next round a difference.
+    assert_ne!(
+        store
+            .ask("SELECT coalesce(counted_rows_in::text, '') FROM monitored_database;")
+            .expect("the server answers")
+            .trim(),
+        "",
+        "the first round left no baseline for the next one"
+    );
+
+    // 2. Move some rows, then round again. The delta is real traffic and it lands in the hour.
+    store
+        .run(
+            "CREATE TABLE IF NOT EXISTS churn (id int); \
+             INSERT INTO churn SELECT generate_series(1, 5000);",
+        )
+        .expect("making some traffic");
+    a_round();
+
+    let after = read_hour(store);
+    assert!(
+        after.0 > first.0,
+        "five thousand rows moved and the hour did not: {first:?} then {after:?}"
+    );
+    assert_eq!(
+        readings(store),
+        2,
+        "the second round did not count as a reading"
+    );
+
+    // 3. **A restart loses no completed rollup.** The hour keeps what it already had and the
+    //    next reading adds to it rather than starting again — true only because the baseline
+    //    outlived the process that wrote it.
+    let before_restart = read_hour(store);
+    a_round();
+    let after_restart = read_hour(store);
+    assert!(
+        after_restart.0 >= before_restart.0,
+        "a restart lost part of the hour: {before_restart:?} then {after_restart:?}"
+    );
+    assert_eq!(readings(store), 3);
+
+    // 4. **A day is the sum of its hours**, which is `R26`'s own sentence. Two earlier hours
+    //    are written in as a day of sampling would have left them, and the day is read back.
+    store
+        .run(
+            "INSERT INTO activity_hour (registered_database_id, hour, rows_in, rows_out, readings)
+             SELECT d.id, date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                          - interval '1 hour', 100, 200, 60
+               FROM registered_database d WHERE d.label = 'itself';
+             INSERT INTO activity_hour (registered_database_id, hour, rows_in, rows_out, readings)
+             SELECT d.id, date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                          - interval '2 hours', 300, 400, 60
+               FROM registered_database d WHERE d.label = 'itself';",
+        )
+        .expect("writing two earlier hours");
+
+    let summed = store
+        .ask(
+            "SELECT sum(rows_in) || ' ' || sum(rows_out) FROM activity_hour
+              WHERE hour > now() - interval '3 hours';",
+        )
+        .expect("the server answers");
+    let hour_by_hour = store
+        .ask(
+            "SELECT sum(rows_in) || ' ' || sum(rows_out) FROM (
+               SELECT hour, sum(rows_in) AS rows_in, sum(rows_out) AS rows_out
+                 FROM activity_hour
+                WHERE hour > now() - interval '3 hours'
+                GROUP BY hour
+             ) AS per_hour;",
+        )
+        .expect("the server answers");
+    assert_eq!(
+        summed.trim(),
+        hour_by_hour.trim(),
+        "the total and the sum of its hours disagree"
+    );
+    assert!(
+        summed.trim().starts_with(|c: char| c.is_ascii_digit()),
+        "the day summed to nothing readable: {summed}"
+    );
+
+    // 5. **A month is still something somebody can read** — one scan of one table, with no
+    //    rollup tables to keep in step. This is the shape `R27` reads.
+    assert_eq!(
+        store
+            .ask("SELECT count(*) FROM activity_hour WHERE hour > now() - interval '30 days';")
+            .expect("the server answers")
+            .trim(),
+        "3",
+        "a month does not read back as its hours"
+    );
+
+    // 6. Detaching stops the sampling and keeps every hour already recorded — `R25`'s rule,
+    //    now that there is finally something in the table for it to be about.
+    let detached = watch::detach(store, "itself").expect("it detaches");
+    assert!(detached.was_attached);
+    a_round();
+    assert_eq!(readings(store), 3, "a detached database was sampled anyway");
+    assert_eq!(
+        store
+            .ask("SELECT count(*) FROM activity_hour;")
+            .expect("the server answers")
+            .trim(),
+        "3",
+        "detaching deleted the hours it was supposed to keep"
+    );
+}
+
+/// The current hour's rows in and rows out.
+fn read_hour(store: &Store) -> (i64, i64) {
+    let said = store
+        .ask(
+            "SELECT rows_in || ' ' || rows_out FROM activity_hour
+              WHERE hour = date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';",
+        )
+        .expect("the server answers");
+
+    let mut parts = said.trim().split(' ');
+    (
+        parts.next().and_then(|n| n.parse().ok()).unwrap_or(-1),
+        parts.next().and_then(|n| n.parse().ok()).unwrap_or(-1),
+    )
+}
+
+/// How many readings the current hour has had.
+fn readings(store: &Store) -> i64 {
+    store
+        .ask(
+            "SELECT readings FROM activity_hour
+              WHERE hour = date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';",
+        )
+        .expect("the server answers")
+        .trim()
+        .parse()
+        .expect("a count")
+}

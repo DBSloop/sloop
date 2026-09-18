@@ -17,6 +17,7 @@ fn plain() -> Definition {
         store: PathBuf::from("/home/jo/.sloop"),
         account: Some(String::from("jo")),
         key_file: PathBuf::from("/etc/sloop/service.key"),
+        interval: 60,
     }
 }
 
@@ -28,13 +29,24 @@ fn spaced() -> Definition {
         store: PathBuf::from(r"C:\Users\Jo Smith\.sloop"),
         account: None,
         key_file: PathBuf::from(r"C:\ProgramData\sloop\service.key"),
+        interval: 60,
     }
 }
 
 #[test]
 fn the_three_platforms_start_the_daemon_the_same_way() {
     let arguments = plain().arguments();
-    assert_eq!(arguments, ["service", "run", "--store", "/home/jo/.sloop"]);
+    assert_eq!(
+        arguments,
+        [
+            "service",
+            "run",
+            "--store",
+            "/home/jo/.sloop",
+            "--interval",
+            "60"
+        ]
+    );
 }
 
 // ------------------------------------------------------------------------------- systemd
@@ -148,7 +160,7 @@ fn a_word_that_needs_no_quoting_does_not_get_any() {
     let line = plain().windows_binary_path();
     assert_eq!(
         line,
-        "/usr/local/bin/sloop service run --store /home/jo/.sloop"
+        "/usr/local/bin/sloop service run --store /home/jo/.sloop --interval 60"
     );
     assert!(!line.contains('"'));
 }
@@ -209,6 +221,7 @@ fn a_path_with_an_ampersand_does_not_break_the_plist() {
         store: PathBuf::from("/home/<jo>/.sloop"),
         account: Some(String::from("r&d")),
         key_file: PathBuf::from("/etc/sloop/service.key"),
+        interval: 60,
     };
 
     let plist = awkward.launchd_plist();

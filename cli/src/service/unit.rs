@@ -53,6 +53,9 @@ pub struct Definition {
     pub account: Option<String>,
     /// The file the passphrase is read from.
     pub key_file: PathBuf,
+    /// Seconds between rounds. Written in rather than looked up, for the same reason the
+    /// store is: a service manager hands the daemon nothing but this command line.
+    pub interval: u64,
 }
 
 impl Definition {
@@ -66,6 +69,8 @@ impl Definition {
             String::from("run"),
             String::from("--store"),
             self.store.display().to_string(),
+            String::from("--interval"),
+            self.interval.to_string(),
         ]
     }
 

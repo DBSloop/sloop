@@ -907,6 +907,58 @@ impl Adapter for MysqlFamily {
             .collect())
     }
 
+    /// **Two questions, because only one of them is always answerable.**
+    ///
+    /// Size comes from `information_schema.tables` and is there on every server. Rows come
+    /// from `performance_schema`, which MySQL 8 has on by default and **MariaDB has off by
+    /// default** — and which a role may not be granted. So the size query is the one that may
+    /// fail the sample, and the rows query is best effort: a server that will not answer it
+    /// reports `None`, which is not the same as reporting that nothing moved.
+    ///
+    /// **Per-table counters summed per schema, and that is the honest equivalent.** MySQL
+    /// publishes no per-database row counter at all; `table_io_waits_summary_by_table` is the
+    /// nearest true thing, and summing it over one schema is what "this database" means here.
+    fn activity(&self, target: &Target<'_>) -> Outcome<super::Activity> {
+        let size = self.query(target, SIZE_SQL)?;
+        let size_bytes = size.first().and_then(|row| number(row.first()));
+
+        // Best effort, and deliberately after the size: a server with `performance_schema`
+        // off still reports how big the database is, and an hour of size with no rows in it
+        // is a truer record than no hour at all.
+        let (rows_in, rows_out, note) = match self.query(target, ROW_COUNTERS_SQL) {
+            Ok(rows) => {
+                let (rows_in, rows_out) = rows.first().map_or((None, None), |row| {
+                    (number(row.first()), number(row.get(1)))
+                });
+                let note = (rows_in.is_none() && rows_out.is_none()).then(|| {
+                    format!(
+                        "{} counts rows in performance_schema, and it is switched off on this                          server. Size is still recorded.",
+                        self.engine().proper_name()
+                    )
+                });
+                (rows_in, rows_out, note)
+            }
+            // **The commonest reason, and it is fixable.** An application role has no `SELECT`
+            // on `performance_schema`, and that role is exactly what somebody registers a
+            // database with — so the numbers would never appear and nothing would say why.
+            Err(_) => (
+                None,
+                None,
+                Some(format!(
+                    "rows are not counted: this role cannot read performance_schema.                      `GRANT SELECT ON performance_schema.* TO '{}'` turns the row figures on.                      Size is still recorded.",
+                    target.user
+                )),
+            ),
+        };
+
+        Ok(super::Activity {
+            rows_in,
+            rows_out,
+            size_bytes,
+            note,
+        })
+    }
+
     fn dump_into(&self, target: &Target<'_>, sink: &mut dyn Write, only: &[Table]) -> Outcome<()> {
         // Before anything is written: is this the engine it was registered as?
         self.probe(target)?;
@@ -2441,6 +2493,32 @@ fn looks_like_a_connection_problem(stderr: &str) -> bool {
 fn mentions_a_definer(stderr: &str) -> bool {
     let said = stderr.to_ascii_lowercase();
     said.contains("super") && said.contains("privilege") || said.contains("set_user_id")
+}
+
+/// How big this database is on disk, in bytes.
+///
+/// `data_length + index_length` is what every MySQL size query uses and what the server itself
+/// reports; `data_free` is deliberately left out, because reclaimable space inside a tablespace
+/// is still space the database is occupying.
+const SIZE_SQL: &str = "SELECT coalesce(sum(data_length + index_length), 0) \
+FROM information_schema.tables WHERE table_schema = database()";
+
+/// Rows in and rows out, summed over this schema's tables.
+///
+/// **`performance_schema`, which is the only place MySQL counts rows per object.** Insert,
+/// update and delete are what went in; fetch is what came out. A server with it switched off
+/// has these tables and no rows in them, so `sum` returns NULL and the reading says `None`
+/// rather than claiming nothing happened.
+const ROW_COUNTERS_SQL: &str = "\
+SELECT sum(count_insert + count_update + count_delete), sum(count_fetch) \
+FROM performance_schema.table_io_waits_summary_by_table WHERE object_schema = database()";
+
+/// One field of a row as a number, or `None` for anything that is not one.
+///
+/// **`mysql --batch` prints NULL as the four letters `NULL`**, which is not a number and so
+/// falls through to `None` — the same answer an absent column gives, and the right one.
+fn number(field: Option<&String>) -> Option<i64> {
+    field?.trim().parse().ok()
 }
 
 #[cfg(test)]

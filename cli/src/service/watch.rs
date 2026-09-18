@@ -38,6 +38,8 @@ use crate::backup::stamp::Stamp;
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::store::{Store, literal};
+use crate::registry::{Registries, Resolution};
+use crate::ssh::tunnel::Tunnels;
 
 use super::unit::SERVICE_NAME;
 
@@ -378,6 +380,15 @@ pub struct Round {
     complaint: Option<String>,
     /// What the last round read, so a round that read the same thing says nothing.
     watching: Option<Vec<String>>,
+    /// Every SSH forward this daemon holds, opened once and reused.
+    ///
+    /// **Outside the loop, because a forward per minute is an `ssh` process per minute.**
+    /// `R19e`'s *"ten commands, one login"* applied to a process that runs for months. `None`
+    /// on a machine where one could not be made at all, which leaves every direct database
+    /// working and is said once.
+    tunnels: Option<Tunnels>,
+    /// What the last round could not read, so a server that is down says so once.
+    missed: Vec<String>,
 }
 
 impl Round {
@@ -388,6 +399,8 @@ impl Round {
             store: store.to_path_buf(),
             complaint: None,
             watching: None,
+            tunnels: Tunnels::new().ok(),
+            missed: Vec::new(),
         }
     }
 
@@ -400,9 +413,13 @@ impl Round {
         }
     }
 
-    /// Open the store and do the round against it.
-    fn attempt(&self) -> Outcome<Vec<String>> {
-        let Some(store) = Store::open(&self.store)? else {
+    /// Open the store, read the list, and sample what is on it.
+    ///
+    /// **One store per round, opened through [`Registries`].** Both halves need it — the list
+    /// comes out of it and the readings go into it — and opening two would mean resolving
+    /// sloop's own password twice a minute for as long as the machine is up.
+    fn attempt(&mut self) -> Outcome<Vec<String>> {
+        if Store::open(&self.store)?.is_none() {
             return Err(Failure::new(
                 Exit::Usage,
                 format!(
@@ -410,9 +427,51 @@ impl Round {
                     self.store.display()
                 ),
             ));
-        };
+        }
 
-        round(&store)
+        let registries = Registries::open(Resolution::global_only(), &self.store)?;
+        let store = registries
+            .store()
+            .cloned()
+            .ok_or_else(|| Failure::usage("the registry was opened without a database"))?;
+
+        let watching = round(&store)?;
+
+        // **`R26`.** The list is read first and sampled second, so a database attached a
+        // moment ago is read on the same round it is picked up on.
+        if let Some(tunnels) = self.tunnels.as_ref() {
+            let taken = super::sample::round(&store, &registries, tunnels, &self.store, &watching);
+            // **Said with the failures, because they are the same kind of thing**: something
+            // about a database that a person could act on, and that is worth exactly one line
+            // however many months this process runs for.
+            let mut worth_saying = taken.missed.clone();
+            worth_saying.extend(taken.notes);
+            self.grumble_about_the_ones_that_would_not_answer(&worth_saying);
+        } else if !watching.is_empty() {
+            self.grumble_about_the_ones_that_would_not_answer(&[String::from(
+                "no samples: sloop could not prepare to open an SSH forward on this machine",
+            )]);
+        }
+
+        Ok(watching)
+    }
+
+    /// Say which databases would not answer, and say it only when that changes.
+    ///
+    /// A database that is down stays down, and a line a minute about it for a week is a
+    /// journal nobody reads — which is the same reason the round's own complaint is deduped.
+    fn grumble_about_the_ones_that_would_not_answer(&mut self, missed: &[String]) {
+        if self.missed == missed {
+            return;
+        }
+
+        for line in missed {
+            crate::note!("sloop service: {line}");
+        }
+        if missed.is_empty() && !self.missed.is_empty() {
+            crate::note!("sloop service: every attached database is answering again");
+        }
+        self.missed = missed.to_vec();
     }
 
     /// A round that worked, said out loud only when it read something different.

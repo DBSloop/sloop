@@ -791,7 +791,8 @@ fn assertions(
     // **A column, not a table, since `0006`.** This check moves with whatever the newest
     // migration happens to do, and pinning it to a table name was what made it need
     // changing — the point it makes is "the last one has not run here", and the thing to
-    // look for is whatever that one puts in. `0007` is `monitored_database.seen_at`.
+    // look for is whatever that one puts in. `0008` is `monitored_database.counted_rows_in`,
+    // beside the `activity_hour` table it also creates.
     let said = make::ask(
         server,
         &older.as_who(),
@@ -799,7 +800,7 @@ fn assertions(
         "SELECT count(*) FROM information_schema.columns
           WHERE table_schema = 'public'
             AND table_name = 'monitored_database'
-            AND column_name = 'seen_at';",
+            AND column_name = 'counted_rows_in';",
     )
     .expect("the older database answers");
     assert_eq!(

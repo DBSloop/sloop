@@ -7,7 +7,7 @@
 //! edited after it was applied somewhere is a failure that names the migration rather than a
 //! schema that quietly disagrees with the build reading it.
 //!
-//! **Eleven tables, and every one of them is on the owner's list:**
+//! **Twelve tables, and every one of them is on the owner's list:**
 //!
 //! ```text
 //! schema_migration      which migrations have run here                     0001
@@ -21,12 +21,14 @@
 //! monitored_database    which databases are attached to it                 0004
 //! bandwidth_day         bytes in and out, per database, per UTC day        0004
 //! sealed_vault          `secrets.sealed`, as ciphertext in a column        0005
+//! activity_hour         rows in, rows out and size, per database, per hour   0008
 //! ```
 //!
-//! **`0006` and `0007` add no table.** `0006` puts five columns on `registered_database` —
-//! the SSH server a database is reached through, when it is reached through one — and `0007`
-//! puts one on `monitored_database`, the moment the running service last read that
-//! attachment. Which is why the count above is still eleven.
+//! **`0006` and `0007` add no table**, and `0008` adds one and three columns. `0006` puts five
+//! columns on `registered_database` — the SSH server a database is reached through, when it is
+//! reached through one. `0007` puts one on `monitored_database`, the moment the running service
+//! last read that attachment. `0008` adds `activity_hour` and three more columns beside that
+//! one, holding where the last reading got to so a delta survives a restart.
 //!
 //! **No user data, ever.** What is stored is about *databases* — their addresses, their
 //! sizes, their row counts, how long a dump took. Not one column holds anything that was
@@ -126,6 +128,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 7,
         name: "attachment",
         sql: include_str!("migrations/0007_attachment.sql"),
+    },
+    Migration {
+        version: 8,
+        name: "activity",
+        sql: include_str!("migrations/0008_activity.sql"),
     },
 ];
 
@@ -246,6 +253,23 @@ pub const READINGS: &[Reading] = &[
                 FROM sealed_vault v
                 LEFT JOIN project p ON p.id = v.project_id
                ORDER BY v.scope DESC;",
+    },
+    Reading {
+        table: "activity_hour",
+        // The point of the table, as a query: four windows, one scan, no rollup tables. The
+        // day is the sum of its hours, which is `R26`'s own `Done when`.
+        purpose: "rows in, rows out and size per database over an hour, a day, a week and a                   month — all from the one table, and every figure is rows rather than bytes",
+        sql: "SELECT d.label,
+                     sum(a.rows_in)  FILTER (WHERE a.hour >= date_trunc('day', now()))  AS in_today,
+                     sum(a.rows_out) FILTER (WHERE a.hour >= date_trunc('day', now()))  AS out_today,
+                     sum(a.rows_in)  FILTER (WHERE a.hour >  now() - interval '7 days')  AS in_week,
+                     sum(a.rows_in)  FILTER (WHERE a.hour >  now() - interval '30 days') AS in_month,
+                     max(a.size_bytes)                                                   AS biggest,
+                     sum(a.readings)                                                     AS readings
+                FROM activity_hour a
+                JOIN registered_database d ON d.id = a.registered_database_id
+               GROUP BY d.label
+               ORDER BY d.label;",
     },
     Reading {
         table: "bandwidth_day",

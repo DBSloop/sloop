@@ -217,8 +217,8 @@ fn every_table_is_reachable_from_a_documented_query() {
     let created = tables_created();
     assert_eq!(
         created.len(),
-        11,
-        "the schema is eleven tables: {created:?}"
+        12,
+        "the schema is twelve tables: {created:?}"
     );
 
     for table in &created {
@@ -391,7 +391,7 @@ fn the_column_scan_actually_reads_the_migrations() {
     // Every table, and a plausible number of columns in total.
     let tables: std::collections::BTreeSet<&str> =
         columns.iter().map(|(table, _)| table.as_str()).collect();
-    assert_eq!(tables.len(), 11, "the scan missed a table: {tables:?}");
+    assert_eq!(tables.len(), 12, "the scan missed a table: {tables:?}");
     assert!(
         columns.len() > 70,
         "the scan found only {} columns, which is not this schema",
@@ -410,6 +410,9 @@ fn the_column_scan_actually_reads_the_migrations() {
         // nothing before it exercised.
         ("registered_database", "ssh_host"),
         ("registered_database", "ssh_secret_route"),
+        // `0008`, which does both in one file: a table and three columns on another.
+        ("activity_hour", "rows_in"),
+        ("monitored_database", "counted_rows_in"),
     ] {
         assert!(
             columns

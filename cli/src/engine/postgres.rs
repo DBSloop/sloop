@@ -644,6 +644,33 @@ impl Adapter for Postgres {
             .collect())
     }
 
+    /// **One statement, off `pg_stat_database` and `pg_database_size`.**
+    ///
+    /// `tup_inserted + tup_updated + tup_deleted` is what went in and
+    /// `tup_returned + tup_fetched` is what came out. Neither is a byte count and neither
+    /// pretends to be: `blks_read` is disk blocks rather than network, and there is no
+    /// per-database network counter to read.
+    ///
+    /// **A row that is not there is `None`.** `pg_stat_database` has no row for a database
+    /// nothing has connected to since the statistics were reset, and "zero rows moved" is not
+    /// the same claim as "the server would not say".
+    fn activity(&self, target: &Target<'_>) -> Outcome<super::Activity> {
+        let rows = self.query(target, ACTIVITY_SQL)?;
+        let Some(row) = rows.first() else {
+            return Ok(super::Activity::default());
+        };
+
+        Ok(super::Activity {
+            rows_in: number(row.first()),
+            rows_out: number(row.get(1)),
+            size_bytes: number(row.get(2)),
+            // Nothing to explain: `pg_stat_database` is readable by anybody who can connect,
+            // and a row that is not there means nothing has connected since the statistics
+            // were reset — which the next reading fixes by itself.
+            note: None,
+        })
+    }
+
     fn dump_into(
         &self,
         target: &Target<'_>,
@@ -1384,6 +1411,25 @@ ORDER BY 1, 2";
 /// restored into — and it has been seen at double the truth on a table that had been
 /// churned. The same `relkind` and schema filters as the exact query, so the two modes list
 /// the same tables and a fast run cannot appear to lose one.
+/// What `pg_stat_database` and `pg_database_size` say about the database being connected to.
+///
+/// `current_database()` rather than a name carried in from the registry: the connection has
+/// already decided which database this is, and naming it again is a second chance to ask about
+/// the wrong one.
+const ACTIVITY_SQL: &str = "\
+SELECT coalesce(tup_inserted, 0) + coalesce(tup_updated, 0) + coalesce(tup_deleted, 0), \
+coalesce(tup_returned, 0) + coalesce(tup_fetched, 0), \
+pg_database_size(current_database()) \
+FROM pg_stat_database WHERE datname = current_database()";
+
+/// One field of a row as a number, or `None` for anything that is not one.
+///
+/// **`psql --tuples-only --no-align` prints NULL as an empty string**, so "there was no row"
+/// and "the server would not say" arrive the same way and both mean `None`.
+fn number(field: Option<&String>) -> Option<i64> {
+    field?.trim().parse().ok()
+}
+
 const ESTIMATED_ROW_COUNTS_SQL: &str = "\
 SELECT n.nspname, c.relname, coalesce(s.n_live_tup, 0) \
 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \

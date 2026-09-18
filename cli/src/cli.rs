@@ -422,6 +422,14 @@ pub enum ServiceCommand {
         /// `LocalSystem` and are told where the store is instead.
         #[arg(long, value_name = "USER")]
         user: Option<String>,
+
+        /// Seconds between one round of readings and the next. 60 by default.
+        ///
+        /// Every round reads the attachment list and takes one reading of each database on
+        /// it. Shorter means finer numbers and more connections; longer means fewer. It is
+        /// written into the service definition, so changing it means installing again.
+        #[arg(long, value_name = "SECONDS", default_value_t = 60)]
+        interval: u64,
     },
 
     /// Take it off this machine.
@@ -472,6 +480,10 @@ pub enum ServiceCommand {
         /// The store to work from, since a service does not get the installing user's home.
         #[arg(long, value_name = "PATH")]
         store: Option<std::path::PathBuf>,
+
+        /// Seconds between rounds, as `install` settled it.
+        #[arg(long, value_name = "SECONDS", default_value_t = 60)]
+        interval: u64,
     },
 }
 
