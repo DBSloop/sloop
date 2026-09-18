@@ -18,12 +18,18 @@ on:
       - ci/**
       - install/**
       - .github/workflows/cli.yml
+      # `ci/release-targets.sh` reads the release matrix, so a change to it has to re-run
+      # the check that the matrix and the installers still name the same six targets.
+      - .github/workflows/release.yml
   pull_request:
     paths:
       - cli/**
       - ci/**
       - install/**
       - .github/workflows/cli.yml
+      # `ci/release-targets.sh` reads the release matrix, so a change to it has to re-run
+      # the check that the matrix and the installers still name the same six targets.
+      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
@@ -290,13 +296,21 @@ jobs:
         working-directory: .
         run: sh ci/ascii-scripts.sh
 
+      # The installers ask for six archives by name and the release workflow builds six.
+      # Nothing else watches that seam, and when it slips the failure lands on a stranger
+      # with the one machine nobody had, as a 404 from curl.
+      - name: The installers and the release matrix name the same targets
+        working-directory: .
+        run: sh ci/release-targets.sh
+
       - name: shellcheck
         working-directory: .
         run: |
           command -v shellcheck >/dev/null || { sudo apt-get update && sudo apt-get install -y shellcheck; }
           shellcheck --shell=sh --severity=style \
             install/install.sh install/uninstall.sh \
-            ci/install-roundtrip.sh ci/ascii-scripts.sh ci/no-http-client.sh
+            ci/install-roundtrip.sh ci/ascii-scripts.sh ci/no-http-client.sh \
+            ci/release-targets.sh
 
       # A syntax error in an installer is a release that cannot be installed, and the file
       # is only ever read by a machine that has already been told to run it.
