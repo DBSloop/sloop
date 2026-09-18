@@ -9,10 +9,10 @@ use super::{Origin, Server, record};
 use crate::secret::{Route, Secret};
 
 /// A temporary directory of this test's own, removed when it goes out of scope.
-pub(super) struct Scratch(PathBuf);
+pub(crate) struct Scratch(PathBuf);
 
 impl Scratch {
-    pub(super) fn new(label: &str) -> Self {
+    pub(crate) fn new(label: &str) -> Self {
         let root = std::env::temp_dir().join(format!(
             "sloop-server-{}-{label}-{:?}",
             std::process::id(),
@@ -23,7 +23,7 @@ impl Scratch {
         Self(root)
     }
 
-    pub(super) fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.0
     }
 }
@@ -45,7 +45,7 @@ impl Drop for Scratch {
 /// Rule 3's half of these tests is not lost where this is false: the file's password field is
 /// a [`Route`], and `Route::parse` refuses anything that is not one of the four — which
 /// `secret`'s own tests prove on every platform.
-pub(super) fn this_machine_can_keep_a_secret(global: &Path) -> bool {
+pub(crate) fn this_machine_can_keep_a_secret(global: &Path) -> bool {
     let kept = crate::secret::keep_somewhere(
         "sloop-server:can-this-machine-keep-a-secret",
         &Secret::new("a throwaway probe".to_owned()),

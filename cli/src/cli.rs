@@ -431,6 +431,25 @@ pub enum ServiceCommand {
     /// stay, so installing again picks up where this left off.
     Uninstall,
 
+    /// Watch a database. The service picks it up without being restarted.
+    ///
+    /// The attachment is a row sloop's own database holds, and the service reads that list
+    /// on every round — so attaching reaches one that is already running, and detaching
+    /// stops it just as quickly.
+    Attach {
+        /// The name it is registered under in the global registry.
+        ///
+        /// A service has no working directory, so a project's databases are invisible to
+        /// it. `sloop db list --global` shows what it can watch.
+        name: String,
+    },
+
+    /// Stop watching a database. Everything already recorded about it stays.
+    Detach {
+        /// The name it is registered under in the global registry.
+        name: String,
+    },
+
     /// Start it now.
     Start,
 
@@ -1139,6 +1158,8 @@ impl ServiceCommand {
         match self {
             Self::Install { .. } => "service install",
             Self::Uninstall => "service uninstall",
+            Self::Attach { .. } => "service attach",
+            Self::Detach { .. } => "service detach",
             Self::Start => "service start",
             Self::Stop => "service stop",
             Self::Status => "service status",

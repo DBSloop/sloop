@@ -242,3 +242,137 @@ fn the_global_store_has_its_own_registry() {
         .expect_said("the OS keyring")
         .expect_silent_about("staging");
 }
+
+/// **`SLOOP_PASSPHRASE_FILE`, which `R24` wrote into three unit files and nothing read.**
+///
+/// A Windows service runs as `LocalSystem` and cannot see the keyring, so the encrypted store
+/// is the only route it has — and the passphrase reaches it through a file, because a unit
+/// file is world-readable on all three platforms and a variable is inherited by every child a
+/// process starts. `R25` is the first entry in which the daemon opens the store at all, which
+/// is why it is the first that could notice the file was being written and never read.
+///
+/// **The file is written with CRLF on purpose.** An editor on Windows ends a line that way,
+/// and a passphrase with a carriage return on the end is an authentication failure nobody can
+/// see — which `docs/OWNER-DECISIONS.md` already records happening once.
+#[test]
+fn the_passphrase_can_come_from_a_file_and_its_line_ending_is_not_part_of_it() {
+    let sandbox = Sandbox::new("passphrase-file");
+    if !sandbox.has_a_registry() {
+        support::skipping("the passphrase file: this machine has no PostgreSQL server");
+        return;
+    }
+
+    // One entry, sealed the ordinary way, so there is a vault for the file to open.
+    sandbox
+        .command(
+            sandbox.work(),
+            &[
+                "db",
+                "add",
+                "first",
+                "--global",
+                "--url",
+                "postgres://app@db.internal/orders",
+                "--encrypted-file",
+                "--password-stdin",
+            ],
+        )
+        .env("SLOOP_PASSPHRASE", "a test passphrase")
+        .stdin(b"one\n")
+        .run()
+        .expect_code(0);
+
+    let right = sandbox.home().join("passphrase.txt");
+    std::fs::write(&right, "a test passphrase\r\n").expect("the passphrase file is writable");
+
+    // A second entry, with the variable gone and only the file to go on. It has to *open* the
+    // vault the first one wrote, so a passphrase read back wrong fails here rather than later.
+    sandbox
+        .command(
+            sandbox.work(),
+            &[
+                "db",
+                "add",
+                "second",
+                "--global",
+                "--url",
+                "postgres://app@db.internal/reports",
+                "--encrypted-file",
+                "--password-stdin",
+            ],
+        )
+        .env_remove("SLOOP_PASSPHRASE")
+        .env("SLOOP_PASSPHRASE_FILE", &right.display().to_string())
+        .stdin(b"two\n")
+        .run()
+        .expect_code(0);
+
+    let written = sandbox.registry_text();
+    assert!(written.contains("first"), "{written}");
+    assert!(written.contains("second"), "{written}");
+}
+
+/// A passphrase file that is wrong, missing or empty is a failure that names the variable —
+/// never a fall-through to a prompt, because the process this route exists for is a service
+/// with no terminal at all.
+#[test]
+fn a_passphrase_file_that_cannot_be_used_is_refused_rather_than_prompted_around() {
+    let sandbox = Sandbox::new("passphrase-file-bad");
+    if !sandbox.has_a_registry() {
+        support::skipping("the passphrase file: this machine has no PostgreSQL server");
+        return;
+    }
+
+    sandbox
+        .command(
+            sandbox.work(),
+            &[
+                "db",
+                "add",
+                "first",
+                "--global",
+                "--url",
+                "postgres://app@db.internal/orders",
+                "--encrypted-file",
+                "--password-stdin",
+            ],
+        )
+        .env("SLOOP_PASSPHRASE", "a test passphrase")
+        .stdin(b"one\n")
+        .run()
+        .expect_code(0);
+
+    let missing = sandbox.home().join("not-there.txt");
+    let empty = sandbox.home().join("empty.txt");
+    let wrong = sandbox.home().join("wrong.txt");
+    std::fs::write(&empty, "\r\n").expect("writable");
+    std::fs::write(&wrong, "not the passphrase").expect("writable");
+
+    for (file, expected) in [
+        (&missing, "SLOOP_PASSPHRASE_FILE"),
+        (&empty, "SLOOP_PASSPHRASE_FILE"),
+        (&wrong, "passphrase"),
+    ] {
+        let run = sandbox
+            .command(
+                sandbox.work(),
+                &[
+                    "db",
+                    "add",
+                    "another",
+                    "--global",
+                    "--url",
+                    "postgres://app@db.internal/reports",
+                    "--encrypted-file",
+                    "--password-stdin",
+                ],
+            )
+            .env_remove("SLOOP_PASSPHRASE")
+            .env("SLOOP_PASSPHRASE_FILE", &file.display().to_string())
+            .stdin(b"two\n")
+            .run();
+
+        run.expect_not_code(0);
+        run.expect_said(expected);
+    }
+}

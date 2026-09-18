@@ -36,6 +36,19 @@ const HEADER_LEN: usize = MAGIC.len() + 1 + 4 + 4 + 4 + SALT_LEN + NONCE_LEN;
 /// The variable that supplies the passphrase when there is no terminal to ask at.
 pub const PASSPHRASE_VAR: &str = "SLOOP_PASSPHRASE";
 
+/// The same, as a path to read it out of, which is what a service is given.
+///
+/// **`R24` wrote this into all three unit files and nothing read it, which `R25` found.** A
+/// systemd unit is world-readable — `systemctl cat sloop` prints it to anybody with a shell —
+/// so the passphrase cannot be *in* the definition; what goes in is the path to a file only
+/// the service account can open. That was built, and then the daemon looked for
+/// [`PASSPHRASE_VAR`], did not find it, and had no terminal to ask at. `R25` is the first
+/// entry where the daemon actually opens the store, so it is the first one that could notice.
+///
+/// The value is a path and not a secret, which is why it may sit in a unit file at all. What
+/// it points at is the secret, under permissions `service::key` sets.
+pub const PASSPHRASE_FILE_VAR: &str = "SLOOP_PASSPHRASE_FILE";
+
 /// Has this machine been told to keep secrets in the encrypted file?
 ///
 /// The variable exists for this file and nothing else, so its presence is an answer rather
@@ -43,6 +56,7 @@ pub const PASSPHRASE_VAR: &str = "SLOOP_PASSPHRASE";
 #[must_use]
 pub fn is_the_machines_choice() -> bool {
     std::env::var_os(PASSPHRASE_VAR).is_some_and(|value| !value.is_empty())
+        || std::env::var_os(PASSPHRASE_FILE_VAR).is_some_and(|value| !value.is_empty())
 }
 
 /// Argon2id cost. These are the crate's own defaults — 19 MiB and two passes — which is
@@ -430,12 +444,23 @@ fn passphrase(confirm: bool) -> Outcome<Zeroizing<String>> {
         return Ok(Zeroizing::new(value));
     }
 
+    // **The file next, which is how a service is told.** A variable is inherited by every
+    // child a process starts and shows up in `/proc/<pid>/environ`; a path does neither, and
+    // the file behind it is readable only by the account the service runs as. See
+    // [`PASSPHRASE_FILE_VAR`].
+    if let Some(from_a_file) = from_the_file()? {
+        return Ok(from_a_file);
+    }
+
     if !std::io::stdin().is_terminal() {
         return Err(Failure::new(
             Exit::Usage,
             "the encrypted password file needs a passphrase, and there is no terminal to ask at",
         )
-        .hint(format!("set {PASSPHRASE_VAR} for unattended runs")));
+        .hint(format!(
+            "set {PASSPHRASE_VAR} for unattended runs, or {PASSPHRASE_FILE_VAR} to the path \
+             of a file holding it"
+        )));
     }
 
     let first = Zeroizing::new(
@@ -472,6 +497,52 @@ fn passphrase(confirm: bool) -> Outcome<Zeroizing<String>> {
     }
 
     Ok(first)
+}
+
+/// The passphrase, out of the file [`PASSPHRASE_FILE_VAR`] names.
+///
+/// **A file that is named and unreadable is a failure, not a fall-through to the prompt.**
+/// Somebody set that variable on purpose; carrying on to ask a question that a service has
+/// nobody to answer is how rule 4 gets broken by an accident of permissions.
+///
+/// **The line ending comes off, and that is not cosmetic.** A passphrase file written by an
+/// editor ends in a newline, and on Windows in CRLF — the same carriage return this project
+/// already strips out of a config file, because the authentication failure it causes is
+/// invisible.
+fn from_the_file() -> Outcome<Option<Zeroizing<String>>> {
+    let Some(named) = std::env::var_os(PASSPHRASE_FILE_VAR).filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let path = std::path::PathBuf::from(named);
+    let held = Zeroizing::new(std::fs::read_to_string(&path).map_err(|error| {
+        Failure::new(
+            Exit::Usage,
+            format!(
+                "{PASSPHRASE_FILE_VAR} names {} and it could not be read: {error}",
+                path.display()
+            ),
+        )
+        .hint(
+            "that file holds the passphrase for the encrypted password store. It has to be \
+             readable by the account this is running as, and by nobody else.",
+        )
+    })?);
+
+    let trimmed = Zeroizing::new(held.trim_end_matches(['\r', '\n']).to_owned());
+    if trimmed.is_empty() {
+        return Err(Failure::new(
+            Exit::Usage,
+            format!(
+                "{PASSPHRASE_FILE_VAR} names {}, which is empty",
+                path.display()
+            ),
+        )
+        .hint("an empty passphrase encrypts nothing"));
+    }
+
+    Ok(Some(trimmed))
 }
 
 #[cfg(test)]

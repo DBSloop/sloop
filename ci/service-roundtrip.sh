@@ -15,6 +15,12 @@
 #   status         stopped and never-installed come back as different answers
 #   uninstall      the unit file, the registration and the key file are all gone
 #
+# **R25's half of this is small on purpose.** Attaching a database needs sloop's own
+# PostgreSQL, and this runner has none -- so what is asserted here is the path a machine
+# without one actually takes: `status` still answers rather than failing, and `attach` is a
+# usage error that names `sloop setup` instead of a crash. The attachment itself is proved
+# against a real migrated database in `service::cluster_tests`, which `cargo test` runs.
+#
 # **What is not asserted, because a CI runner cannot be restarted:** that it comes back after
 # a reboot. What stands in for it is `starts_at_boot` -- systemd `is-enabled`, launchd's
 # `RunAtLoad` -- which is the thing a reboot would depend on.
@@ -106,6 +112,13 @@ printf 'service-roundtrip: %s, against the real service manager\n\n' "$(uname -s
 check_same "nothing installed, and it says so" "$(state)" "not installed"
 check "status exits 0 even with nothing installed" "$sloop" service status
 check_not "start refuses when there is nothing to start" "$sloop" service start
+
+# R25. This runner has never had `sloop setup`, which is the state every one of them is in.
+check "status answers about attachments even with no store to read" \
+    sh -c "\"$sloop\" service status | grep -Fq 'Watching'"
+check_not "attach refuses when there is nowhere to put the row" "$sloop" service attach orders
+check "and the refusal names the command that fixes it" \
+    sh -c "\"$sloop\" service attach orders 2>&1 | grep -Fq 'sloop setup'"
 
 # -------------------------------------------------------------------------- install
 

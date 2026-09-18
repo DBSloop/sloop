@@ -134,6 +134,17 @@ impl State {
     pub const fn installed(&self) -> bool {
         !matches!(self, Self::NotInstalled)
     }
+
+    /// Is it running *now*?
+    ///
+    /// Separate from [`State::installed`] on purpose, and `R25` is what needed them apart: an
+    /// attachment reaches a service that is running at its next round, and one that is merely
+    /// installed when somebody starts it. Two different sentences to say to the person who
+    /// just typed `attach`.
+    #[must_use]
+    pub const fn running(&self) -> bool {
+        matches!(self, Self::Running)
+    }
 }
 
 /// Run one of the service managers, and turn a refusal into something actionable.

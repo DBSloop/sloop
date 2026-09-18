@@ -36,10 +36,13 @@ pub mod record;
 pub mod schema;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
+/// **`pub(crate)` because a second module needs a real cluster to run against.** `R25`'s
+/// attachment list lives in these same tables, and building a migrated `sloop_database` is
+/// exactly what this module already knows how to do — see `service::cluster_tests`.
 #[cfg(test)]
-mod cluster_tests;
+pub(crate) mod cluster_tests;
 
 use std::path::{Path, PathBuf};
 

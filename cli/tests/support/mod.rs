@@ -229,6 +229,20 @@ impl Sandbox {
         database.to_owned()
     }
 
+    /// Ask this sandbox's own database a question.
+    ///
+    /// The tables `R19c3` created are what the commands write to, so a test that wants to
+    /// know what a command *did* — rather than what it said — asks here.
+    #[must_use]
+    pub fn ask(&self, sql: &str) -> String {
+        let cluster = cluster::available().expect("a sandbox with a registry has a cluster");
+        let database = self
+            .database
+            .as_deref()
+            .expect("a sandbox with a registry has a database");
+        cluster.ask(database, sql)
+    }
+
     /// Whether this sandbox has a registry to read at all.
     ///
     /// A test that needs one asks first and skips out loud otherwise, the way the cluster
@@ -400,6 +414,18 @@ impl Invocation {
     #[must_use]
     pub fn env(mut self, key: &str, value: &str) -> Self {
         self.command.env(key, value);
+        self
+    }
+
+    /// Take one away that the sandbox sets by default.
+    ///
+    /// **For the tests about how a secret is *obtained*.** Every child here gets
+    /// `SLOOP_PASSPHRASE`, which is what keeps the machine's own keyring out of the suite —
+    /// and a test about the route that reads the passphrase out of a *file* has to be able to
+    /// run without the variable that would answer first.
+    #[must_use]
+    pub fn env_remove(mut self, key: &str) -> Self {
+        self.command.env_remove(key);
         self
     }
 

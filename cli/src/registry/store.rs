@@ -296,10 +296,23 @@ impl Store {
     /// Write a registry back.
     ///
     /// **Replace, not merge, and in one transaction.** The in-memory [`Registry`] is the whole
-    /// truth about that scope — `db remove` is an entry that is no longer in it — so the rows
-    /// for that registry are deleted and rewritten together. A run that dies halfway leaves
+    /// truth about that scope — `db remove` is an entry that is no longer in it — so what is
+    /// not in it goes and what is in it is written, together. A run that dies halfway leaves
     /// the registry exactly as it was, which is the property [`Registry::save`]'s
     /// write-and-rename bought on a file.
+    ///
+    /// **A surviving row keeps its `id`, and `R25` is what made that matter.** This used to
+    /// delete every row for the registry and insert them all again, which is the same registry
+    /// and a different set of primary keys — and `monitored_database` and `bandwidth_day` both
+    /// hang off `registered_database.id` with `ON DELETE CASCADE`. So `sloop db add` on the
+    /// global store silently detached every database from the service and took the whole
+    /// history with it. Running `R25` against a real cluster is what found it; nothing could
+    /// have noticed before, because nothing had ever put a row in either table.
+    ///
+    /// The upsert keys on `one_label_per_registry`, which `0002` already declared. **A label
+    /// that changed is still a different row** — a rename is a delete and an insert here, and
+    /// what that costs an attachment is noted in `docs/OWNER-DECISIONS.md` rather than fixed
+    /// under an entry that is about something else.
     pub fn write(&self, which: &Which, registry: &Registry) -> Outcome<()> {
         let mut script = String::new();
 
@@ -321,10 +334,57 @@ impl Store {
             None => "NULL".to_owned(),
         };
 
+        script.push_str(&Self::databases(which, registry, &project)?);
+
         let _ = writeln!(
             script,
-            "DELETE FROM registered_database WHERE {};",
-            Self::belongs_to(which, "registered_database")
+            "DELETE FROM backup_key WHERE {};",
+            Self::belongs_to(which, "backup_key")
+        );
+
+        if let Some(encryption) = registry.encryption() {
+            let _ = write!(
+                script,
+                "INSERT INTO backup_key
+                     (scope, project_id, public_key, private_key_route, key_kept)
+                 VALUES ({scope}, {project}, {public}, {private}, {kept});\n",
+                scope = literal(which.word())?,
+                project = project,
+                public = literal(&encryption.public_key.to_string())?,
+                private = literal(&encryption.private_key.as_field())?,
+                kept = match encryption.key_kept {
+                    Some(kept) => literal(kept.as_field())?,
+                    None => "NULL".to_owned(),
+                },
+            );
+        }
+
+        self.run(&script)
+    }
+
+    /// The `registered_database` half of a write: what is gone goes, what is here is upserted.
+    ///
+    /// **Its own function because the two halves answer different questions.** Above is which
+    /// rows belong to this registry at all; this is which of them survived, and the difference
+    /// between deleting the survivors and keeping them is a table two other tables cascade off.
+    fn databases(which: &Which, registry: &Registry, project: &str) -> Outcome<String> {
+        let mut script = String::new();
+
+        // **What is gone, rather than everything.** A registry with nothing in it deletes the
+        // lot, which is what `db remove` of the last entry means.
+        let surviving = registry
+            .entries()
+            .map(|(label, _)| literal(label))
+            .collect::<Outcome<Vec<String>>>()?;
+        let _ = writeln!(
+            script,
+            "DELETE FROM registered_database WHERE {}{};",
+            Self::belongs_to(which, "registered_database"),
+            if surviving.is_empty() {
+                String::new()
+            } else {
+                format!(" AND label NOT IN ({})", surviving.join(", "))
+            }
         );
 
         for (label, database) in registry.entries() {
@@ -345,7 +405,22 @@ impl Store {
                       ssh_host, ssh_port, ssh_user, ssh_identity, ssh_secret_route)
                  VALUES ({label}, (SELECT id FROM engine WHERE name = {engine}),
                          {host}, {port}, {database}, {user}, {route}, {scope}, {project},
-                         {ssh_host}, {ssh_port}, {ssh_user}, {ssh_identity}, {ssh_route});\n",
+                         {ssh_host}, {ssh_port}, {ssh_user}, {ssh_identity}, {ssh_route})
+                 ON CONFLICT ON CONSTRAINT one_label_per_registry DO UPDATE
+                     SET engine_id        = EXCLUDED.engine_id,
+                         host             = EXCLUDED.host,
+                         port             = EXCLUDED.port,
+                         database_name    = EXCLUDED.database_name,
+                         username         = EXCLUDED.username,
+                         password_route   = EXCLUDED.password_route,
+                         scope            = EXCLUDED.scope,
+                         project_id       = EXCLUDED.project_id,
+                         ssh_host         = EXCLUDED.ssh_host,
+                         ssh_port         = EXCLUDED.ssh_port,
+                         ssh_user         = EXCLUDED.ssh_user,
+                         ssh_identity     = EXCLUDED.ssh_identity,
+                         ssh_secret_route = EXCLUDED.ssh_secret_route,
+                         updated_at       = now();\n",
                 label = literal(label)?,
                 engine = literal(database.engine.scheme())?,
                 host = literal(&database.host)?,
@@ -372,30 +447,7 @@ impl Store {
             );
         }
 
-        let _ = writeln!(
-            script,
-            "DELETE FROM backup_key WHERE {};",
-            Self::belongs_to(which, "backup_key")
-        );
-
-        if let Some(encryption) = registry.encryption() {
-            let _ = write!(
-                script,
-                "INSERT INTO backup_key
-                     (scope, project_id, public_key, private_key_route, key_kept)
-                 VALUES ({scope}, {project}, {public}, {private}, {kept});\n",
-                scope = literal(which.word())?,
-                project = project,
-                public = literal(&encryption.public_key.to_string())?,
-                private = literal(&encryption.private_key.as_field())?,
-                kept = match encryption.key_kept {
-                    Some(kept) => literal(kept.as_field())?,
-                    None => "NULL".to_owned(),
-                },
-            );
-        }
-
-        self.run(&script)
+        Ok(script)
     }
 
     /// The sealed password store for a registry, or empty on one that has never had a
@@ -547,12 +599,18 @@ impl Store {
     }
 
     /// Ask for one value.
-    fn ask(&self, sql: &str) -> Outcome<String> {
+    ///
+    /// **`pub(crate)` for the one other module that reads these tables.** `R25`'s service
+    /// attachments live in `monitored_database`, beside the registry and behind the same
+    /// credentials — so `service::watch` goes through this rather than opening a second way
+    /// in to the same database. It follows the same two rules this module does: read as JSON,
+    /// write through [`literal`].
+    pub(crate) fn ask(&self, sql: &str) -> Outcome<String> {
         server::make::ask(&self.server, &self.own.as_who(), Some(&self.password), sql)
     }
 
     /// Ask for one JSON document and parse it.
-    fn json<T: serde::de::DeserializeOwned>(&self, sql: &str) -> Outcome<T> {
+    pub(crate) fn json<T: serde::de::DeserializeOwned>(&self, sql: &str) -> Outcome<T> {
         let said = self.ask(sql)?;
         serde_json::from_str(said.trim()).map_err(|error| {
             Failure::new(
@@ -564,7 +622,7 @@ impl Store {
     }
 
     /// Run a script, all of it or none of it.
-    fn run(&self, sql: &str) -> Outcome<()> {
+    pub(crate) fn run(&self, sql: &str) -> Outcome<()> {
         server::make::script(&self.server, &self.own.as_who(), Some(&self.password), sql)
     }
 }

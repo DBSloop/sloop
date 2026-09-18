@@ -191,6 +191,18 @@ impl Cluster {
             .collect()
     }
 
+    /// Ask one of these databases a question, as the role that owns it.
+    ///
+    /// **For the tables no rendering helper covers.** `registry_text` and `sealed_bytes`
+    /// above each answer one shape; `R25`'s attachments are a third, and a test that asserts
+    /// on what `sloop service attach` left behind needs to see the row rather than the
+    /// sentence the command printed about it.
+    pub fn ask(&self, database: &str, sql: &str) -> String {
+        let (ok, said) = self.psql(ROLE, database, sql);
+        assert!(ok, "the sandbox's database refused a question: {said}");
+        said.trim().to_owned()
+    }
+
     /// Run SQL against this cluster, with the password on the environment of one child.
     fn psql(&self, role: &str, database: &str, sql: &str) -> (bool, String) {
         let mut child = Command::new(self.bin.join(exe("psql")))

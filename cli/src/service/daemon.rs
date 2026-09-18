@@ -6,6 +6,11 @@
 //! without rewriting the other two: a process the three service managers each recognise as
 //! healthy, that stops when told, and that comes back at boot.
 //!
+//! **`R25` filled the round in, and it is one thing: read the attachment list.** Every turn of
+//! the loop reads it fresh out of sloop's own PostgreSQL and marks what it read, which is what
+//! makes `sloop service attach` reach a service that is already running. `R26` is what turns
+//! that list into samples.
+//!
 //! **Windows is the reason this is a module rather than a loop.** systemd and launchd start a
 //! program and watch the process; if it is alive, it is running, and `SIGTERM` ends it the way
 //! it ends anything. The Service Control Manager does not work like that: it starts the
@@ -27,16 +32,8 @@ use crate::failure::Outcome;
 /// How often the daemon wakes to do its round.
 ///
 /// `R26` will make this the sampling interval and give it a setting; until there is something
-/// to sample, it is how often the heartbeat proves the process is alive.
+/// to sample, it is how often the attachment list is read and the heartbeat written.
 pub const INTERVAL: Duration = Duration::from_secs(60);
-
-/// What one turn of the loop does.
-///
-/// Empty on purpose: `R26` fills it in, and having the call site already here means the
-/// platform halves below never need touching again to get it.
-fn one_round(store: &PathBuf) {
-    let _ = store;
-}
 
 /// Run as a service, in whatever way this platform means by that.
 ///
@@ -72,10 +69,16 @@ pub fn run(store: Option<PathBuf>) -> Outcome<Exit> {
 mod unix {
     use std::path::Path;
 
+    use crate::service::watch::Round;
+
     pub fn run(store: &Path) {
-        crate::note!("sloop service started, watching {}", store.display());
+        crate::note!("sloop service started, reading {}", store.display());
+
+        // Made once, outside the loop: it remembers what the last round read and what the
+        // last one complained about, which is what keeps a journal readable.
+        let mut round = Round::at(store);
         loop {
-            super::one_round(&store.to_path_buf());
+            round.turn();
             std::thread::sleep(super::INTERVAL);
         }
     }
@@ -87,7 +90,7 @@ mod unix {
 /// is why `service run` can be nothing else.
 #[cfg(windows)]
 mod windows {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -101,6 +104,7 @@ mod windows {
     use crate::exit::Exit;
     use crate::failure::{Failure, Outcome};
     use crate::service::unit::SERVICE_NAME;
+    use crate::service::watch::Round;
 
     define_windows_service!(ffi_service_main, service_main);
 
@@ -145,7 +149,7 @@ mod windows {
         }
     }
 
-    fn serve(store: &PathBuf) -> Result<(), windows_service::Error> {
+    fn serve(store: &Path) -> Result<(), windows_service::Error> {
         let (stopping, stopped) = mpsc::channel();
 
         let handle =
@@ -178,8 +182,11 @@ mod windows {
             ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
         ))?;
 
+        // Outside the loop, for the reason the Unix half makes one there: the state that keeps
+        // the event log from filling with the same line every minute lives in it.
+        let mut round = Round::at(store);
         loop {
-            super::one_round(store);
+            round.turn();
             if stopped.recv_timeout(super::INTERVAL).is_ok() {
                 break;
             }

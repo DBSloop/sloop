@@ -5,6 +5,10 @@
 //! build on its own — getting sloop registered with whatever this machine uses to start
 //! things at boot, started, stopped, asked about, and taken off again leaving nothing.
 //!
+//! **`R25` gave it something to watch.** [`watch`] is the list of databases the daemon reads
+//! on every round — a table, so attaching reaches a service that is already running without
+//! anything being restarted.
+//!
 //! ```text
 //! Linux      a systemd unit in /etc/systemd/system
 //! macOS      a launchd daemon in /Library/LaunchDaemons
@@ -30,7 +34,11 @@ pub mod key;
 pub mod manage;
 pub mod mechanism;
 pub mod unit;
+pub mod watch;
 
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod cluster_tests;

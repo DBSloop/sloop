@@ -1,0 +1,14 @@
+-- When the service last read an attachment — `R25`.
+--
+-- **`0004` built the attachment; this is what proves it was picked up.** `R25`'s whole
+-- promise is that attaching becomes visible to a service that is *already running*, without
+-- a restart, and a row saying somebody typed `attach` cannot say that. What can is a column
+-- the daemon writes every time it reads the list: attach a database, wait one round, and the
+-- moment appears. It is the difference between an instruction having been given and an
+-- instruction having been received.
+--
+-- **NULL means "not yet", and that is a state worth being able to reach.** A database
+-- attached while the service is stopped has a row and no `seen_at`, which is exactly what
+-- `sloop service status` should say about it — not a zero, not a lie about a moment that
+-- never happened. `R27`'s rule about periods with no samples in them, one table earlier.
+ALTER TABLE monitored_database ADD COLUMN seen_at TIMESTAMPTZ;

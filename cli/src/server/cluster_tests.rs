@@ -38,7 +38,7 @@ use super::{Origin, make, own, record, schema};
 static NEXT_PORT: AtomicU16 = AtomicU16::new(24_101);
 
 /// A port in this file's block that nothing is listening on.
-fn a_free_port() -> u16 {
+pub(crate) fn a_free_port() -> u16 {
     for _ in 0..200 {
         let port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
         if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
@@ -122,7 +122,7 @@ fn binaries() -> Option<(PathBuf, Asked)> {
 /// Build the cluster, or say why these tests are not going to run on this machine.
 ///
 /// The one place the rule above is applied, so no test in this file can forget it.
-fn cluster(global: &Path, port: u16) -> Option<super::Ready> {
+pub(crate) fn cluster(global: &Path, port: u16) -> Option<super::Ready> {
     let (bin, asked) = binaries()?;
     let data = super::data_dir(global);
 
@@ -149,7 +149,7 @@ fn cluster(global: &Path, port: u16) -> Option<super::Ready> {
 }
 
 /// Stop a cluster these tests started, so the temporary directory can actually be removed.
-fn stop(bin: &Path, data: &Path) {
+pub(crate) fn stop(bin: &Path, data: &Path) {
     let _ = Command::new(bin.join(exe("pg_ctl")))
         .arg("-D")
         .arg(data)
@@ -791,15 +791,15 @@ fn assertions(
     // **A column, not a table, since `0006`.** This check moves with whatever the newest
     // migration happens to do, and pinning it to a table name was what made it need
     // changing — the point it makes is "the last one has not run here", and the thing to
-    // look for is whatever that one puts in.
+    // look for is whatever that one puts in. `0007` is `monitored_database.seen_at`.
     let said = make::ask(
         server,
         &older.as_who(),
         Some(password),
         "SELECT count(*) FROM information_schema.columns
           WHERE table_schema = 'public'
-            AND table_name = 'registered_database'
-            AND column_name = 'ssh_host';",
+            AND table_name = 'monitored_database'
+            AND column_name = 'seen_at';",
     )
     .expect("the older database answers");
     assert_eq!(

@@ -23,9 +23,10 @@
 //! sealed_vault          `secrets.sealed`, as ciphertext in a column        0005
 //! ```
 //!
-//! **`0006` adds no table.** It puts five columns on `registered_database` — the SSH server
-//! a database is reached through, when it is reached through one — which is why the count
-//! above is still eleven.
+//! **`0006` and `0007` add no table.** `0006` puts five columns on `registered_database` —
+//! the SSH server a database is reached through, when it is reached through one — and `0007`
+//! puts one on `monitored_database`, the moment the running service last read that
+//! attachment. Which is why the count above is still eleven.
 //!
 //! **No user data, ever.** What is stored is about *databases* — their addresses, their
 //! sizes, their row counts, how long a dump took. Not one column holds anything that was
@@ -120,6 +121,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 6,
         name: "ssh",
         sql: include_str!("migrations/0006_ssh.sql"),
+    },
+    Migration {
+        version: 7,
+        name: "attachment",
+        sql: include_str!("migrations/0007_attachment.sql"),
     },
 ];
 
@@ -222,8 +228,9 @@ pub const READINGS: &[Reading] = &[
     },
     Reading {
         table: "monitored_database",
-        purpose: "which databases are attached to the service",
-        sql: "SELECT s.name AS service, d.label, m.enabled, m.attached_at
+        purpose: "which databases are attached to the service, and when a running service \
+                  last read each attachment — NULL until one has picked it up",
+        sql: "SELECT s.name AS service, d.label, m.enabled, m.attached_at, m.seen_at
                 FROM monitored_database m
                 JOIN service s ON s.id = m.service_id
                 JOIN registered_database d ON d.id = m.registered_database_id
