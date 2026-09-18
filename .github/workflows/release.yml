@@ -111,9 +111,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools pkg-config
 
+      # **`-mno-outline-atomics`, and it is aarch64 musl or nothing.** Ubuntu's aarch64 gcc
+      # turns on outline atomics by default, so the libdbus it compiles calls
+      # `__aarch64_ldadd4_sync` -- a helper that lives in `libgcc`, which a musl
+      # self-contained link does not pull in. The link then fails on two undefined symbols
+      # in libdbus's refcounting, and nothing about the message says aarch64 or musl. Turning
+      # the outlining off makes gcc emit the atomic instructions inline instead; the cost is
+      # that libdbus cannot pick the faster LSE forms at runtime, which is nothing next to a
+      # target that does not build. `cc` reads this only for the target it names, so the
+      # other five never see it.
+      #
+      # Found by the dry run, on a real aarch64 runner, before any tag existed.
       - name: Build
         working-directory: cli
         shell: bash
+        env:
+          CFLAGS_aarch64_unknown_linux_musl: -mno-outline-atomics
         run: cargo build --release --locked --target ${{ matrix.target }} --bin sloop
 
       # The archive holds the binary at the top level and both licences beside it. Flat, so
