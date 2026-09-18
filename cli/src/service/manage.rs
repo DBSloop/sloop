@@ -64,12 +64,20 @@ pub fn install(mechanism: Mechanism, definition: &Definition) -> Outcome<()> {
             )?;
         }
         Mechanism::WindowsService => {
+            // **`config` when it is already there, `create` when it is not.** `sc.exe create`
+            // fails with 1073 against a service that exists, and installing over an install is
+            // what an upgrade is -- the binary has moved and the definition has to follow it.
+            // Deleting and recreating would work too and would lose the start type, the
+            // description and any recovery settings an administrator had set.
+            let already = state(mechanism).installed();
+            let verb = if already { "config" } else { "create" };
+
             // `sc.exe` wants `key= value` with the space *after* the equals sign, which is
             // not a typo and not optional: `start=auto` is rejected and `start= auto` is not.
             run(
                 "sc.exe",
                 &[
-                    "create",
+                    verb,
                     SERVICE_NAME,
                     "binPath=",
                     &definition.windows_binary_path(),
@@ -80,7 +88,11 @@ pub fn install(mechanism: Mechanism, definition: &Definition) -> Outcome<()> {
                     "DisplayName=",
                     "sloop",
                 ],
-                "creating the service",
+                if already {
+                    "updating the service"
+                } else {
+                    "creating the service"
+                },
             )?;
             // Not fatal: the service exists and works without a description, and a machine
             // that refuses this one refuses it for reasons that do not stop anything.
