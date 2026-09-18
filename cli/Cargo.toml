@@ -80,6 +80,18 @@ crossterm = "0.29.0"
 # Nothing it brings can open a socket; `ci/no-http-client.sh` is unchanged by it.
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
 
+# Windows only, and it is `R24`'s reason for existing rather than a convenience. A service
+# that does not answer the Service Control Manager is killed by it about thirty seconds
+# after starting, so "a real Windows service with a control handler" means
+# `StartServiceCtrlDispatcher`, `RegisterServiceCtrlHandlerEx` and `SetServiceStatus` — three
+# pieces of FFI, and this workspace forbids `unsafe` in its own source. The crate is the safe
+# wrapper around exactly those, it is the one the ecosystem uses, and it brings two crates:
+# itself and `widestring`. `windows-sys` was already in the graph under the keyring. Nothing
+# in it opens a socket; `ci/no-http-client.sh` counted 269 crates afterwards and still found
+# none.
+[target."cfg(windows)".dependencies]
+windows-service = "0.8.1"
+
 [workspace.lints.rust]
 # There is no reason for this tool to contain unsafe code, and "no reason yet" is how it
 # gets in. CI adds `-D warnings` on top; the source does not, so a compiler upgrade
