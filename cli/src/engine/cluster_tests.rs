@@ -438,6 +438,40 @@ fn announce(binaries: &Path) {
     eprintln!("cluster tests are using {said}");
 }
 
+/// Where a portable server unpacked for these tests would be, if one has been.
+///
+/// **So a machine with no database installed can still run every test on this list, and
+/// nobody has to remember a variable.** The engines are not all on every developer's machine
+/// — MySQL and MariaDB are on almost none — and a suite that quietly skips them proves
+/// nothing. Unpack the vendor's portable archive into
+///
+/// ```text
+/// Windows        %LOCALAPPDATA%\sloop-test-engines\<engine>in
+/// macOS, Linux   ~/.local/share/sloop-test-engines/<engine>/bin
+/// ```
+///
+/// and the tests find it. `<engine>` is `postgres`, `mysql` or `mariadb`, and what goes in it
+/// is the archive's own directory, whole — the server looks beside its `bin` for the rest of
+/// itself. Nothing is installed on the machine and nothing is written outside that directory;
+/// deleting it is how it is undone.
+///
+/// `SLOOP_TEST_*_BIN` still outranks this, for a run aimed at one particular build.
+pub(crate) fn portable(engine: &str) -> Option<PathBuf> {
+    let home = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    } else {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|home| PathBuf::from(home).join(".local").join("share"))
+            })
+    }?;
+
+    let bin = home.join("sloop-test-engines").join(engine).join("bin");
+    bin.is_dir().then_some(bin)
+}
+
 /// Where the server programs are, or `None` if this machine has none.
 ///
 /// `SLOOP_TEST_PG_BIN` first, and when it is set and wrong this **panics** rather than
@@ -468,6 +502,12 @@ fn find_server_binaries() -> Option<(PathBuf, Asked)> {
         .is_ok_and(|output| output.status.success())
     {
         return Some((PathBuf::new(), Asked::ByLookingAround));
+    }
+
+    // One unpacked for these tests, before the package manager's — somebody who put a
+    // particular server there meant it to be used.
+    if let Some(bin) = portable("postgres").filter(|bin| bin.join(initdb_file_name()).is_file()) {
+        return Some((bin, Asked::ByLookingAround));
     }
 
     let roots = [

@@ -88,11 +88,17 @@ fn binaries() -> Option<(PathBuf, Asked)> {
         return Some((directory, Asked::Explicitly));
     }
 
-    // `PATH`, then the same install directories `tools` knows about — the server programs
-    // ship in the server package and distributions leave them off `PATH`.
-    let mut looked: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|path| std::env::split_paths(&path).collect())
-        .unwrap_or_default();
+    // One unpacked for these tests, then `PATH`, then the same install directories `tools`
+    // knows about — the server programs ship in the server package and distributions leave
+    // them off `PATH`. See `engine::cluster_tests::portable`.
+    let mut looked: Vec<PathBuf> = crate::engine::cluster_tests::portable("postgres")
+        .into_iter()
+        .collect();
+    looked.extend(
+        std::env::var_os("PATH")
+            .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+            .unwrap_or_default(),
+    );
     looked.extend(crate::tools::installed_directories(
         crate::engine::Engine::Postgres,
     ));

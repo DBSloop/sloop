@@ -807,6 +807,17 @@ fn find_server_binaries(family: Family) -> Option<(PathBuf, PathBuf, Asked)> {
         return Some((binaries, daemon?, Asked::Explicitly));
     }
 
+    // **One unpacked for these tests, before anything else on the machine.** Neither of
+    // these engines is on most developers' machines, and a suite that quietly skips them
+    // proves nothing — see `engine::cluster_tests::portable` for where to put one and why.
+    if let Some(binaries) = super::cluster_tests::portable(match family {
+        Family::Mysql => "mysql",
+        Family::Mariadb => "mariadb",
+    }) && let Some(daemon) = find_daemon(&binaries)
+    {
+        return Some((binaries, daemon, Asked::ByLookingAround));
+    }
+
     // `PATH`, then the places a package manager puts them.
     let on_path = PathBuf::new();
     if let Some(daemon) = find_daemon(&on_path).or_else(|| {
