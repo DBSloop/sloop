@@ -23,6 +23,11 @@ fn scratch(label: &str) -> std::path::PathBuf {
 }
 
 /// **The `Done when`: one gets it, the other gets 7.**
+///
+/// Two handles in one process, which is the same operating-system lock two processes would
+/// contend for — and the message says which case it is, because here the two are the same
+/// process. The wording a *real* second run gets is asserted in `tests/automation.rs`, which
+/// runs the binary against a lock somebody else is holding.
 #[test]
 fn a_second_taker_is_refused_with_seven() {
     let store = scratch("held");
@@ -33,20 +38,53 @@ fn a_second_taker_is_refused_with_seven() {
     assert_eq!(second.exit(), Exit::Locked);
     assert_eq!(second.exit().code(), 7);
     assert!(second.message().contains("orders"), "{}", second.message());
+
+    // **Not "another sloop run".** The note beside the lock names this process, and calling
+    // that another run is what sent somebody looking for a process that was themselves.
     assert!(
-        second.message().contains("sloop backup"),
-        "the refusal has to name what is holding it: {}",
+        second.message().contains("this sloop run"),
+        "a lock this process holds has to say so: {}",
         second.message()
     );
     assert!(
         second
             .hint_text()
-            .is_some_and(|hint| hint.contains("did not start")),
-        "exit 7 has to say it is not a failure: {:?}",
+            .is_some_and(|hint| hint.contains("no other run is involved")),
+        "and the hint has to say waiting is not the answer: {:?}",
         second.hint_text()
     );
 
     drop(first);
+    let _ = std::fs::remove_dir_all(&store);
+}
+
+/// **A note that outlived its holder is a note that lies**, and this is the test that keeps
+/// it from doing so again.
+///
+/// `refused` reads the `.who` beside the lock to say who has it. When that note survived the
+/// lock, a run refused by a *different* holder could be told about one that finished hours
+/// ago — and worse, a message naming a process id that had already exited read as though the
+/// process were still working. So the note is emptied while the lock is still held.
+#[test]
+fn the_note_beside_a_lock_is_emptied_when_the_lock_goes() {
+    let store = scratch("note");
+    let path = path_for(&store, "orders");
+    let note = super::beside(&path);
+
+    let held = take(&store, "orders", "backup").expect("nobody has it");
+    let while_held = std::fs::read_to_string(&note).expect("a note while it is held");
+    assert!(
+        while_held.contains("sloop backup"),
+        "the holder has to say what it is doing: {while_held}"
+    );
+
+    drop(held);
+    let after = std::fs::read_to_string(&note).expect("the note is still there, and empty");
+    assert!(
+        after.trim().is_empty(),
+        "the note outlived the lock it describes: {after}"
+    );
+
     let _ = std::fs::remove_dir_all(&store);
 }
 

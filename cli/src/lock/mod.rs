@@ -16,12 +16,22 @@
 //! **The note sits beside the lock rather than inside it**, and that is not tidiness. On
 //! Windows the lock covers the file's bytes as well as the file, so a run that is refused
 //! cannot read what the holder wrote there — which is exactly the moment the message was for.
-//! A sibling `.who` file is readable by anyone, and it is never stale where it matters: it is
-//! written the instant a lock is taken, so whoever reads it while being refused is reading the
-//! current holder's.
+//! A sibling `.who` file is readable by anyone.
 //!
-//! Both files are left behind when the lock goes. Deleting them would race the next run
-//! opening them, and two unlocked files cost a few bytes.
+//! **And it is emptied when the lock goes, which it did not used to be.** A note that
+//! outlived its holder made [`refused`] describe a run that had already finished as though
+//! it were still working — a red CI build once reported a process id that was the reading
+//! process's own, and the hours that went into looking for the holder went into looking for
+//! something that was not there. The note is truncated *while the lock is still held*, so
+//! nobody can take the lock in between and find it empty; what is left is an empty file,
+//! because deleting it would race the next run opening it.
+//!
+//! **A note naming this very process is not a busy machine**, and it says so in those words.
+//! One run being refused its own lock is either a [`Held`] somebody kept alive past its work
+//! or a release the operating system has not made visible yet — see
+//! [`tests::the_lock_goes_when_the_holder_does`], which is where that second one was first
+//! written down. Neither is "another sloop run", and reporting it as one sent somebody after
+//! a process that was themselves.
 //!
 //! **Exit `7`, frozen.** A scheduler that reads it knows this run did not fail — it did not
 //! start, and the next one along will be fine.
@@ -50,6 +60,17 @@ pub struct Held {
     path: PathBuf,
     /// **The lock itself.** Held by this handle and released when it closes.
     _file: File,
+}
+
+impl Drop for Held {
+    /// Empty the note, then release the lock.
+    ///
+    /// **That order is the whole point.** Truncating while the lock is still held means no
+    /// other run can be between the two: whoever takes it next writes its own note first.
+    /// The other order would leave a window in which the note belongs to nobody.
+    fn drop(&mut self) {
+        let _ = std::fs::write(beside(&self.path), b"");
+    }
 }
 
 impl Held {
@@ -148,6 +169,31 @@ fn refused(path: &Path, label: &str) -> Failure {
         .ok()
         .map(|said| said.trim().to_owned())
         .filter(|said| !said.is_empty());
+
+    // **A lock this process already holds is a defect, and saying "another sloop run" about
+    // it sends somebody looking for a process that does not exist.** It happened: a red
+    // build reported a process id that was the reading process's own, and nobody could tell
+    // from the message that the two were the same.
+    if held_by
+        .as_deref()
+        .is_some_and(|who| who.contains(&format!("process {}", std::process::id())))
+    {
+        // **Still exit 7**, because the lock is held and rule 7 froze what that means. Only
+        // the words change, and they have to: a scheduler reads the number and a person
+        // reads the sentence, and the sentence was sending people after a process that was
+        // themselves.
+        return Failure::new(
+            Exit::Locked,
+            format!("this sloop run took the lock on {label} and has not released it"),
+        )
+        .hint(format!(
+            "no other run is involved, so one of two things is true: something is keeping \
+             the lock at {} alive past the work it was taken for, or it was released a \
+             moment ago and the operating system has not made that visible yet — see \
+             `lock::tests::the_lock_goes_when_the_holder_does`",
+            path.display()
+        ));
+    }
 
     let message = match held_by {
         // A courtesy rather than a guarantee: a note that cannot be read still leaves a

@@ -71,6 +71,34 @@ fn seeded_key(registry: &mut Registry) -> PrivateKey {
     private
 }
 
+/// Wait, briefly and with a bound, until `label`'s lock can be taken again.
+///
+/// **The bound is the point.** Two seconds is far longer than any real gap this matters for,
+/// so a lock that is genuinely still held — the failure worth catching — still fails the
+/// test; what it absorbs is only the moment between a handle being dropped and the operating
+/// system saying so. See `crate::lock::tests::the_lock_goes_when_the_holder_does`, where the
+/// same wait is written for the same reason.
+fn wait_for_the_lock_to_go(store: &Path, label: &str) {
+    let waited = std::time::Instant::now();
+    loop {
+        match crate::lock::take(store, label, "test") {
+            Ok(held) => {
+                drop(held);
+                if waited.elapsed() > std::time::Duration::from_millis(1) {
+                    eprintln!("the {label} lock took {:?} to come free", waited.elapsed());
+                }
+                return;
+            }
+            Err(why) => assert!(
+                waited.elapsed() < std::time::Duration::from_secs(2),
+                "the {label} lock did not go when the run that took it finished: {}",
+                why.message()
+            ),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// One entry, as `db add` would have written it.
 fn entry(port: u16, database: &str, user: &str, password: &str) -> Database {
     Database {
@@ -305,6 +333,17 @@ fn every_database_is_backed_up_and_a_broken_one_does_not_stop_the_rest() {
     // Whether it *is* the same second depends on how fast this machine is, so both answers
     // are accepted; what is not accepted is the first backup being replaced. One database
     // by name is exercised end to end by the test below.
+    //
+    // **The lock the run above took has to be observably gone first**, and that wait is not
+    // politeness. `lock::tests::the_lock_goes_when_the_holder_does` already wrote this down
+    // for macOS: sloop guarantees the lock goes when the handle does, but that the *next*
+    // attempt in the same process sees it gone within zero nanoseconds is a timing property
+    // no operating system promises, and a loaded parallel test run is exactly where it is
+    // not provided. Without the wait this test asked its question of the kernel's scheduling
+    // instead of of `backup`, and answered `7` — which is how `test (ubuntu-latest)` went red
+    // on a commit that had changed nothing about locking.
+    wait_for_the_lock_to_go(&store, "orders");
+
     let again = run(&mut context, Some("orders"), false, Mode::Sequential);
     let after = stored(&store, "orders");
     match again {
