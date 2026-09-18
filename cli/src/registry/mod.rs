@@ -297,7 +297,33 @@ impl Registries {
 
     /// The same, onto a store somebody else opened.
     pub fn onto(store: store::Store, resolution: Resolution, global_dir: &Path) -> Outcome<Self> {
-        let store = std::rc::Rc::new(store);
+        Self::onto_shared(std::rc::Rc::new(store), resolution, global_dir)
+    }
+
+    /// These registries, read again from the same store.
+    ///
+    /// **For `R27a`'s scheduler, which reopens per run the way the menu reopens per job.**
+    /// `backup::run` takes registries by value and a scheduled round may take several backups,
+    /// so each needs its own — and opening a whole new store for each would resolve sloop's own
+    /// password once per backup for no reason.
+    pub fn reopened(&self) -> Outcome<Self> {
+        let store = self
+            .store
+            .as_ref()
+            .ok_or_else(|| Failure::usage("these registries were opened without a database"))?;
+
+        Self::onto_shared(
+            std::rc::Rc::clone(store),
+            self.resolution.clone(),
+            &self.global.dir.clone(),
+        )
+    }
+
+    fn onto_shared(
+        store: std::rc::Rc<store::Store>,
+        resolution: Resolution,
+        global_dir: &Path,
+    ) -> Outcome<Self> {
         let side = |which: store::Which, dir: PathBuf| -> Outcome<Side> {
             // `import_once` is what carries a `registry.toml` from the previous release in.
             // It runs before the read, so the first run on an upgraded machine reads what it

@@ -14,9 +14,11 @@
 use std::time::{Duration, Instant};
 
 use super::watch::{self, Attached, Round};
+use crate::backup::stamp::Stamp;
 use crate::engine::Engine;
 use crate::registry::file::{Database, Registry};
 use crate::registry::store::{Store, Which};
+use crate::registry::{Registries, Resolution};
 use crate::secret::Route;
 use crate::server::cluster_tests::{a_free_port, cluster, stop};
 use crate::server::tests::{Scratch, this_machine_can_keep_a_secret};
@@ -896,5 +898,275 @@ fn activity_screen(global: &std::path::Path, store: &Store) {
         after_detach.detached_with_history,
         vec![String::from("idle")],
         "the history of a detached database vanished from the screen"
+    );
+}
+
+/// **`R27a`'s `Done when`, against a real cluster and a real database.**
+///
+/// *"A database attached to a running service is backed up on its schedule with no cron line
+/// and no scheduled task on the machine; its retention policy is applied and old backups go; a
+/// month of activity reads back out of `bandwidth_day` and agrees with the sum of its days;
+/// every number on the screen says whether it is bytes sloop moved or rows the server counted;
+/// a missed run is caught up and labelled late; a collision with a manual run exits `7`; and
+/// `sloop service status` says when each database last ran and when it runs next."*
+#[test]
+fn the_service_takes_the_backups_and_no_cron_line_exists_anywhere() {
+    let scratch = Scratch::new("scheduler");
+    let global = scratch.path().to_path_buf();
+    let data = crate::server::data_dir(&global);
+
+    if !this_machine_can_keep_a_secret(&global) {
+        return;
+    }
+
+    let Some(ready) = cluster(&global, a_free_port()) else {
+        return;
+    };
+    record::write(&global, &ready.server, &ready.password).expect("it can keep a secret");
+
+    let opened = match own::ensure(
+        &global,
+        &ready.server,
+        &ready.password,
+        &own::Choosing::unsupplied(),
+    ) {
+        Ok(opened) => opened,
+        Err(why) => {
+            stop(&ready.server.bin, &data);
+            panic!("sloop's own database could not be made: {}", why.message());
+        }
+    };
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        schema::migrate(&ready.server, &opened.own, &opened.password)
+            .expect("a fresh database migrates");
+        schema::reconcile_engines(&ready.server, &opened.own, &opened.password)
+            .expect("the engines are recorded");
+
+        let store = Store::open(&global)
+            .expect("the record reads back")
+            .expect("a machine with a record has a store");
+
+        let mut registry = Registry::default();
+        registry.insert(
+            String::from("itself"),
+            Database {
+                engine: Engine::Postgres,
+                host: String::from("127.0.0.1"),
+                port: ready.server.port,
+                database: opened.own.database.clone(),
+                user: opened.own.role.clone(),
+                password: Route::Command(format!("echo {}", opened.password.expose())),
+                reach: crate::ssh::Reach::Direct,
+            },
+        );
+        store
+            .write(&Which::Global, &registry)
+            .expect("the registry is writable");
+        watch::attach(&store, "itself").expect("it attaches");
+
+        scheduling(&global, &store);
+    }));
+
+    stop(&ready.server.bin, &data);
+    let _ = std::fs::remove_dir_all(scratch.path());
+
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn scheduling(global: &std::path::Path, store: &Store) {
+    use crate::service::{schedule, scheduler};
+
+    let backups = global.join("backups").join("postgres").join("itself");
+    let how_many = || std::fs::read_dir(&backups).map_or(0, |entries| entries.flatten().count());
+
+    // 1. **Nothing is scheduled to begin with**, so a round takes no backups at all — an
+    //    attachment is for watching, and backing up is a separate thing somebody asks for.
+    let mut round = Round::at(global);
+    round.turn();
+    assert_eq!(how_many(), 0, "a database with no schedule was backed up");
+
+    // 2. **The key first, and driving this is what found why.** `R11` refuses the first
+    //    encrypted backup until the key has been copied somewhere, and a daemon has no
+    //    terminal to be asked at — so a schedule set on a registry with a fresh key produced
+    //    a backup that never happened, once a round, for ever. `service schedule` refuses on
+    //    the terminal now; here the key is made and marked kept, which is what somebody doing
+    //    `sloop key export` would have left behind.
+    {
+        let mut registries =
+            Registries::open(Resolution::global_only(), global).expect("registries");
+        let vault = registries
+            .vault_in(crate::registry::Scope::Global)
+            .unwrap_or_else(crate::secret::sealed::Vault::nowhere);
+        crate::commands::key::create(&mut registries, crate::registry::Scope::Global, &vault)
+            .expect("a key can be made");
+    }
+    store
+        .run("UPDATE backup_key SET key_kept = 'exported';")
+        .expect("the key is marked as kept");
+
+    // A schedule, keeping two. `every` is long, so nothing fires twice by accident; what
+    // makes the first one happen at once is that a new schedule is due immediately.
+    schedule::set(
+        store,
+        "itself",
+        Some(schedule::Policy {
+            every: std::time::Duration::from_secs(86_400),
+            keep_last: Some(2),
+            keep_for_days: None,
+        }),
+    )
+    .expect("the schedule is writable");
+
+    let owed = schedule::all(store).expect("the schedule reads");
+    assert_eq!(owed.len(), 1);
+    assert!(
+        owed[0].due(Stamp::now()),
+        "a schedule somebody just set is not owed a backup: {:?}",
+        owed[0]
+    );
+
+    // 3. **The backup happens, on the schedule, with no cron line anywhere.** This is the
+    //    `Done when`'s first clause, and the round below is the daemon's own.
+    let mut round = Round::at(global);
+    round.turn();
+    assert_eq!(how_many(), 1, "the scheduled backup did not happen");
+
+    let after = &schedule::all(store).expect("the schedule reads")[0];
+    assert_eq!(after.outcome.as_deref(), Some("succeeded"), "{after:?}");
+    assert_eq!(after.exit_code, Some(0), "{after:?}");
+    assert_eq!(
+        after.was_late,
+        Some(false),
+        "a punctual run was called late"
+    );
+    assert!(after.ran_at.is_some(), "the run was not written down");
+
+    // **`status` says when it last ran and when it runs next** — rule 14, the schedule
+    // checked rather than trusted.
+    let due = after.due_at.expect("a next run");
+    assert!(
+        due > Stamp::now().unix_seconds(),
+        "the next run is not in the future: {after:?}"
+    );
+
+    // 4. **The bytes sloop moved are real bytes**, and they landed in `bandwidth_day` — the
+    //    half of the measures that is exact, kept apart from the rows the server counted.
+    let moved = store
+        .ask("SELECT sum(bytes_in) || ' ' || sum(bytes_out) FROM bandwidth_day;")
+        .expect("the server answers");
+    let mut parts = moved.trim().split(' ');
+    let bytes_in: i64 = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+    let bytes_out: i64 = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+    assert!(bytes_in > 0, "a backup moved no bytes: {moved}");
+    assert_eq!(bytes_out, 0, "a backup was recorded as bytes going out");
+
+    // And the screen says which is which, with the two never added together.
+    let screen = crate::service::activity::read(store).expect("the screen reads");
+    let mine = screen.moved_for("itself").expect("sloop moved something");
+    assert_eq!(i64::from(mine.in_month > 0), 1, "{mine:?}");
+    assert_eq!(mine.out_month, 0, "{mine:?}");
+    assert_eq!(mine.in_month, bytes_in, "the screen and the table disagree");
+
+    // 5. **A month of it reads back and agrees with the sum of its days.** One scan of one
+    //    table, which is what keying it per day bought.
+    let by_day = store
+        .ask(
+            "SELECT sum(bytes_in) FROM (
+               SELECT day, sum(bytes_in) AS bytes_in FROM bandwidth_day
+                WHERE day > (now() AT TIME ZONE 'UTC')::date - 30
+                GROUP BY day
+             ) AS per_day;",
+        )
+        .expect("the server answers");
+    assert_eq!(
+        by_day.trim().parse::<i64>().unwrap_or(-1),
+        bytes_in,
+        "a month and the sum of its days disagree"
+    );
+
+    // 6. **A missed run is caught up and labelled late.** The due time is pushed a week into
+    //    the past, which is a laptop that was asleep — and the next round backs it up and says
+    //    it was late rather than pretending it was on time.
+    store
+        .run("UPDATE monitored_database SET backup_due_at = now() - interval '7 days';")
+        .expect("a week asleep");
+
+    let mut round = Round::at(global);
+    round.turn();
+    assert_eq!(how_many(), 2, "the missed backup was not caught up");
+
+    let caught_up = &schedule::all(store).expect("the schedule reads")[0];
+    assert_eq!(
+        caught_up.was_late,
+        Some(true),
+        "a run a week late was not labelled late: {caught_up:?}"
+    );
+    // **One catch-up, not a hundred and sixty-eight.** The next run is measured from now.
+    assert!(
+        caught_up.due_at.unwrap_or(0) > Stamp::now().unix_seconds(),
+        "a missed run left another one already owed: {caught_up:?}"
+    );
+
+    // 7. **A collision with a manual run exits `7` and stands aside.** `R17`'s lock, from the
+    //    scheduler's side: the backup somebody is already taking is the backup.
+    let held = crate::lock::take(global, "itself", "a manual run").expect("the lock is free");
+    store
+        .run("UPDATE monitored_database SET backup_due_at = now() - interval '1 minute';")
+        .expect("due again");
+
+    let kept = scheduler::round(
+        store,
+        &Registries::open(Resolution::global_only(), global).expect("registries"),
+        &crate::ssh::tunnel::Tunnels::new().expect("tunnels"),
+        global,
+        Stamp::now(),
+    );
+    drop(held);
+
+    let stood_aside = &schedule::all(store).expect("the schedule reads")[0];
+    assert_eq!(
+        stood_aside.exit_code,
+        Some(7),
+        "a collision was not exit 7: {stood_aside:?} — {kept:?}"
+    );
+    assert_eq!(
+        stood_aside.outcome.as_deref(),
+        Some("stood aside — a run was already going"),
+        "{stood_aside:?}"
+    );
+    assert_eq!(how_many(), 2, "a locked run took a backup anyway");
+
+    // 8. **The retention policy is applied and old backups go.** Two are kept, so a third run
+    //    leaves two rather than three.
+    store
+        .run("UPDATE monitored_database SET backup_due_at = now() - interval '1 minute';")
+        .expect("due again");
+    let mut round = Round::at(global);
+    round.turn();
+    assert_eq!(
+        how_many(),
+        2,
+        "the retention policy kept more than the two it was asked to"
+    );
+
+    // 9. And turning it off stops all of it, while the database stays attached and sampled.
+    schedule::set(store, "itself", None).expect("it turns off");
+    store
+        .run("UPDATE monitored_database SET backup_due_at = now() - interval '1 day';")
+        .expect("due, if anything were scheduled");
+
+    let mut round = Round::at(global);
+    round.turn();
+    assert_eq!(how_many(), 2, "a database with no schedule was backed up");
+    assert!(
+        watch::attachments(store)
+            .expect("the list reads")
+            .iter()
+            .any(|one| one.label == "itself"),
+        "turning the schedule off detached it"
     );
 }

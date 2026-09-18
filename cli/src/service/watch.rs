@@ -101,6 +101,11 @@ struct RawAttachment {
     /// Seconds since the epoch. The column is `TIMESTAMPTZ`; what crosses the wire is an
     /// integer, so no timezone rendering happens anywhere but in [`Stamp::local`] — which is
     /// the rule the whole project follows about what a human is shown.
+    ///
+    /// **`floor`, and it is not decoration.** `extract(epoch …)::bigint` *rounds*, so a moment
+    /// at `x.7` seconds reads back as `x + 1` — a moment in the future. `R27a` found it the
+    /// hard way: a schedule set to be due *now* came back due a second from now and was not
+    /// owed a backup. Every one of these conversions floors for that reason.
     attached_at: i64,
     seen_at: Option<i64>,
     days: i64,
@@ -190,8 +195,8 @@ pub fn attachments(store: &Store) -> Outcome<Vec<Attachment>> {
         "SELECT coalesce(json_agg(json_build_object(
                   'label',       d.label,
                   'enabled',     m.enabled,
-                  'attached_at', extract(epoch FROM m.attached_at)::bigint,
-                  'seen_at',     extract(epoch FROM m.seen_at)::bigint,
+                  'attached_at', floor(extract(epoch FROM m.attached_at))::bigint,
+                  'seen_at',     floor(extract(epoch FROM m.seen_at))::bigint,
                   'days',        (SELECT count(*) FROM bandwidth_day b
                                    WHERE b.registered_database_id = d.id)
                 ) ORDER BY d.label), '[]')
@@ -216,7 +221,7 @@ pub fn attachments(store: &Store) -> Outcome<Vec<Attachment>> {
 /// When the daemon last said it was here, or `None` if it never has.
 pub fn last_seen(store: &Store) -> Outcome<Option<Stamp>> {
     let said = store.ask(&format!(
-        "SELECT coalesce(extract(epoch FROM last_seen_at)::bigint::text, '')
+        "SELECT coalesce(floor(extract(epoch FROM last_seen_at))::bigint::text, '')
            FROM service WHERE name = {service};",
         service = service_name(),
     ))?;
@@ -439,14 +444,36 @@ impl Round {
 
         // **`R26`.** The list is read first and sampled second, so a database attached a
         // moment ago is read on the same round it is picked up on.
-        if let Some(tunnels) = self.tunnels.as_ref() {
-            let taken = super::sample::round(&store, &registries, tunnels, &self.store, &watching);
+        if let Some(tunnels) = self.tunnels.take() {
+            let taken = super::sample::round(&store, &registries, &tunnels, &self.store, &watching);
             // **Said with the failures, because they are the same kind of thing**: something
             // about a database that a person could act on, and that is worth exactly one line
             // however many months this process runs for.
             let mut worth_saying = taken.missed.clone();
             worth_saying.extend(taken.notes);
             self.grumble_about_the_ones_that_would_not_answer(&worth_saying);
+
+            // **`R27a`, and after the sampling on purpose.** A backup moves a great deal of
+            // data, and doing it before the reading would attribute its own traffic to the
+            // database rather than to sloop. Every line it produces is said, not deduped:
+            // a backup is an event, and two identical lines a day apart are two backups.
+            for line in super::scheduler::round(
+                &store,
+                &registries,
+                &tunnels,
+                &self.store,
+                crate::backup::stamp::Stamp::now(),
+            )
+            .said
+            {
+                crate::note!("sloop service: {line}");
+            }
+
+            // **Taken out and put back rather than borrowed**, because both halves of the
+            // round want `&mut self` for what they say and the forwards have to outlive the
+            // round: dropping them would close every SSH tunnel once a minute, which is the
+            // one thing `R19e` built them to stop.
+            self.tunnels = Some(tunnels);
         } else if !watching.is_empty() {
             self.grumble_about_the_ones_that_would_not_answer(&[String::from(
                 "no samples: sloop could not prepare to open an SSH forward on this machine",

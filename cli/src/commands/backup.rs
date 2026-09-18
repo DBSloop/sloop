@@ -417,6 +417,24 @@ fn one(
 
     match outcome {
         Ok(manifest) => {
+            // **`R27a`: the one figure in this tool that really is bytes.** sloop read this
+            // dump, so it knows exactly how many — unlike anything about traffic on the wire,
+            // which no engine reports per database. Recorded here rather than in the
+            // scheduler, because a backup taken by hand moved exactly as many bytes as one
+            // the service took and the screen answers about both.
+            //
+            // Best effort: a machine whose store cannot be written to has just taken a
+            // backup, and failing it to record a statistic would be the tail wagging the dog.
+            if let Some(store) = context.registries.store() {
+                let _ = crate::service::traffic::moved(
+                    store,
+                    scope,
+                    name,
+                    i64::try_from(manifest.dump.bytes).unwrap_or(0),
+                    0,
+                );
+            }
+
             // **The swap is the last thing that happens, and only now.** Everything above
             // wrote into `latest.writing`, so up to this line the previous copy is still
             // the one at `latest` and still complete — which is what makes a `--replace`

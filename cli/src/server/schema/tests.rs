@@ -413,6 +413,8 @@ fn the_column_scan_actually_reads_the_migrations() {
         // `0008`, which does both in one file: a table and three columns on another.
         ("activity_hour", "rows_in"),
         ("monitored_database", "counted_rows_in"),
+        // `0009`, which is all columns and no table.
+        ("monitored_database", "backup_every_seconds"),
     ] {
         assert!(
             columns

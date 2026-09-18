@@ -27,7 +27,7 @@ use crate::backup::stamp::Stamp;
 use crate::failure::Outcome;
 use crate::registry::store::Store;
 
-use super::watch;
+use super::{traffic, watch};
 
 /// Seconds in a day, for the local midnight the windows are measured from.
 const DAY: i64 = 86_400;
@@ -89,6 +89,38 @@ impl Activity {
     }
 }
 
+/// What sloop itself moved for one database — `R27a`, and really bytes.
+///
+/// **Kept apart from [`Activity`] on purpose.** These are exact, because sloop read or wrote
+/// them; those are rows the server counted, because per-database bytes on the wire do not
+/// exist. Adding the two together would produce the one dishonest number in this tool, and two
+/// types is the cheapest way to make that impossible rather than merely discouraged.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Moved {
+    /// What it is registered as.
+    pub label: String,
+    /// Dumps read today, in bytes.
+    pub in_today: i64,
+    /// Restores written today.
+    pub out_today: i64,
+    /// The last seven days.
+    pub in_week: i64,
+    /// The same.
+    pub out_week: i64,
+    /// The last thirty.
+    pub in_month: i64,
+    /// The same.
+    pub out_month: i64,
+}
+
+impl Moved {
+    /// Has sloop moved anything at all for this database?
+    #[must_use]
+    pub const fn anything(&self) -> bool {
+        self.in_month > 0 || self.out_month > 0
+    }
+}
+
 /// Everything the activity screen shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recorded {
@@ -101,6 +133,16 @@ pub struct Recorded {
     pub detached_with_history: Vec<String>,
     /// When the daemon last read the attachment list, if it ever has.
     pub last_seen: Option<Stamp>,
+    /// What sloop itself moved, per database — real bytes, and never mixed with the rows.
+    pub moved: Vec<Moved>,
+}
+
+impl Recorded {
+    /// What sloop moved for one database.
+    #[must_use]
+    pub fn moved_for(&self, label: &str) -> Option<&Moved> {
+        self.moved.iter().find(|one| one.label == label)
+    }
 }
 
 /// Read it all back.
@@ -115,6 +157,7 @@ pub fn read(store: &Store) -> Outcome<Recorded> {
         databases,
         detached_with_history,
         last_seen: watch::last_seen(store)?,
+        moved: store.json(traffic::MOVED_BY_DATABASE)?,
     })
 }
 
@@ -162,12 +205,12 @@ fn query(now: Stamp, midnight: Stamp) -> String {
                                   WHERE a.registered_database_id = d.id
                                     AND a.size_bytes IS NOT NULL
                                   ORDER BY a.hour DESC LIMIT 1),
-                  'size_at', (SELECT extract(epoch FROM a.hour)::bigint FROM activity_hour a
+                  'size_at', (SELECT floor(extract(epoch FROM a.hour))::bigint FROM activity_hour a
                                WHERE a.registered_database_id = d.id
                                  AND a.size_bytes IS NOT NULL
                                ORDER BY a.hour DESC LIMIT 1),
-                  'attached_at', extract(epoch FROM m.attached_at)::bigint,
-                  'seen_at', extract(epoch FROM m.seen_at)::bigint
+                  'attached_at', floor(extract(epoch FROM m.attached_at))::bigint,
+                  'seen_at', floor(extract(epoch FROM m.seen_at))::bigint
                 ) ORDER BY d.label), '[]')
            FROM monitored_database m, service s, registered_database d
           WHERE m.service_id = s.id AND s.name = 'sloop' AND m.enabled

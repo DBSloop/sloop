@@ -186,6 +186,8 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
         crate::say!("  {}", style::dim(&line));
     }
 
+    record_what_it_moved(context, scope, name, manifest.dump.bytes);
+
     crate::report::result(serde_json::json!({
         "name": name,
         "destination": target.describe(),
@@ -195,6 +197,23 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
         "tables": comparison.as_json(),
     }));
     Ok(comparison.exit())
+}
+
+/// **`R27a`: a restore being written is bytes out**, and sloop wrote them, so the figure is
+/// exact — unlike anything about traffic on the wire, which no engine reports per database.
+///
+/// Best effort, for the reason the backup side gives: the restore has already landed, and
+/// failing it to record a statistic would be the tail wagging the dog.
+fn record_what_it_moved(context: &Context<'_>, scope: Scope, name: &str, bytes: u64) {
+    if let Some(store) = context.registries.store() {
+        let _ = crate::service::traffic::moved(
+            store,
+            scope,
+            name,
+            0,
+            i64::try_from(bytes).unwrap_or(0),
+        );
+    }
 }
 
 /// The engine a backup came from has to be the engine it is going into.

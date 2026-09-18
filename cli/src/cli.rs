@@ -472,6 +472,33 @@ pub enum ServiceCommand {
     /// Stop it now. It still starts again at the next boot.
     Stop,
 
+    /// Back this database up on a schedule, with no cron line anywhere.
+    ///
+    /// The service takes the backup, applies the retention policy and prunes what falls
+    /// outside it. Nothing is written to crontab, Task Scheduler or systemd timers — the
+    /// schedule is a row sloop's own database holds, and `sloop service status` says when
+    /// each database last ran and when it runs next.
+    Schedule {
+        /// The name it is registered under in the global registry. It has to be attached.
+        name: String,
+
+        /// How often: `30m`, `6h`, `1d`, `2w`. The same spelling `--older-than` takes.
+        #[arg(long, value_name = "INTERVAL", conflicts_with = "off")]
+        every: Option<String>,
+
+        /// Keep this many of the newest backups, and prune the rest.
+        #[arg(long, value_name = "COUNT", conflicts_with = "off")]
+        keep: Option<usize>,
+
+        /// Prune anything older than this many days.
+        #[arg(long, value_name = "DAYS", conflicts_with = "off")]
+        keep_for_days: Option<u32>,
+
+        /// Stop backing it up. It stays attached and stays sampled.
+        #[arg(long)]
+        off: bool,
+    },
+
     /// What the service has recorded: rows in, rows out and size, by day, week and month.
     ///
     /// **Rows, not bytes.** No engine reports bytes per database — PostgreSQL counts rows,
@@ -1192,6 +1219,7 @@ impl ServiceCommand {
             Self::Uninstall => "service uninstall",
             Self::Attach { .. } => "service attach",
             Self::Detach { .. } => "service detach",
+            Self::Schedule { .. } => "service schedule",
             Self::Activity => "service activity",
             Self::Start => "service start",
             Self::Stop => "service stop",

@@ -23,6 +23,7 @@ use crate::failure::{Failure, Outcome};
 use crate::registry::locations::Locations;
 use crate::registry::store::Store;
 use crate::service::mechanism::{Mechanism, State};
+use crate::service::schedule;
 use crate::service::unit::Definition;
 use crate::service::watch::{self, Attached, Attachment};
 use crate::service::{credentials, daemon, key, manage};
@@ -44,6 +45,24 @@ pub fn run(locations: &Locations, command: &ServiceCommand) -> Outcome<Exit> {
         // `R27`. Reading what was recorded needs the store and not the service manager, so a
         // machine whose service is stopped still answers about the months before it stopped.
         ServiceCommand::Activity => return super::activity::run(locations),
+        ServiceCommand::Schedule {
+            name,
+            every,
+            keep,
+            keep_for_days,
+            off,
+        } => {
+            return schedule(
+                locations,
+                name,
+                &Asked {
+                    every: every.as_deref(),
+                    keep: *keep,
+                    keep_for_days: *keep_for_days,
+                    off: *off,
+                },
+            );
+        }
         _ => {}
     }
 
@@ -85,7 +104,8 @@ pub fn run(locations: &Locations, command: &ServiceCommand) -> Outcome<Exit> {
         ServiceCommand::Run { .. }
         | ServiceCommand::Attach { .. }
         | ServiceCommand::Detach { .. }
-        | ServiceCommand::Activity => unreachable!("handled above"),
+        | ServiceCommand::Activity
+        | ServiceCommand::Schedule { .. } => unreachable!("handled above"),
     }
 }
 
@@ -296,6 +316,165 @@ fn detach(locations: &Locations, name: &str) -> Outcome<Exit> {
     Ok(Exit::Success)
 }
 
+/// What `service schedule` was asked for.
+pub struct Asked<'a> {
+    /// How often, as typed.
+    pub every: Option<&'a str>,
+    /// Keep this many of the newest.
+    pub keep: Option<usize>,
+    /// Prune anything older than this many days.
+    pub keep_for_days: Option<u32>,
+    /// Stop backing it up.
+    pub off: bool,
+}
+
+/// Set, change or clear one database's backup schedule.
+///
+/// **`R27a`'s whole point, in one command.** The schedule is a row, not a crontab line — and
+/// what somebody types here is the same vocabulary `backups prune` already takes, because
+/// learning a second spelling for the same idea is a cost with nothing on the other side.
+fn schedule(locations: &Locations, name: &str, asked: &Asked<'_>) -> Outcome<Exit> {
+    let store = Store::require(&crate::registry::adopt::global(locations)?)?;
+
+    // The name has to be attached: a schedule on a database the service is not watching is a
+    // backup that will never be taken, and silently accepting one would be the worst kind of
+    // working.
+    let attached = watch::attachments(&store)?;
+    if !attached.iter().any(|one| one.label == name) {
+        return Err(Failure::usage(format!(
+            "{name} is not attached to the service, so nothing would take its backups"
+        ))
+        .hint(format!(
+            "`sloop service attach {name}` first — `sloop service status` lists what is attached"
+        )));
+    }
+
+    if asked.off {
+        if crate::report::would(&format!("stop backing {name} up on a schedule")) {
+            return Ok(Exit::Success);
+        }
+        schedule::set(&store, name, None)?;
+        crate::report::result(serde_json::json!({ "scheduled": name, "off": true }));
+        crate::say!(
+            "{} {}",
+            style::heading("Stopped."),
+            style::dim(&format!(
+                "{name} is still attached and still sampled — nothing backs it up now"
+            ))
+        );
+        return Ok(Exit::Success);
+    }
+
+    let Some(every) = asked.every else {
+        return Err(
+            Failure::usage("a schedule needs to know how often").hint(
+                "`--every 1d` is once a day, `--every 6h` is four times a day, and `--off`                  stops it",
+            ),
+        );
+    };
+
+    // **The key has to have been kept before a schedule is worth setting**, and this is the
+    // only moment there is a terminal to say so at.
+    //
+    // Driving `R27a` is what found it: `R11` refuses the first encrypted backup until the key
+    // has been exported or explicitly declined, and a service has no terminal — so a schedule
+    // set on a registry with a fresh key would have produced a backup that never happened, once
+    // a minute, for ever. Refusing here is refusing in the one place somebody can do something
+    // about it. See "The service could never take its first backup" in
+    // `docs/OWNER-DECISIONS.md`.
+    key_has_been_kept(locations)?;
+
+    let policy = schedule::Policy {
+        every: schedule::every_from(every)?,
+        keep_last: asked.keep,
+        keep_for_days: asked.keep_for_days,
+    };
+
+    if crate::report::would(&format!(
+        "back {name} up {}",
+        schedule::every_reads_as(policy.every)
+    )) {
+        return Ok(Exit::Success);
+    }
+
+    schedule::set(&store, name, Some(policy))?;
+    crate::report::result(serde_json::json!({
+        "scheduled": name,
+        "every_seconds": policy.every.as_secs(),
+        "keep_last": policy.keep_last,
+        "keep_for_days": policy.keep_for_days,
+    }));
+
+    crate::say!(
+        "{} {}",
+        style::heading("Scheduled."),
+        style::dim(&format!(
+            "{name} is backed up {}",
+            schedule::every_reads_as(policy.every)
+        ))
+    );
+    crate::say!(
+        "  {}",
+        style::dim(&match (policy.keep_last, policy.keep_for_days) {
+            (None, None) => String::from(
+                "nothing is pruned — `--keep 7` or `--keep-for-days 30` sets a retention policy"
+            ),
+            (Some(keep), None) => format!("the newest {keep} are kept, the rest are pruned"),
+            (None, Some(days)) => format!("anything older than {days} days is pruned"),
+            (Some(keep), Some(days)) =>
+                format!("the newest {keep} are kept, and anything older than {days} days is pruned"),
+        })
+    );
+    crate::say!(
+        "  {}",
+        style::dim("no cron line, no scheduled task — the service takes it")
+    );
+
+    not_running_yet();
+    Ok(Exit::Success)
+}
+
+/// Refuse a schedule while the backup key is still only on this machine.
+///
+/// **A registry with no key at all is fine**: the first scheduled backup makes one, and the
+/// same refusal fires then — but it fires inside the daemon, where nobody can answer it. So the
+/// question is asked here, where somebody is standing: has this registry a key, and has it been
+/// copied anywhere?
+fn key_has_been_kept(locations: &Locations) -> Outcome<()> {
+    let global = crate::registry::adopt::global(locations)?;
+    let registries =
+        crate::registry::Registries::open(crate::registry::Resolution::global_only(), &global)?;
+
+    let kept = registries
+        .in_scope(crate::registry::Scope::Global)
+        .and_then(|registry| registry.encryption())
+        .map(|encryption| encryption.key_kept.is_some());
+
+    match kept {
+        // A key that has been exported, or one somebody was told the cost of and kept anyway.
+        Some(true) => Ok(()),
+        // There is a key and nobody has copied it. `R11`'s refusal, moved to where it can be
+        // answered.
+        Some(false) => Err(Failure::usage(
+            "this registry's backup key has not been copied anywhere yet, and a scheduled \
+             backup has no terminal to ask at",
+        )
+        .hint(
+            "`sloop key export > backup-key.txt` writes it out — keep that somewhere other \
+             than this machine, then set the schedule again",
+        )),
+        // No key yet. The first backup would make one and then refuse, inside a daemon.
+        None => Err(Failure::usage(
+            "this registry has no backup key yet, and the first scheduled backup would make \
+             one and then stop to ask about it with no terminal to ask at",
+        )
+        .hint(
+            "`sloop backup <name>` once by hand makes the key and asks the question, or \
+             `sloop key export` makes it and writes it out",
+        )),
+    }
+}
+
 /// A line, when there is no service to pick an attachment up.
 ///
 /// Not a failure and not a warning: attaching before installing is an ordinary order to do
@@ -369,7 +548,7 @@ fn status(locations: &Locations, mechanism: Mechanism) -> Exit {
 /// about systemd. So every way this can go wrong becomes a dim line and the exit code stays
 /// `0`.
 fn watching(locations: &Locations, running: bool) {
-    let (attachments, last_seen) = match read(locations) {
+    let (attachments, last_seen, schedules) = match read(locations) {
         Ok(Some(both)) => both,
         // **`null`, not `[]`, and the difference is the whole point.** An empty list means
         // nothing is attached; a null means sloop could not find out. A monitoring script that
@@ -396,6 +575,25 @@ fn watching(locations: &Locations, running: bool) {
         }
     };
 
+    let schedule_json = |label: &str| {
+        schedules
+            .iter()
+            .find(|one| one.label == label)
+            .and_then(|one| {
+                let policy = one.policy()?;
+                Some(serde_json::json!({
+                    "every_seconds": policy.every.as_secs(),
+                    "keep_last": policy.keep_last,
+                    "keep_for_days": policy.keep_for_days,
+                    "last_run_at": one.ran_stamp().map(|at| at.local().iso()),
+                    "next_run_at": one.due_stamp().map(|at| at.local().iso()),
+                    "last_outcome": one.outcome,
+                    "last_exit_code": one.exit_code,
+                    "last_was_late": one.was_late,
+                }))
+            })
+    };
+
     crate::report::result(serde_json::json!({
         "running": running,
         "last_seen": last_seen.map(|stamp| stamp.local().iso()),
@@ -406,6 +604,7 @@ fn watching(locations: &Locations, running: bool) {
                 "attached_at": one.attached_at.local().iso(),
                 "seen_at": one.seen_at.map(|stamp| stamp.local().iso()),
                 "days_of_history": one.days_of_history,
+                "schedule": schedule_json(&one.label),
             }))
             .collect::<Vec<_>>(),
     }));
@@ -423,6 +622,12 @@ fn watching(locations: &Locations, running: bool) {
 
     for one in &attachments {
         crate::say!("  {}", line_for(one));
+
+        // **Rule 14: the schedule is checked, not trusted.** A schedule that has silently
+        // stopped is visible here rather than being discovered by the backup nobody took.
+        if let Some(scheduled) = schedules.iter().find(|s| s.label == one.label) {
+            crate::say!("  {}", style::dim(&schedule_line(scheduled)));
+        }
     }
 
     if attachments.is_empty() {
@@ -448,7 +653,11 @@ fn watching(locations: &Locations, running: bool) {
 /// **Both in one function so `status` opens the store once.** `Ok(None)` is "there is nothing
 /// to read from", which is every machine before `sloop setup` and is not an error; `Err` is a
 /// store that exists and would not answer, which is.
-type Watched = (Vec<Attachment>, Option<crate::backup::stamp::Stamp>);
+type Watched = (
+    Vec<Attachment>,
+    Option<crate::backup::stamp::Stamp>,
+    Vec<schedule::Scheduled>,
+);
 
 fn read(locations: &Locations) -> Outcome<Option<Watched>> {
     let global = crate::registry::adopt::global(locations)?;
@@ -461,7 +670,43 @@ fn read(locations: &Locations) -> Outcome<Option<Watched>> {
     Ok(Some((
         watch::attachments(&store)?,
         watch::last_seen(&store)?,
+        schedule::all(&store)?,
     )))
+}
+
+/// What a database's schedule is doing, in one line under it.
+///
+/// **Last and next, because they answer different questions.** Rule 14 asks that a schedule be
+/// checked rather than trusted, and *"it ran at 3am"* does not say whether the next one is due
+/// in an hour or was due yesterday.
+fn schedule_line(scheduled: &schedule::Scheduled) -> String {
+    let Some(policy) = scheduled.policy() else {
+        return String::from("    no backup schedule — `sloop service schedule <name> --every 1d`");
+    };
+
+    let last = match (scheduled.ran_stamp(), scheduled.outcome.as_deref()) {
+        (Some(when), Some(outcome)) => format!(
+            "last {} {}{}",
+            when.local().readable(),
+            outcome,
+            if scheduled.was_late == Some(true) {
+                " (late)"
+            } else {
+                ""
+            }
+        ),
+        _ => String::from("never run"),
+    };
+
+    let next = scheduled.due_stamp().map_or_else(
+        || String::from("no next run"),
+        |when| format!("next {}", when.local().readable()),
+    );
+
+    format!(
+        "    backed up {} · {last} · {next}",
+        schedule::every_reads_as(policy.every)
+    )
 }
 
 /// One attachment, as one line.

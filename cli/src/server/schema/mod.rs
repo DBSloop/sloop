@@ -28,7 +28,9 @@
 //! columns on `registered_database` — the SSH server a database is reached through, when it is
 //! reached through one. `0007` puts one on `monitored_database`, the moment the running service
 //! last read that attachment. `0008` adds `activity_hour` and three more columns beside that
-//! one, holding where the last reading got to so a delta survives a restart.
+//! one, holding where the last reading got to so a delta survives a restart. `0009` adds nine
+//! more to that same table: the backup schedule the service keeps, which is what makes a cron
+//! line unnecessary.
 //!
 //! **No user data, ever.** What is stored is about *databases* — their addresses, their
 //! sizes, their row counts, how long a dump took. Not one column holds anything that was
@@ -134,6 +136,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "activity",
         sql: include_str!("migrations/0008_activity.sql"),
     },
+    Migration {
+        version: 9,
+        name: "schedule",
+        sql: include_str!("migrations/0009_schedule.sql"),
+    },
 ];
 
 /// The documented way in to one table.
@@ -235,9 +242,11 @@ pub const READINGS: &[Reading] = &[
     },
     Reading {
         table: "monitored_database",
-        purpose: "which databases are attached to the service, and when a running service \
-                  last read each attachment — NULL until one has picked it up",
-        sql: "SELECT s.name AS service, d.label, m.enabled, m.attached_at, m.seen_at
+        purpose: "which databases are attached to the service, when a running service last \
+                  read each attachment, and the backup schedule it keeps for each",
+        sql: "SELECT s.name AS service, d.label, m.enabled, m.attached_at, m.seen_at,
+                     m.backup_every_seconds, m.keep_last, m.keep_for_days,
+                     m.backup_due_at, m.backup_ran_at, m.backup_outcome, m.backup_was_late
                 FROM monitored_database m
                 JOIN service s ON s.id = m.service_id
                 JOIN registered_database d ON d.id = m.registered_database_id

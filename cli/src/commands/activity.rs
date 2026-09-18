@@ -17,7 +17,7 @@ use crate::exit::Exit;
 use crate::failure::Outcome;
 use crate::registry::locations::Locations;
 use crate::registry::store::Store;
-use crate::service::activity::{self, Activity, Recorded, Window};
+use crate::service::activity::{self, Activity, Moved, Recorded, Window};
 use crate::style;
 
 /// Show it, for a command line that has to work out where the store is.
@@ -55,15 +55,15 @@ fn say(recorded: &Recorded) {
 
     for database in &recorded.databases {
         crate::say!("");
-        one(database);
+        one(database, recorded.moved_for(&database.label));
     }
 
     crate::say!("");
     crate::say!(
         "  {}",
         style::dim(
-            "rows are what the server counted, not bytes on the wire — no engine reports \
-             bytes per database"
+            "rows are what the server counted; Moved is real bytes sloop read or wrote. \
+             Nothing here is bytes on the wire — no engine reports those per database."
         )
     );
     crate::say!(
@@ -91,7 +91,7 @@ fn say(recorded: &Recorded) {
 }
 
 /// One database, and its three windows.
-fn one(database: &Activity) {
+fn one(database: &Activity, moved: Option<&Moved>) {
     crate::say!("{}", style::paint(&database.label));
 
     if !database.ever_watched() {
@@ -132,6 +132,19 @@ fn one(database: &Activity) {
             _ => style::dim("not recorded yet"),
         }
     );
+
+    // **`R27a`: the half that really is bytes, and it says so.** sloop read the dump and wrote
+    // the restore, so it knows exactly how many — which is why this is a line of its own under
+    // a word of its own rather than a column beside the rows. The two are never added together.
+    if let Some(moved) = moved.filter(|moved| moved.anything()) {
+        crate::say!(
+            "  {} {} in · {} out {}",
+            style::label("Moved  "),
+            describe_bytes(u64::try_from(moved.in_month).unwrap_or(0)),
+            describe_bytes(u64::try_from(moved.out_month).unwrap_or(0)),
+            style::dim("· real bytes sloop moved, over 30 days")
+        );
+    }
 }
 
 /// One window, as one phrase.
@@ -194,7 +207,7 @@ fn as_json(recorded: &Recorded) -> serde_json::Value {
 
     serde_json::json!({
         // Said in the document too, so nothing downstream has to guess what the numbers are.
-        "measures": "rows counted by the server, and size on disk. Never bytes on the wire.",
+        "measures": "rows and size are the server's own counters; moved is real bytes sloop read or wrote. Nothing is bytes on the wire.",
         "last_seen": recorded.last_seen.map(|stamp| stamp.local().iso()),
         "detached_with_history": recorded.detached_with_history,
         "databases": recorded
@@ -209,6 +222,14 @@ fn as_json(recorded: &Recorded) -> serde_json::Value {
                 "size_at": database.size_taken_at().map(|stamp| stamp.local().iso()),
                 "attached_at": Stamp::from_unix_seconds(database.attached_at).local().iso(),
                 "seen_at": database.seen_at.map(|at| Stamp::from_unix_seconds(at).local().iso()),
+                "moved_bytes": recorded.moved_for(&database.label).map(|moved| serde_json::json!({
+                    "in_today": moved.in_today,
+                    "out_today": moved.out_today,
+                    "in_week": moved.in_week,
+                    "out_week": moved.out_week,
+                    "in_month": moved.in_month,
+                    "out_month": moved.out_month,
+                })),
             }))
             .collect::<Vec<_>>(),
     })
