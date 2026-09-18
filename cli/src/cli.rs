@@ -428,7 +428,15 @@ pub enum ServiceCommand {
         /// Every round reads the attachment list and takes one reading of each database on
         /// it. Shorter means finer numbers and more connections; longer means fewer. It is
         /// written into the service definition, so changing it means installing again.
-        #[arg(long, value_name = "SECONDS", default_value_t = 60)]
+        ///
+        /// The default comes from `daemon` rather than being typed here, so the number in
+        /// `--help` and the number the daemon falls back to cannot drift apart — and so the
+        /// constant is used on every platform rather than only the one whose branch reads it.
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            default_value_t = crate::service::daemon::INTERVAL_SECONDS
+        )]
         interval: u64,
     },
 
@@ -482,7 +490,11 @@ pub enum ServiceCommand {
         store: Option<std::path::PathBuf>,
 
         /// Seconds between rounds, as `install` settled it.
-        #[arg(long, value_name = "SECONDS", default_value_t = 60)]
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            default_value_t = crate::service::daemon::INTERVAL_SECONDS
+        )]
         interval: u64,
     },
 }
