@@ -16,17 +16,37 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use super::tests::Scratch;
 use super::{Origin, make, own, record, schema};
 
 /// A port per test, and none of them 5433: a developer running these should never collide
-/// with the cluster their own `sloop setup` made, and cargo runs these three at once.
-const MADE_PORT: u16 = 55987;
-const AUTH_PORT: u16 = 55988;
-const AGAIN_PORT: u16 = 55989;
-const OWN_PORT: u16 = 55990;
-const SCHEMA_PORT: u16 = 55991;
+/// with the cluster their own `sloop setup` made, and cargo runs these at once.
+///
+/// **Below 32768, and taken only after it has been proved free.** These used to be fixed
+/// constants in the 55,900s, and CI went red on `could not bind IPv4 address "127.0.0.1":
+/// Address already in use` for a port no test was using — because Linux hands out
+/// 32768–60999 as *ephemeral* ports, so any outbound connection the suite itself makes can
+/// be sitting on one of them when a cluster tries to bind it. Windows and macOS both start
+/// their range at 49152, so nothing under 32768 is ever handed out that way.
+///
+/// The range is the belt and [`a_free_port`] is the braces, which is what
+/// `mysql_cluster_tests` has always done and what this file should have been doing: two test
+/// binaries running at once still have to agree, and only asking the operating system can
+/// settle that.
+static NEXT_PORT: AtomicU16 = AtomicU16::new(24_101);
+
+/// A port in this file's block that nothing is listening on.
+fn a_free_port() -> u16 {
+    for _ in 0..200 {
+        let port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    panic!("no free port in the range these tests use");
+}
 
 /// The variable that says which PostgreSQL to build the cluster out of, shared with the
 /// engine's own cluster tests so one machine sets one variable.
@@ -179,7 +199,7 @@ fn a_cluster_is_made_started_and_closed_behind_a_password() {
     let global = scratch.path().to_path_buf();
     let data = super::data_dir(&global);
 
-    let Some(ready) = cluster(&global, MADE_PORT) else {
+    let Some(ready) = cluster(&global, a_free_port()) else {
         return;
     };
 
@@ -256,12 +276,13 @@ fn the_password_opens_it_and_an_empty_one_does_not() {
     let global = scratch.path().to_path_buf();
     let data = super::data_dir(&global);
 
-    let Some(ready) = cluster(&global, AUTH_PORT) else {
+    let port = a_free_port();
+    let Some(ready) = cluster(&global, port) else {
         return;
     };
 
     let password = ready.password.expose().to_owned();
-    let at = |secret: Option<&str>| connect_with(&ready.server.bin, AUTH_PORT, secret, "SELECT 1;");
+    let at = |secret: Option<&str>| connect_with(&ready.server.bin, port, secret, "SELECT 1;");
 
     let (ok, said) = at(Some(&password));
     assert!(ok, "the generated password should open it: {said}");
@@ -289,7 +310,8 @@ fn a_cluster_that_is_already_there_is_never_initialised_over() {
     let global = scratch.path().to_path_buf();
     let data = super::data_dir(&global);
 
-    let Some(ready) = cluster(&global, AGAIN_PORT) else {
+    let port = a_free_port();
+    let Some(ready) = cluster(&global, port) else {
         return;
     };
     let bin = ready.server.bin.clone();
@@ -299,7 +321,7 @@ fn a_cluster_that_is_already_there_is_never_initialised_over() {
 
     // A second attempt with no record beside it — `server.toml` deleted, or a Setup that
     // stopped halfway. It is refused, and the cluster is exactly as it was.
-    let failure = make::with_binaries(&global, bin, AGAIN_PORT)
+    let failure = make::with_binaries(&global, bin, port)
         .expect_err("an existing cluster with no record is not something to overwrite");
     assert_eq!(failure.exit().code(), 2);
     assert!(
@@ -334,7 +356,7 @@ fn sloops_own_database_is_made_once_and_reopened_with_nothing_typed() {
         return;
     }
 
-    let Some(ready) = cluster(&global, OWN_PORT) else {
+    let Some(ready) = cluster(&global, a_free_port()) else {
         return;
     };
     record::write(&global, &ready.server, &ready.password).expect("it can keep a secret");
@@ -583,7 +605,7 @@ fn the_schema_migrates_forwards_from_nothing_and_from_a_release_older() {
         return;
     }
 
-    let Some(ready) = cluster(&global, SCHEMA_PORT) else {
+    let Some(ready) = cluster(&global, a_free_port()) else {
         return;
     };
     record::write(&global, &ready.server, &ready.password).expect("it can keep a secret");

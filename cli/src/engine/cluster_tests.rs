@@ -16,8 +16,26 @@ use super::postgres::{Postgres, Tools};
 use super::{Adapter, Cell, Engine, Reading, Target, Version};
 use crate::secret::Secret;
 
-/// High enough to be out of the way, and stepped per cluster so two tests never collide.
-static NEXT_PORT: AtomicU16 = AtomicU16::new(55_431);
+/// Out of the way, and stepped per cluster so two tests never collide.
+///
+/// **Below 32768**, for the reason `server::cluster_tests` gives at its own ports: 32768 and
+/// up is the ephemeral range on Linux, so a fixed port in it can be taken by an outbound
+/// connection the suite itself made. Its own block, so the three harnesses cannot overlap.
+///
+/// The range is the belt and [`a_free_port`] is the braces: two test binaries running at
+/// once still have to agree, and only asking the operating system can settle that.
+static NEXT_PORT: AtomicU16 = AtomicU16::new(24_201);
+
+/// A port in this file's block that nothing is listening on.
+fn a_free_port() -> u16 {
+    for _ in 0..200 {
+        let port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    panic!("no free port in the range these tests use");
+}
 
 /// Deliberately awful, and different for each role — the point of two roles is that a dump
 /// and a restore each use their own credentials.
@@ -49,7 +67,7 @@ impl Cluster {
         announce(&binaries);
         sweep_stale_clusters(&binaries);
 
-        let port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
+        let port = a_free_port();
         let root =
             std::env::temp_dir().join(format!("sloop-pg-{}-{label}-{port}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);

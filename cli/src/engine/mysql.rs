@@ -291,19 +291,19 @@ impl MysqlFamily {
     /// `max_statement_time`, in seconds, and applies it to everything. This is exactly the
     /// kind of difference [`Family`] exists for.
     ///
-    /// **Wrapped in a version comment**, which is how the MySQL family's own tools write a
-    /// statement an older server should skip: `/*!50704 … */` runs on 5.7.4 and up,
-    /// `/*M!100100 … */` on MariaDB 10.1 and up. Without it a server too old to know the
-    /// variable fails the whole read over the fence rather than over the query — and a
-    /// timeout is a courtesy, not the thing being asked for.
+    /// **Plain, not wrapped in a version comment, and the first real run is what settled
+    /// that.** `/*!50704 … */` is how these engines' own tools mark a statement an older
+    /// server should skip, and it was the obvious way to write this. But MariaDB's client
+    /// starts echoing every statement it runs, between rules of dashes, as soon as the batch
+    /// it is given contains a comment — so a refused write came back reading
+    /// `mariadb failed against …: --------------`, with the reason three lines further down.
+    /// A timeout is a courtesy; a failure nobody can read is not a trade worth making, and
+    /// both variables have been there since MySQL 5.7.4 and MariaDB 10.1.
     fn timeout_statement(&self, timeout: std::time::Duration) -> String {
         match self.family {
-            Family::Mysql => format!(
-                "/*!50704 SET SESSION MAX_EXECUTION_TIME = {} */;",
-                timeout.as_millis()
-            ),
+            Family::Mysql => format!("SET SESSION MAX_EXECUTION_TIME = {};", timeout.as_millis()),
             Family::Mariadb => format!(
-                "/*M!100100 SET SESSION max_statement_time = {} */;",
+                "SET SESSION max_statement_time = {};",
                 timeout.as_secs().max(1)
             ),
         }
@@ -730,10 +730,23 @@ fn from_tool(tool: &Path, output: &Output, otherwise: Exit, target: &Target<'_>)
 }
 
 fn from_stderr(tool: &Path, said: &str, otherwise: Exit, target: &Target<'_>) -> Failure {
+    let worth_reading = |line: &&str| {
+        !line.is_empty()
+            && !is_a_password_warning(line)
+            // **MariaDB's client echoes the statement it is running, between rules of
+            // dashes, as soon as the batch contains a comment.** The line that says what
+            // went wrong is then the fourth one, and reporting the first meant reporting
+            // `--------------` — a failure with no reason in it at all.
+            && !line.chars().all(|letter| letter == '-')
+    };
+
+    // The line that names the error, if the tool printed one; otherwise the first line that
+    // is worth reading at all. `ERROR 1792 (25006): …` is the shape both clients use.
     let first = said
         .lines()
         .map(str::trim)
-        .find(|line| !line.is_empty() && !is_a_password_warning(line))
+        .find(|line| worth_reading(line) && line.starts_with("ERROR"))
+        .or_else(|| said.lines().map(str::trim).find(worth_reading))
         .unwrap_or("it said nothing");
 
     let exit = if looks_like_a_connection_problem(said) {
@@ -1402,6 +1415,9 @@ impl Adapter for MysqlFamily {
     }
 
     fn read(&self, target: &Target<'_>, asked: &Reading<'_>) -> Outcome<Rows> {
+        let sql = asked.sql.trim().trim_end_matches(';');
+        only_a_read(sql)?;
+
         let mut command = self.spawn(&self.tools.client, target);
         command
             .args(Self::connection_args(target))
@@ -1414,9 +1430,8 @@ impl Adapter for MysqlFamily {
             // has any output — and the transaction the first opens is the one the second
             // runs inside, which is what makes the *server* refuse a write.
             .arg(format!(
-                "START TRANSACTION READ ONLY; {} {}; ROLLBACK;",
-                self.timeout_statement(asked.timeout),
-                asked.sql.trim().trim_end_matches(';')
+                "START TRANSACTION READ ONLY; {} {sql}; ROLLBACK;",
+                self.timeout_statement(asked.timeout)
             ));
 
         let output = command
@@ -2255,6 +2270,60 @@ fn skip_a_name(line: &[u8], from: usize) -> usize {
         at += 1;
     }
     at
+}
+
+/// The statements this family's servers will actually be asked, by their first word.
+///
+/// **A list of what is allowed, never a list of what is forbidden.** Anything not on it is
+/// refused, so a statement nobody thought of is a refusal rather than a gap — which is the
+/// only direction this kind of check is safe in.
+const ONLY_READS: &[&str] = &[
+    "SELECT", "WITH", "SHOW", "EXPLAIN", "DESCRIBE", "DESC", "TABLE", "VALUES", "ANALYZE",
+];
+
+/// Refuse anything that is not a read, **for this family only**.
+///
+/// **The PostgreSQL adapter needs nothing like this, and that difference is the whole
+/// reason it is here.** `R19a`'s rule is that read-only is the engine's to enforce, and on
+/// PostgreSQL it entirely is: a `READ ONLY` transaction refuses `UPDATE`, `CREATE TABLE` and
+/// a data-modifying CTE alike. On MySQL and MariaDB it is not. Both refuse the data changes —
+/// `ERROR 1792 … Cannot execute statement in a READ ONLY transaction` — and both let **DDL**
+/// straight through, because `CREATE TABLE` performs an implicit commit that ends the
+/// transaction before it runs. Verified against MySQL 8.4.11 and MariaDB 11.8.9: the table
+/// was there afterwards. There is no session-level setting that closes it; `read_only` is a
+/// global on the server and is the administrator's, not a client's.
+///
+/// So on these two engines the fence is in two parts and both are needed. This one catches
+/// DDL and anything unrecognised; the read-only transaction catches everything that changes
+/// data, including the `WITH … DELETE … RETURNING` form that starts with an allowed word and
+/// which no list of first words could ever catch.
+fn only_a_read(sql: &str) -> Outcome<()> {
+    let first = sql
+        .split(|letter: char| letter.is_whitespace() || letter == '(')
+        .find(|word| !word.is_empty())
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+
+    if ONLY_READS.contains(&first.as_str()) {
+        return Ok(());
+    }
+
+    Err(Failure::new(
+        Exit::Usage,
+        format!(
+            "sloop only reads, and {} is not a statement that reads",
+            if first.is_empty() {
+                "that".to_owned()
+            } else {
+                first
+            }
+        ),
+    )
+    .hint(format!(
+        "this engine commits a transaction before it runs a statement like that, so its own \
+         read-only transaction cannot refuse it and sloop does. Statements that read: {}",
+        ONLY_READS.join(", ")
+    )))
 }
 
 /// Every foreign key column, one row each, for [`Adapter::foreign_keys`].

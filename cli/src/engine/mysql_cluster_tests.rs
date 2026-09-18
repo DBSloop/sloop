@@ -24,11 +24,15 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
 use super::mysql::{Family, MysqlFamily, Tools};
-use super::{Adapter, Engine, TableCount, Target};
+use super::{Adapter, Cell, Engine, Reading, TableCount, Target};
 use crate::secret::Secret;
 
-/// High enough to be out of the way, and stepped per instance so two tests never collide.
-static NEXT_PORT: AtomicU16 = AtomicU16::new(55_331);
+/// Out of the way, and stepped per instance so two tests never collide.
+///
+/// **Below 32768**, for the reason `server::cluster_tests` gives at its own ports: 32768 and
+/// up is the ephemeral range on Linux, so a fixed port in it can be taken by an outbound
+/// connection the suite itself made. Its own block, so the three harnesses cannot overlap.
+static NEXT_PORT: AtomicU16 = AtomicU16::new(24_301);
 
 /// Deliberately awful, and different for each role — the point of two roles is that a dump
 /// and a restore each use their own credentials.
@@ -1333,4 +1337,185 @@ fn a_missing_client_tool_is_a_sentence_and_not_a_panic() {
             "{family:?}: {failure:?}"
         );
     }
+}
+
+/// **The two methods `R19a` added, against a real server of this family.**
+///
+/// The PostgreSQL half of this is in `engine::cluster_tests`. What is different here is
+/// everything about how the answer arrives: a different client, a different escape scheme in
+/// its batch output, a different spelling of the read-only transaction and a different one
+/// again of the statement timeout. None of that can be checked without a server.
+fn a_read_is_read_only_and_a_key_says_which_columns_match(family: Family) {
+    let Some(server) = Server::start(family, "reading") else {
+        skip(family, "no server on this machine");
+        return;
+    };
+
+    let adapter = MysqlFamily::new(family, server.tools());
+    let password = Secret::new(ALPHA_PASSWORD.to_owned());
+    let source = server.database("source_db", "alpha");
+    let target = source.target(&password);
+
+    // A parent and a child, with a key of two columns — enough to catch a pairing that has
+    // been crossed, which a single-column key never would.
+    server
+        .sql_as_alpha(
+            "source_db",
+            "CREATE TABLE shop (region VARCHAR(20), code INT, name VARCHAR(40), \
+                                PRIMARY KEY (region, code));",
+        )
+        .expect("the parent table");
+    server
+        .sql_as_alpha(
+            "source_db",
+            "CREATE TABLE sale (id INT PRIMARY KEY, region VARCHAR(20), shop_code INT, \
+                                total DECIMAL(10,2), memo TEXT, \
+                                FOREIGN KEY (region, shop_code) REFERENCES shop (region, code));",
+        )
+        .expect("the child table");
+    server
+        .sql_as_alpha(
+            "source_db",
+            "INSERT INTO shop VALUES ('north', 1, 'Ada'), ('south', 2, 'Bo');",
+        )
+        .expect("the parent rows");
+    server
+        .sql_as_alpha(
+            "source_db",
+            "INSERT INTO sale VALUES (10, 'north', 1, 99.50, 'first'), \
+                                     (11, 'north', 1, 10.00, ''), \
+                                     (12, 'south', 2, 5.25, NULL);",
+        )
+        .expect("the child rows");
+
+    let reading = |sql: &str| {
+        adapter.read(
+            &target,
+            &Reading {
+                sql,
+                timeout: Duration::from_secs(30),
+            },
+        )
+    };
+
+    // --- a read comes back with its heading and its rows ----------------------------
+    let rows = reading("SELECT id, memo FROM sale ORDER BY id").expect("a plain read");
+    assert_eq!(rows.columns, vec!["id".to_owned(), "memo".to_owned()]);
+    assert_eq!(rows.rows.len(), 3, "{:?}", rows.rows);
+    assert_eq!(rows.rows[1][1], Cell::Text(String::new()));
+    assert_eq!(rows.rows[2][1], Cell::Null);
+
+    // **A value with a newline in it is still one row.** The client escapes it on the way
+    // out and the adapter puts it back — see `mysql::rows_from`.
+    let wrapped = reading("SELECT 'line\nbreak' AS a, 'tab\there' AS b").expect("escapes");
+    assert_eq!(wrapped.rows.len(), 1, "{:?}", wrapped.rows);
+    assert_eq!(wrapped.rows[0][0], Cell::Text("line\nbreak".to_owned()));
+    assert_eq!(wrapped.rows[0][1], Cell::Text("tab\there".to_owned()));
+
+    a_write_is_refused_twice_over(family, &reading);
+
+    // --- the key, column by column, in key order -------------------------------------
+    let keys = adapter.foreign_keys(&target).expect("reading the keys");
+    let found = keys
+        .iter()
+        .find(|key| key.from.name == "sale")
+        .unwrap_or_else(|| panic!("{family:?}: no key on sale: {keys:?}"));
+
+    assert_eq!(found.to.name, "shop");
+    assert_eq!(
+        found.pairs(),
+        vec![
+            ("region".to_owned(), "region".to_owned()),
+            ("shop_code".to_owned(), "code".to_owned()),
+        ],
+        "{family:?}: the two lists are crossed"
+    );
+
+    // --- and the join that key describes returns the right rows ----------------------
+    let joined = reading(
+        "SELECT s.name, l.total FROM sale l \
+         LEFT JOIN shop s ON l.region = s.region AND l.shop_code = s.code \
+         WHERE s.name = 'Ada' AND l.total > '50' \
+         LIMIT 201 OFFSET 0",
+    )
+    .expect("the join runs");
+    assert_eq!(joined.rows.len(), 1, "{:?}", joined.rows);
+    assert_eq!(joined.rows[0][0], Cell::Text("Ada".to_owned()));
+}
+
+#[test]
+fn mysql_reads_read_only_and_reports_its_keys() {
+    a_read_is_read_only_and_a_key_says_which_columns_match(Family::Mysql);
+}
+
+#[test]
+fn mariadb_reads_read_only_and_reports_its_keys() {
+    a_read_is_read_only_and_a_key_says_which_columns_match(Family::Mariadb);
+}
+
+/// **The fence on this family is in two parts, and both are needed.**
+///
+/// Its own function because the whole of what makes MySQL and MariaDB different from
+/// PostgreSQL is in it, and because the test above was long enough already.
+fn a_write_is_refused_twice_over(
+    family: Family,
+    reading: &impl Fn(&str) -> crate::failure::Outcome<super::Rows>,
+) {
+    // --- the server refuses what only it can see -------------------------------------
+    //
+    // `SELECT … FOR UPDATE` begins with an allowed word and takes locks, so no list of first
+    // words could catch it — and none has to, because the read-only transaction does. This
+    // is the half of the fence that is the engine's, on an engine whose own read-only
+    // transaction is not the whole answer.
+    let refused = reading("SELECT * FROM sale FOR UPDATE").expect_err("a locking read");
+    let said = format!(
+        "{} {}",
+        refused.message(),
+        refused.hint_text().unwrap_or("")
+    );
+    assert!(
+        said.to_ascii_lowercase().contains("read only"),
+        "{family:?}: a locking read was refused for the wrong reason: {said}"
+    );
+
+    // --- and sloop refuses what the engine will not ----------------------------------
+    //
+    // **The difference from PostgreSQL, proved rather than assumed.** `CREATE TABLE`
+    // performs an implicit commit on these engines, which ends the read-only transaction
+    // before the statement runs — so the server is no help and `mysql::only_a_read` is what
+    // refuses it. Without that guard this exact statement left a table behind on both.
+    for statement in [
+        "UPDATE sale SET memo = 'moved'",
+        "DELETE FROM sale",
+        "CREATE TABLE sneaky (id INT)",
+        "DROP TABLE sale",
+        "TRUNCATE TABLE sale",
+        "ALTER TABLE sale ADD COLUMN extra INT",
+        "RENAME TABLE sale TO gone",
+        "CALL whatever()",
+    ] {
+        let refused = reading(statement).expect_err(statement);
+        assert!(
+            refused.message().contains("only reads"),
+            "{family:?}: {statement} was refused for the wrong reason: {}",
+            refused.message()
+        );
+    }
+
+    // And nothing moved: three rows before, three rows after, and no table that was not
+    // there before.
+    let after = reading("SELECT count(*) FROM sale").expect("counting afterwards");
+    assert_eq!(after.rows[0][0], Cell::Text("3".to_owned()));
+
+    let still = reading("SHOW TABLES").expect("listing the tables");
+    let named: Vec<String> = still
+        .rows
+        .iter()
+        .filter_map(|row| row.first().map(|cell| cell.shown().to_owned()))
+        .collect();
+    assert!(named.contains(&"sale".to_owned()), "{named:?}");
+    assert!(
+        !named.contains(&"sneaky".to_owned()),
+        "{family:?}: DDL got through: {named:?}"
+    );
 }
