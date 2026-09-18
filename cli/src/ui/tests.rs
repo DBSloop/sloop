@@ -674,7 +674,7 @@ fn down_to(door: usize, leaf: usize) -> Vec<Does> {
 #[test]
 fn every_command_is_reachable_and_completable_from_the_menu() {
     let leaves = every_leaf();
-    assert_eq!(leaves.len(), 19, "the tree lost a command: {leaves:?}");
+    assert_eq!(leaves.len(), 20, "the tree lost a command: {leaves:?}");
 
     for (door, leaf, job) in leaves {
         let mut script = down_to(door, leaf);

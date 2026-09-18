@@ -353,3 +353,40 @@ pub fn generated_password() -> Outcome<String> {
 
     Ok(password)
 }
+
+/// Ask for a password, hidden, and again to be sure it is the one that was meant.
+///
+/// `None` when nothing was typed, which means *"generate one"* — the default, and what
+/// every run did before this question existed.
+///
+/// **Asked twice because it is typed blind and cannot be read back.** Whatever is typed is
+/// both set on the server and filed on this machine, so the two always agree with each
+/// other — what a typo breaks is the thing somebody was about to paste it into, and a second
+/// line catches that before a database exists rather than after.
+///
+/// **Here rather than in one command, because two of them ask it.** `db create` asks for the
+/// password of a role it is about to make, and `R19f` asks for `sloop_db_admin`'s at Setup;
+/// they are the same question about the same kind of value, and a second copy of it is a
+/// second place for the two prompts to drift apart.
+pub fn typed_twice(what: &str) -> Outcome<Option<Secret>> {
+    let typed = rpassword::prompt_password(format!(
+        "? Password for {what} [press Enter to have one generated]: "
+    ))
+    .map_err(|error| Failure::usage(format!("could not read the password: {error}")))?;
+
+    if typed.is_empty() {
+        return Ok(None);
+    }
+
+    let again = rpassword::prompt_password("? And again, to be sure: ")
+        .map_err(|error| Failure::usage(format!("could not read the password: {error}")))?;
+
+    if again != typed {
+        return Err(Failure::usage("those two passwords are not the same").hint(
+            "nothing was created. Run it again, or press Enter at the prompt to have one \
+             generated",
+        ));
+    }
+
+    Ok(Some(Secret::new(typed)))
+}

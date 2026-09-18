@@ -28,6 +28,7 @@
 //! shells out to the system's own `curl`, and everything else is `initdb`, `pg_ctl` and
 //! `psql` — programs, not libraries. `cargo tree` is unchanged by this module.
 
+pub mod connection;
 pub mod find;
 pub mod make;
 pub mod own;
@@ -196,10 +197,16 @@ pub struct Settled {
     ///
     /// It is handed back rather than dropped because `R19c4` reads and writes every registry
     /// operation through this same connection, and fetching the password out of the keyring
-    /// again for each one would be work sloop has already done. Unread until then, for the
-    /// reason `record::forget` is: the value belongs to the type.
-    #[allow(dead_code)]
+    /// again for each one would be work sloop has already done.
     pub password: Secret,
+    /// Where that password is kept on this machine — the route, never the value.
+    pub route: crate::secret::Route,
+    /// True when sloop invented that password in this run — see [`own::Opened::generated`].
+    ///
+    /// The one thing that decides whether Setup ends by printing it. `R19f`'s *"shown once,
+    /// with what it opens"*: a password nobody has ever seen is shown on the terminal that
+    /// made it, and a password somebody supplied is not, because they have it already.
+    pub generated: bool,
     /// What the schema run did: the version before, the version now, and what it applied.
     pub schema: schema::Applied,
 }
@@ -235,9 +242,23 @@ pub fn ensure(global: &Path, asking: &make::Asking<'_>) -> Outcome<Ready> {
 /// **The whole of Setup as it stands**, and re-runnable: a second call finds the server, the
 /// role and the database all already there, reads both passwords back from wherever this
 /// machine keeps secrets, proves the connection and returns — with nothing typed.
-pub fn set_up(global: &Path, asking: &make::Asking<'_>) -> Outcome<Settled> {
+///
+/// **Two questions, and they are about two different passwords.** `asking` is how the
+/// superuser password of a PostgreSQL sloop did not make is obtained; `choosing` is where
+/// `sloop_db_admin`'s comes from. Neither is ever written to a file, and they are separate
+/// arguments because they are separate flags and a run can easily name one and not the other.
+pub fn set_up(
+    global: &Path,
+    asking: &make::Asking<'_>,
+    choosing: &own::Choosing<'_>,
+) -> Outcome<Settled> {
     let ready = ensure(global, asking)?;
-    let (own, password) = own::ensure(global, &ready.server, &ready.password)?;
+    let own::Opened {
+        own,
+        password,
+        route,
+        generated,
+    } = own::ensure(global, &ready.server, &ready.password, choosing)?;
 
     // The tables, and then the engines this build speaks. Both idempotent: a second run
     // applies no migration and reconciles the same three rows onto themselves.
@@ -248,6 +269,8 @@ pub fn set_up(global: &Path, asking: &make::Asking<'_>) -> Outcome<Settled> {
         ready,
         own,
         password,
+        route,
+        generated,
         schema: applied,
     })
 }
@@ -277,6 +300,13 @@ pub fn announce(ready: &Ready) {
 }
 
 /// Say where sloop's own state lives, once Setup has settled it.
+///
+/// **And, when there is one nobody has ever seen, the password.** `R19f`'s third piece: a
+/// generated password is shown here and never again unattended, with the whole connection
+/// above it so it can be pasted into a client without three more questions. A supplied one is
+/// not shown — whoever supplied it has it — and one read back out of the keyring is not shown
+/// either, because it was shown the day it was made. After this it is `sloop server
+/// connection --show-password` or nothing.
 pub fn announce_own(settled: &Settled) {
     crate::say!(
         "{} {}",
@@ -286,9 +316,40 @@ pub fn announce_own(settled: &Settled) {
     crate::say!(
         "  {}",
         style::dim(&format!(
-            "owned by {}, whose password is kept where this machine keeps secrets",
-            settled.own.role
+            "owned by {}, whose password is kept in {}",
+            settled.own.role,
+            settled.route.describe()
         ))
     );
     schema::announce(&settled.schema, &settled.own);
+
+    if !settled.generated {
+        return;
+    }
+
+    // **Generated, and still not printed where nobody is reading.** A scheduled `sloop setup`
+    // has a log file for a standard error, and rule 3 has no exception for convenience — so
+    // the password stays where it was put and the line below says how to get it. That is the
+    // whole reason Setup is allowed to generate one without a terminal at all, which is where
+    // it parts company with `db create`: this password is sloop's to hand over later.
+    if connection::nobody_is_reading().is_some() {
+        crate::note!(
+            "{}",
+            style::dim(&format!(
+                "{}'s password was generated and kept in {} — `sloop server connection \
+                 --show-password` prints it, on a terminal",
+                settled.own.role,
+                settled.route.describe()
+            ))
+        );
+        return;
+    }
+
+    connection::Connection::settled(settled).say();
+    connection::say_password(
+        &settled.own.role,
+        &settled.password,
+        "Copy it now — this is the only time sloop prints it unasked. `sloop server \
+         connection --show-password` prints it again, on a terminal.",
+    );
 }

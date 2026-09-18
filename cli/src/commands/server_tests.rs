@@ -195,3 +195,30 @@ fn the_numbers_on_the_engine_screen_skip_the_rows_nobody_can_choose() {
     let choosable: Vec<Engine> = rows.iter().filter_map(|(engine, _)| *engine).collect();
     assert_eq!(choosable, Engine::ALL.to_vec());
 }
+
+/// **A password is only printed where somebody is reading it.**
+///
+/// Under `cargo test` both streams are pipes the harness is capturing, which is exactly the
+/// shape this refuses — so the test needs nothing mocked to be the real case. `--force` is
+/// what answers it, because overriding a refusal that is there to protect something is the
+/// one thing that flag is for.
+#[test]
+fn a_password_is_refused_where_it_would_land_in_a_pipe() {
+    let failure = super::refuse_unless_somebody_is_reading(false)
+        .expect_err("a test harness is not a terminal");
+
+    assert_eq!(failure.exit().code(), 2);
+    assert!(
+        failure.message().contains("somebody to read"),
+        "{}",
+        failure.message()
+    );
+    assert!(
+        failure
+            .hint_text()
+            .is_some_and(|hint| hint.contains("--force")),
+        "the refusal never says what would answer it"
+    );
+
+    super::refuse_unless_somebody_is_reading(true).expect("--force answers it");
+}

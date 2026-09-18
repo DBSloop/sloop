@@ -199,12 +199,16 @@ pub fn database(global: &Path) -> Outcome<Option<(super::own::Own, Secret)>> {
 
 /// Write down sloop's own database, and put the owning role's password where this machine
 /// keeps secrets.
+///
+/// Hands back the route it took, because the caller is about to say where the password went
+/// and re-reading the file it has just written would be a second answer to a settled
+/// question.
 pub fn remember_database(
     global: &Path,
     server: &Server,
     own: &super::own::Own,
     password: &Secret,
-) -> Outcome<()> {
+) -> Outcome<Route> {
     let route = crate::secret::keep_somewhere(
         own.credential_key(server),
         password,
@@ -225,7 +229,8 @@ pub fn remember_database(
         password: route.as_field(),
     });
 
-    save(global, &raw)
+    save(global, &raw)?;
+    Ok(route)
 }
 
 /// Write the file, once, from one place.

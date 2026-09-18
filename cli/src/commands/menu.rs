@@ -106,6 +106,7 @@ impl Machine {
                 command: None,
                 stdin: false,
             },
+            &crate::server::own::Choosing::unsupplied(),
         )?;
         crate::server::announce(&settled.ready);
         crate::server::announce_own(&settled);
@@ -186,31 +187,14 @@ impl Doing for Machine {
     }
 
     fn run(&mut self, job: Job, answers: &Answers) -> Outcome<Exit> {
-        // **Before the registries, because there are none until this has run.** Setup is the
-        // one job whose whole purpose is to make the thing every other job opens, so opening
-        // it first would fail with "run `sloop setup`" on the way into `sloop setup`.
-        if matches!(job, Job::Setup) {
-            return self.set_up();
-        }
-
-        // **Also before the registries, and for the same reason.** Installing a server is the
-        // command somebody reaches for on a machine that has nothing on it yet, and refusing
-        // it with "run `sloop setup`" would be declining to help for the wrong reason.
-        if matches!(job, Job::ServerInstall) {
-            return commands::server::install(
-                &self.global,
-                &commands::server::Installing {
-                    engine: None,
-                    version: None,
-                    yes: false,
-                },
-            );
+        if let Some(done) = self.before_the_registry(job, answers) {
+            return done;
         }
 
         let registries = self.open()?;
 
         match job {
-            Job::Setup | Job::ServerInstall => {
+            Job::Setup | Job::ServerInstall | Job::ServerConnection => {
                 unreachable!("handled above, before the registries are opened")
             }
             Job::DbAdd => self.add(registries, answers),
@@ -299,6 +283,38 @@ impl Doing for Machine {
 }
 
 impl Machine {
+    /// The three jobs that run **before** the registries are opened, and `None` for the rest.
+    ///
+    /// **Each one would otherwise fail with "run `sloop setup`" on the way in.** Setup is the
+    /// job whose whole purpose is to make the thing every other job opens. Installing a
+    /// server is what somebody reaches for on a machine with nothing on it yet, and declining
+    /// to help because it has nothing on it yet would be the wrong answer. And where sloop's
+    /// own database *is* comes out of `server.toml`, not out of the registry inside it — so
+    /// it can be answered on a machine whose server is not even running.
+    fn before_the_registry(&self, job: Job, answers: &Answers) -> Option<Outcome<Exit>> {
+        match job {
+            Job::Setup => Some(self.set_up()),
+            Job::ServerInstall => Some(commands::server::install(
+                &self.global,
+                &commands::server::Installing {
+                    engine: None,
+                    version: None,
+                    yes: false,
+                },
+            )),
+            // A menu is a terminal, so the refusal that stops a password reaching a pipe
+            // cannot fire and `--force` is never what answers this one.
+            Job::ServerConnection => Some(commands::server::connection(
+                &self.global,
+                &commands::server::Showing {
+                    password: answers.yes(field::PASSWORD),
+                    force: false,
+                },
+            )),
+            _ => None,
+        }
+    }
+
     /// `db add`, from the answers.
     fn add(&self, registries: Registries, answers: &Answers) -> Outcome<Exit> {
         let by_url = answers.text(field::HOW) == "url";

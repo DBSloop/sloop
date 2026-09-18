@@ -577,6 +577,14 @@ const HOME: &[Shelf] = &[
                 run_it: "Choose one to install",
             },
             Leaf {
+                title: "Open sloop's own database",
+                blurb: "where sloop keeps its state, for psql, DataGrip or anything else",
+                command: "sloop server connection",
+                job: Job::ServerConnection,
+                under: "This machine",
+                run_it: "Show me",
+            },
+            Leaf {
                 title: "Check my setup",
                 blurb: "what sloop can find on this machine, and what it cannot",
                 command: "sloop doctor",

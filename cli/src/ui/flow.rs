@@ -67,6 +67,8 @@ pub enum Job {
     Setup,
     /// `server install` — install a database server on this machine.
     ServerInstall,
+    /// `server connection` — where sloop's own database is, so it can be opened by hand.
+    ServerConnection,
 }
 
 /// The names answers are filed under.
@@ -138,6 +140,8 @@ pub mod field {
     pub const SAFE: &str = "safe";
     /// Ask no server anything?
     pub const OFFLINE: &str = "offline";
+    /// Print sloop's own database password as well as where it is kept?
+    pub const PASSWORD: &str = "password";
     /// Reached straight, or through an SSH server?
     pub const REACH: &str = "reach";
     /// The SSH server.
@@ -514,6 +518,17 @@ impl Job {
             ],
 
             Self::Mirror | Self::Sync => copying(self, answers, known),
+
+            // **Asked, because "plainly" is what rule 3 leaves room for.** A menu item that
+            // printed the password by being chosen would be printing it to whoever happened
+            // to be walking past the menu; a question with `No` in front of it is the same
+            // deliberate act as typing `--show-password`.
+            Self::ServerConnection => vec![yes_or_no(
+                field::PASSWORD,
+                "Print the password too?",
+                false,
+                "it is shown on this terminal only — never written to a file",
+            )],
 
             Self::Doctor => vec![yes_or_no(
                 field::OFFLINE,

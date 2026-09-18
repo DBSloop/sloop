@@ -279,14 +279,31 @@ pub enum Command {
         /// Read that password from standard input instead of asking for it.
         #[arg(long)]
         superuser_password_stdin: bool,
+
+        /// A command that prints the password to give sloop's own database user.
+        ///
+        /// `--db-password-command "op read op://vault/sloop/pw"`. Without it, and without
+        /// the flag below, a terminal is asked and Enter has one generated.
+        #[arg(long, value_name = "COMMAND", conflicts_with = "db_password_stdin")]
+        db_password_command: Option<String>,
+
+        /// Read that password from standard input instead of generating one.
+        ///
+        /// Standard input is read to the end, so this cannot be combined with
+        /// `--superuser-password-stdin`: the second one would find nothing left.
+        #[arg(long, conflicts_with = "superuser_password_stdin")]
+        db_password_stdin: bool,
     },
 
-    /// Install a database server on this machine, or see the ones sloop installed.
+    /// The database servers on this machine — installing one, listing them, and opening
+    /// sloop's own.
     ///
-    /// Engine, then version, then one confirmation — instead of finding the project's
-    /// website and following its installation instructions. The archive is downloaded by
-    /// the system's own curl, proved against whatever that project publishes to prove it
-    /// with, and started on a port that collides with nothing already here.
+    /// `install` is engine, then version, then one confirmation, instead of finding the
+    /// project's website and following its installation instructions: the archive is
+    /// downloaded by the system's own curl, proved against whatever that project publishes
+    /// to prove it with, and started on a port that collides with nothing already here.
+    /// `connection` is the other direction — where sloop keeps its own state, so you can
+    /// open it in psql or DataGrip yourself.
     Server {
         #[command(subcommand)]
         command: ServerCommand,
@@ -323,6 +340,21 @@ pub enum ServerCommand {
 
     /// Every server sloop has installed here, and how to reach each one.
     List,
+
+    /// Where sloop keeps its own state, so you can open it yourself.
+    ///
+    /// Host, port, database and user, ready to be pasted into `psql`, DataGrip or anything
+    /// else that speaks PostgreSQL. The password is kept where this machine keeps secrets
+    /// and printed only when it is asked for, on a terminal — never into a log file, a
+    /// document or a pipe.
+    Connection {
+        /// Print the password too, not only where it is kept.
+        ///
+        /// Refused with `--json` or `--quiet`, and refused when the output is not a
+        /// terminal — `--force` prints it anyway.
+        #[arg(long)]
+        show_password: bool,
+    },
 }
 
 /// `sloop db …` — everything that touches the registry.
@@ -995,6 +1027,7 @@ impl ServerCommand {
         match self {
             Self::Install { .. } => "server install",
             Self::List => "server list",
+            Self::Connection { .. } => "server connection",
         }
     }
 }

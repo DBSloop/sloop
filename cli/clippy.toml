@@ -1,4 +1,4 @@
 # `clippy::doc_markdown` reads any CamelCase word in a doc comment as an identifier that
 # should have been in backticks. These are product names, not code, and backticking them
 # would be the wrong fix. `".."` keeps clippy's own list rather than replacing it.
-doc-valid-idents = ["..", "WezTerm", "MariaDB", "MySQL", "PostgreSQL", "EnterpriseDB"]
+doc-valid-idents = ["..", "WezTerm", "MariaDB", "MySQL", "PostgreSQL", "EnterpriseDB", "DataGrip"]

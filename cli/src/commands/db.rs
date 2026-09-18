@@ -677,42 +677,10 @@ fn role_password(asked: &Building<'_>) -> Outcome<(Secret, bool)> {
     // for is a flag carrying the value, and every argument of every process on this machine
     // is readable in `ps`. See "Choosing the new user's password" in
     // `docs/OWNER-DECISIONS.md`.
-    match typed_twice(role_for(asked))? {
+    match crate::secret::typed_twice(role_for(asked))? {
         Some(typed) => Ok((typed, false)),
         None => Ok((Secret::new(crate::secret::generated_password()?), true)),
     }
-}
-
-/// Ask for a password, hidden, and again to be sure it is the one that was meant.
-///
-/// `None` when nothing was typed, which means "generate one" — the default, and what every
-/// run did before this question existed.
-///
-/// **Asked twice because it is typed blind and cannot be read back.** Whatever is typed is
-/// both set on the server and filed on this machine, so the two always agree with each
-/// other — what a typo breaks is the application config somebody was about to paste it into,
-/// and a second line catches that before a database exists rather than after.
-fn typed_twice(role: &str) -> Outcome<Option<Secret>> {
-    let typed = rpassword::prompt_password(format!(
-        "? Password for {role} [press Enter to have one generated]: "
-    ))
-    .map_err(|error| Failure::usage(format!("could not read the password: {error}")))?;
-
-    if typed.is_empty() {
-        return Ok(None);
-    }
-
-    let again = rpassword::prompt_password("? And again, to be sure: ")
-        .map_err(|error| Failure::usage(format!("could not read the password: {error}")))?;
-
-    if again != typed {
-        return Err(Failure::usage("those two passwords are not the same").hint(
-            "nothing was created. Run it again, or press Enter at the prompt to have one \
-             generated",
-        ));
-    }
-
-    Ok(Some(Secret::new(typed)))
 }
 
 /// The user this is all about, by whichever name it will end up with.

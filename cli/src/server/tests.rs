@@ -187,8 +187,30 @@ fn a_typo_in_the_record_is_an_error_rather_than_a_silent_default() {
     assert_eq!(failure.exit().code(), 2);
 }
 
-/// The generated password is the alphabet `make` insists on before it will put one into a
-/// statement — the property that makes that statement unsteerable.
+/// A password somebody chose goes into the statement escaped, not refused.
+///
+/// **`R19f` is what made this reachable.** `--db-password-command` hands back whatever a
+/// password manager holds, and a real one has apostrophes in it — so `literal` doubles them
+/// the way `db create` has always doubled them, and the quote cannot close the literal.
+#[test]
+fn a_password_with_a_quote_in_it_is_escaped_rather_than_refused() {
+    let awkward = crate::secret::Secret::new("o'brien';DROP TABLE x;--".to_owned());
+    assert_eq!(
+        super::make::literal(&awkward).expect("a real password is not a refusal"),
+        "'o''brien'';DROP TABLE x;--'"
+    );
+}
+
+/// An empty one still is a refusal: a role that can log in is never given a blank password.
+#[test]
+fn an_empty_password_never_reaches_a_statement() {
+    let nothing = crate::secret::Secret::new(String::new());
+    let failure = super::make::literal(&nothing).expect_err("empty is refused");
+    assert!(failure.message().contains("empty"), "{}", failure.message());
+}
+
+/// The generated password needs no quoting at all — it pastes into a URL, a YAML file and a
+/// shell without one escaping rule between them, which is what the alphabet is chosen for.
 #[test]
 fn a_generated_superuser_password_needs_no_quoting() {
     for _ in 0..25 {

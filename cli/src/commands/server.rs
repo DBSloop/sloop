@@ -1,4 +1,9 @@
-//! `sloop server install` — the command behind `R19d`'s screen, and the flag form of it.
+//! `sloop server …` — the database servers on this machine, and sloop's own among them.
+//!
+//! `install` is `R19d`'s screen and the flag form of it, `list` is what it left behind, and
+//! `connection` is `R19f`: where sloop's own database is, so the owner of the machine can
+//! open it in DataGrip themselves. What that one prints and what it refuses to print is
+//! documented on the function; the rest of this header is `install`'s.
 //!
 //! **The menu collects the engine; this collects the rest, and that split is not arbitrary.**
 //! Resolving MariaDB's versions means reading an index, reading an index means `curl`, and
@@ -19,6 +24,7 @@ use crate::engine::Engine;
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::install;
+use crate::server::connection::Unread;
 use crate::style;
 use crate::tools::acquire;
 use crate::tools::catalogue::{self, Build, Choice};
@@ -107,6 +113,114 @@ pub fn install(global: &Path, asked: &Installing<'_>) -> Outcome<Exit> {
     let installed = install::run(global, &build)?;
     report(&installed);
     Ok(Exit::Success)
+}
+
+/// What `sloop server connection` was asked for.
+pub struct Showing {
+    /// `--show-password`: print the password too, not only where it is kept.
+    pub password: bool,
+    /// `--force`: print it even where it would not land on a terminal.
+    pub force: bool,
+}
+
+/// Where sloop's own database is, and — asked for plainly — the password that opens it.
+///
+/// **`R19f`'s first piece.** The owner of the machine can now open `sloop_database` in
+/// DataGrip, or in `psql`, or in anything else that speaks PostgreSQL, from what this prints
+/// and without reading any source.
+///
+/// **Three places the password is not allowed to go, and two of them are absolute.** Never
+/// into `--log-file`, which is by construction: it goes through [`crate::report::secret`],
+/// which has no logging path in it. Never into `--json`, and never into a `--quiet` run,
+/// because both say this run is not being read by a person and a password is only ever
+/// printed for a person to read — those are refused here in so many words. And never onto a
+/// stream that is not a terminal, which is rule 4's shape applied to output: a secret written
+/// into a pipe is a secret in whatever that pipe was. That last one is a refusal somebody can
+/// override, because `--force` is exactly the flag for overriding a refusal that is there to
+/// protect something. What counts as somebody reading is
+/// [`crate::server::connection::nobody_is_reading`], which Setup asks the same question of.
+pub fn connection(global: &Path, showing: &Showing) -> Outcome<Exit> {
+    let Some(connection) = crate::server::connection::Connection::of(global)? else {
+        return Err(Failure::new(
+            Exit::Usage,
+            "sloop keeps its state in its own PostgreSQL, and this machine has not been set up",
+        )
+        .hint("run `sloop setup` once — it is safe to run again afterwards"));
+    };
+
+    if showing.password {
+        refuse_unless_somebody_is_reading(showing.force)?;
+    }
+
+    crate::report::result(connection.document());
+    connection.say();
+    crate::say!();
+    crate::say!(
+        "  {}",
+        style::dim("Open it with psql, DataGrip, or anything else that speaks PostgreSQL.")
+    );
+
+    if !showing.password {
+        crate::say!(
+            "  {}",
+            style::dim(
+                "`sloop server connection --show-password` prints the password on this \
+                 terminal."
+            )
+        );
+        return Ok(Exit::Success);
+    }
+
+    // Read only now. A run that was not asked for the password has no business touching the
+    // keyring, and on a locked keychain that would be a prompt nobody asked for.
+    let (own, password) = crate::server::record::database(global)?.ok_or_else(|| {
+        Failure::new(
+            Exit::Usage,
+            "the record names sloop's database but not how to open it",
+        )
+        .hint("run `sloop setup` again — it settles the password and writes the record")
+    })?;
+
+    crate::server::connection::say_password(
+        &own.role,
+        &password,
+        "It is not written to any file, and this line is never written to --log-file.",
+    );
+    Ok(Exit::Success)
+}
+
+/// Refuse to print a password where nobody is reading it, unless somebody said to anyway.
+///
+/// **Only one of the three is overridable.** A pipe is somebody's own choice about where
+/// their own password goes, and `--force` is the flag for exactly that. `--json` and
+/// `--quiet` are not choices about a password at all — they say this run is not being read,
+/// and printing a secret into a run nobody is reading is what rule 3 is about.
+fn refuse_unless_somebody_is_reading(force: bool) -> Outcome<()> {
+    let Some(why) = crate::server::connection::nobody_is_reading() else {
+        return Ok(());
+    };
+
+    if force && why == Unread::NotATerminal {
+        return Ok(());
+    }
+
+    Err(Failure::new(
+        Exit::Usage,
+        format!(
+            "a password is only ever printed for somebody to read, and {}",
+            why.describe()
+        ),
+    )
+    .hint(match why {
+        Unread::Json => {
+            "drop --json. sloop's password is never part of a document something else reads"
+        }
+        Unread::Quiet => "drop --quiet — it would silence the one line that was asked for",
+        Unread::NotATerminal => {
+            "a secret written into a pipe is a secret in whatever that pipe was. `--force` \
+             says to print it anyway"
+        }
+    }))
 }
 
 /// Every server sloop has installed on this machine.

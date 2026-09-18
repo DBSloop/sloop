@@ -340,8 +340,13 @@ fn sloops_own_database_is_made_once_and_reopened_with_nothing_typed() {
     record::write(&global, &ready.server, &ready.password).expect("it can keep a secret");
 
     // 1. The first run makes the role and the database, and the role's password opens it.
-    let (first, password) = match own::ensure(&global, &ready.server, &ready.password) {
-        Ok(made) => made,
+    let (first, password) = match own::ensure(
+        &global,
+        &ready.server,
+        &ready.password,
+        &own::Choosing::unsupplied(),
+    ) {
+        Ok(made) => (made.own, made.password),
         Err(why) => {
             stop(&ready.server.bin, &data);
             panic!("sloop's own database could not be made: {}", why.message());
@@ -397,8 +402,14 @@ fn sloops_own_database_is_made_once_and_reopened_with_nothing_typed() {
 
     // 4. **A second run, with nothing typed.** Same role, same database, same password —
     //    read back from wherever this machine keeps secrets rather than made again.
-    let (again, same) =
-        own::ensure(&global, &ready.server, &ready.password).expect("a second run is ordinary");
+    let second = own::ensure(
+        &global,
+        &ready.server,
+        &ready.password,
+        &own::Choosing::unsupplied(),
+    )
+    .expect("a second run is ordinary");
+    let (again, same) = (second.own, second.password);
 
     assert_eq!(again, first);
     assert_eq!(
@@ -419,8 +430,85 @@ fn sloops_own_database_is_made_once_and_reopened_with_nothing_typed() {
     .expect("the server answers");
     assert_eq!(databases.trim(), "1");
 
+    // 6. **`R19f`**: and then one the owner supplied, on the same cluster.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        a_supplied_password_outranks_the_one_already_there(&global, &data, &ready);
+    }));
+
     stop(&ready.server.bin, &data);
     let _ = std::fs::remove_dir_all(scratch.path());
+
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// **`R19f`: a machine set up with a supplied password never generates one.**
+///
+/// The flag outranks the password already on the role, because that is how one gets rotated
+/// — and the value here is full of the punctuation a real password has, which is what proves
+/// `make::literal` escapes rather than refuses.
+fn a_supplied_password_outranks_the_one_already_there(
+    global: &std::path::Path,
+    data: &std::path::Path,
+    ready: &super::Ready,
+) {
+    // The other half of `R19f`'s `Done when`: the cluster is exactly as hardened afterwards
+    // as it was before. `trust` being gone is checked where it is removed; what is checked
+    // here is that nothing on this path puts it back.
+    let hba = data.join("pg_hba.conf");
+    let hardened = std::fs::read_to_string(&hba).expect("pg_hba.conf is there");
+
+    let chosen = "o'brien \\ $PATH; \"quoted\" #1";
+    let supplied = own::ensure(
+        global,
+        &ready.server,
+        &ready.password,
+        &own::Choosing {
+            command: Some(&format!("echo {chosen}")),
+            stdin: false,
+        },
+    )
+    .expect("a supplied password is taken");
+
+    assert!(
+        !supplied.generated,
+        "a supplied password was reported as one sloop invented"
+    );
+    assert_eq!(supplied.password.expose(), chosen);
+
+    let opened = own::opens(&ready.server, &supplied.own, &supplied.password);
+    assert!(
+        opened.as_ref().is_ok_and(|yes| *yes),
+        "the supplied password does not open the database: {opened:?}"
+    );
+
+    // And it is what a later run reads back — the record now points at the supplied one.
+    let kept = record::database(global)
+        .expect("the record reads back")
+        .expect("a machine that has been set up has one");
+    assert_eq!(kept.1.expose(), chosen);
+
+    // Still nowhere in plaintext, supplied or not.
+    for file in [
+        global.join(record::FILE),
+        global.join(crate::registry::file::SEALED_FILE),
+    ] {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        assert!(
+            !text.contains(chosen),
+            "a supplied password is in {}",
+            file.display()
+        );
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(&hba).expect("pg_hba.conf is still there"),
+        hardened,
+        "settling a password changed how the cluster authenticates"
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -474,8 +562,13 @@ fn the_schema_migrates_forwards_from_nothing_and_from_a_release_older() {
     };
     record::write(&global, &ready.server, &ready.password).expect("it can keep a secret");
 
-    let (own, password) = match own::ensure(&global, &ready.server, &ready.password) {
-        Ok(made) => made,
+    let (own, password) = match own::ensure(
+        &global,
+        &ready.server,
+        &ready.password,
+        &own::Choosing::unsupplied(),
+    ) {
+        Ok(made) => (made.own, made.password),
         Err(why) => {
             stop(&ready.server.bin, &data);
             panic!("sloop's own database could not be made: {}", why.message());

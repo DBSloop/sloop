@@ -114,6 +114,8 @@ fn run(cli: &Cli) -> Outcome<Exit> {
         Some(Command::Setup {
             superuser_password_command,
             superuser_password_stdin,
+            db_password_command,
+            db_password_stdin,
         }) => {
             let global = registry::adopt::global(&locations)?;
             let settled = server::set_up(
@@ -121,6 +123,10 @@ fn run(cli: &Cli) -> Outcome<Exit> {
                 &server::make::Asking {
                     command: superuser_password_command.as_deref(),
                     stdin: *superuser_password_stdin,
+                },
+                &server::own::Choosing {
+                    command: db_password_command.as_deref(),
+                    stdin: *db_password_stdin,
                 },
             )?;
             server::announce(&settled.ready);
@@ -133,7 +139,7 @@ fn run(cli: &Cli) -> Outcome<Exit> {
         // it with "run `sloop setup`" would be refusing to help for the wrong reason.
         Some(Command::Server { command }) => {
             let global = registry::adopt::global(&locations)?;
-            server_command(&global, command, cli.yes)
+            server_command(&global, command, cli.yes, cli.force)
         }
 
         // **Before `uses_registry`, because reset is what removes the registry.** Opening
@@ -456,7 +462,7 @@ impl<'a> World<'a> {
 }
 
 /// Hand a `server` subcommand its arguments.
-fn server_command(global: &Path, command: &ServerCommand, yes: bool) -> Outcome<Exit> {
+fn server_command(global: &Path, command: &ServerCommand, yes: bool, force: bool) -> Outcome<Exit> {
     match command {
         ServerCommand::Install { engine, version } => commands::server::install(
             global,
@@ -467,6 +473,13 @@ fn server_command(global: &Path, command: &ServerCommand, yes: bool) -> Outcome<
             },
         ),
         ServerCommand::List => commands::server::list(global),
+        ServerCommand::Connection { show_password } => commands::server::connection(
+            global,
+            &commands::server::Showing {
+                password: *show_password,
+                force,
+            },
+        ),
     }
 }
 

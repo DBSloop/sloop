@@ -561,24 +561,29 @@ impl<'a> As<'a> {
 
 /// A password as an SQL string literal, or a refusal.
 ///
-/// **The alphabet guard, in the one place every statement carrying a password goes through.**
-/// The generated alphabet has no quote in it, and this is what makes that a guarantee rather
-/// than an assumption: a password that could close the literal is refused before it is ever
-/// sent, so there is no statement here that anybody could steer.
+/// **Doubling the apostrophe is the whole rule**, exactly as `db create` has always doubled
+/// one — see `engine::postgres::sql_literal`. So a password with a quote in it cannot close
+/// the literal and there is no statement here anybody could steer, whatever the password
+/// happens to contain.
+///
+/// It used to refuse anything outside the generated alphabet, which worked while a generated
+/// password was the only kind that reached it. `R19f` let the owner supply
+/// `sloop_db_admin`'s, and a real password has apostrophes in it — an alphabet guard there
+/// would be a hardening choice that makes the feature refuse, which rule 0d settles the
+/// other way. Escaping is what the guard was standing in for.
+///
+/// **Empty is still a refusal.** A password manager that printed nothing, or a pipe with
+/// nothing in it, would otherwise set a blank password on a role that can log in — and that
+/// is a mistake worth stopping rather than escaping.
 pub fn literal(password: &Secret) -> Outcome<String> {
-    if password.expose().is_empty()
-        || !password
-            .expose()
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric())
-    {
+    if password.expose().is_empty() {
         return Err(Failure::new(
             Exit::Failure,
-            "the generated password is not the alphabet sloop generates",
+            "the password came back empty, and a role that can log in is not given one",
         ));
     }
 
-    Ok(format!("'{}'", password.expose()))
+    Ok(format!("'{}'", password.expose().replace('\'', "''")))
 }
 
 /// Run one statement as the superuser, and fail with what the server said.
