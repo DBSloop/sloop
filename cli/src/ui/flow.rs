@@ -349,6 +349,17 @@ pub trait Doing {
     /// its own directory — which is what `restore --from` takes.
     fn backups_of(&self, name: &str) -> Vec<String>;
 
+    /// What a registered database is called **on its server**, which is not its label.
+    ///
+    /// **`--confirm` takes this one**, and rule 5 is the reason: the flag names the thing
+    /// that stops existing, so a cron line cannot be repointed at another database by
+    /// editing the label sloop happens to file it under. `R20`'s printed line has to carry
+    /// the same name the command would have asked somebody to type, and the only place that
+    /// name lives is the registry — see `ui::equivalent`.
+    ///
+    /// `None` for a label nothing is registered under.
+    fn on_the_server(&self, label: &str) -> Option<String>;
+
     /// Run it, with the terminal already handed back so the command's own output and its
     /// own prompts land where the user can see them.
     fn run(&mut self, job: Job, answers: &Answers) -> Outcome<Exit>;

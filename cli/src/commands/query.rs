@@ -103,7 +103,7 @@ pub fn run(context: &Context<'_>, asked: &Asking<'_>) -> Outcome<Exit> {
 
     match asked.sql {
         Some(sql) => straight(&ask, sql),
-        None => build_one(&*adapter, &target, &ask),
+        None => build_one(&*adapter, &target, &ask, &name),
     }
 }
 
@@ -120,6 +120,7 @@ fn build_one(
     adapter: &dyn Adapter,
     target: &Target<'_>,
     ask: &impl Fn(&str) -> Outcome<Rows>,
+    name: &str,
 ) -> Outcome<Exit> {
     // **Rule 4, one screen earlier than usual.** The builder is nothing but questions, so a
     // run with nobody to ask is refused at the door with the flag that would have answered
@@ -151,13 +152,24 @@ fn build_one(
     let first = ask(&sql(0))?;
     let seen = grid::show(&built.from.to_string(), first, |page| ask(&sql(page)))?;
 
-    // **After the screen is handed back, so it survives.** Nothing drawn inside the grid is
-    // in the scrollback; the statement is what somebody wants afterwards, and it is exactly
-    // what `--sql` takes.
+    // **After the screen is handed back, so it survives** — and as a line rather than as a
+    // statement, which is `R20`. Nothing drawn inside the grid is in the scrollback; what
+    // somebody wants afterwards is the thing they can paste, and `--sql` is exactly what
+    // takes it. The menu prints no equivalent of its own for this job for that reason: it
+    // knows which database was picked and nothing about the statement the builder wrote.
     crate::report::result(serde_json::json!({ "sql": sql(0), "rows_read": seen }));
     crate::say!();
     crate::say!("{} {seen}", style::heading("Rows read:"));
-    crate::say!("  {}", style::dim(&sql(0)));
+    crate::say!();
+    crate::say!("  {}", style::dim("The same thing, from a shell:"));
+    crate::say!(
+        "  {}",
+        style::paint(&format!(
+            "sloop query {} --sql {}",
+            style::as_argument(name),
+            style::as_argument(&sql(0))
+        ))
+    );
     Ok(Exit::Success)
 }
 

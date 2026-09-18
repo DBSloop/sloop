@@ -34,6 +34,10 @@ impl Doing for Bench {
         vec!["20260916T031500Z".to_owned()]
     }
 
+    fn on_the_server(&self, label: &str) -> Option<String> {
+        Some(format!("{label}_live"))
+    }
+
     fn run(&mut self, job: Job, answers: &Answers) -> Outcome<Exit> {
         self.ran.push((job, answers.clone()));
         self.says.take().map_or(Ok(Exit::Success), Err)
@@ -49,6 +53,8 @@ struct Curtain {
     back: usize,
     /// And how many times it waited for somebody to finish reading.
     paused: usize,
+    /// `R20`'s lines, in the order they were printed.
+    said: Vec<String>,
 }
 
 impl Stage for Curtain {
@@ -62,6 +68,10 @@ impl Stage for Curtain {
 
     fn step_in(&mut self) {
         self.back += 1;
+    }
+
+    fn equivalent(&mut self, line: &str) {
+        self.said.push(line.to_owned());
     }
 }
 
@@ -1319,4 +1329,69 @@ fn a_failed_setup_stays_on_the_setup_screen_and_says_why() {
 fn setup_is_a_root_with_nothing_behind_it() {
     let screen = unset_up().opening();
     assert!(screen.crumbs().is_empty());
+}
+
+/// **`R20`, through the real loop.** Every job reached from the menu and answered the way
+/// somebody pressing Enter answers it, and what the session *said* afterwards.
+///
+/// The line's content is `equivalent`'s own business and is checked there, against `clap`.
+/// What this checks is the wiring: that it is printed at all, that it is printed once, and
+/// that it is printed **after the terminal has been handed back and before the menu takes
+/// it again** — which is the whole of *"after leaving the alternate screen, so it survives"*.
+#[test]
+fn every_run_ends_with_the_line_that_would_repeat_it() {
+    for (door, leaf, job) in every_leaf() {
+        let mut script = down_to(door, leaf);
+        script.extend(std::iter::repeat_n(
+            Does::Fill,
+            questions(job, &Bench::default()) + 1,
+        ));
+
+        let mut bench = Bench::default();
+        let mut curtain = Curtain::default();
+        run_it(script, &mut shell(false), &mut bench, &mut curtain);
+
+        let answers = bench
+            .ran
+            .first()
+            .map(|(_, answers)| answers.clone())
+            .unwrap_or_default();
+        let expected = super::equivalent::line(job, &answers, &Bench::default()).is_some();
+
+        assert_eq!(
+            curtain.said.len(),
+            usize::from(expected),
+            "{job:?} printed {:?}",
+            curtain.said
+        );
+        if let Some(line) = curtain.said.first() {
+            assert!(line.starts_with("sloop "), "{job:?}: {line}");
+        }
+    }
+}
+
+/// A run that failed prints no line. One that reproduces a failure is a line somebody pastes
+/// into a scheduler and then wonders about.
+#[test]
+fn a_run_that_did_not_work_suggests_nothing() {
+    let (door, leaf, job) = every_leaf()
+        .into_iter()
+        .find(|(_, _, job)| *job == Job::DbList)
+        .expect("db list is on the menu");
+
+    let mut script = down_to(door, leaf);
+    script.extend(std::iter::repeat_n(
+        Does::Fill,
+        questions(job, &Bench::default()) + 1,
+    ));
+
+    let mut bench = Bench {
+        says: Some(Failure::usage("the registry would not open")),
+        ..Bench::default()
+    };
+    let mut curtain = Curtain::default();
+    run_it(script, &mut shell(false), &mut bench, &mut curtain);
+
+    assert_eq!(bench.ran.len(), 1, "the job should still have been run");
+    assert!(curtain.said.is_empty(), "{:?}", curtain.said);
 }

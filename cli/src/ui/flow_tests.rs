@@ -38,6 +38,10 @@ impl Known {
 }
 
 impl Doing for Known {
+    fn on_the_server(&self, label: &str) -> Option<String> {
+        Some(format!("{label}_live"))
+    }
+
     fn databases(&self) -> Vec<String> {
         self.databases.clone()
     }

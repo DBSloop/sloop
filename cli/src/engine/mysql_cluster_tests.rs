@@ -247,10 +247,21 @@ impl Server {
     fn launch(&mut self) -> Result<(), String> {
         let bootstrap = self.bootstrap()?;
 
+        // **A temporary directory of its own, and this is not tidiness.** Left alone both
+        // engines put temporary tables in the machine's `%TEMP%`, and both sweep stale files
+        // out of it as they start — so two of these servers running at once delete each
+        // other's in-flight temp tables. It shows up as `Couldn't execute 'show events':
+        // Error on delete of '…#sql-temptable-….MAD'` and then as `Lost connection to server
+        // during query`, neither of which mentions the cause. Every one of these servers is
+        // deleted with its root directory, so it owns everything it touches.
+        let tmp = self.root.join("tmp");
+        std::fs::create_dir_all(&tmp).map_err(|error| format!("a temporary directory: {error}"))?;
+
         let mut command = Command::new(&self.daemon);
         command
             .arg("--no-defaults")
             .arg(format!("--datadir={}", self.data.display()))
+            .arg(format!("--tmpdir={}", tmp.display()))
             .arg(format!("--port={}", self.port))
             .arg(format!("--log-error={}", self.log().display()))
             .arg(format!("--init-file={}", bootstrap.display()))

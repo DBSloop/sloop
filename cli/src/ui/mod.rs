@@ -22,6 +22,7 @@
 //! door and names what to do instead — rule 4, one screen earlier than usual.
 
 pub mod ask;
+pub mod equivalent;
 pub mod flow;
 pub mod paint;
 pub mod screen;
@@ -165,6 +166,20 @@ fn did(
             Some(failure.message().to_owned())
         }
     };
+
+    // **`R20`, and this is the only place it can go.** The terminal is the user's again and
+    // the menu has not taken it back, so the line lands in the scrollback they keep —
+    // printed after the command's own output, where it reads as the summary of what just
+    // happened rather than as a prediction of it.
+    //
+    // **Only for a run that worked.** A line that reproduces a failure is a line somebody
+    // pastes into a scheduler and then wonders about.
+    if outcome.is_ok()
+        && let Some(line) = equivalent::line(leaf.job, answers, world)
+    {
+        stage.equivalent(&line);
+    }
+
     stage.pause();
     stage.step_in();
 
@@ -282,6 +297,18 @@ pub trait Stage {
     fn pause(&mut self);
     /// Take it again.
     fn step_in(&mut self);
+
+    /// Print `R20`'s line, on the terminal the job has just finished using.
+    ///
+    /// **Through the stage rather than straight to standard output**, for the reason
+    /// [`walk`] is split out at all: the whole of the navigation can then be driven by a
+    /// written-down list of answers in a test, and what a session *says* is as much a part
+    /// of it as where it goes. The real stage prints; the one in the tests writes it down.
+    fn equivalent(&mut self, line: &str) {
+        crate::say!();
+        crate::say!("{}", crate::style::dim("  The same thing, from a shell:"));
+        crate::say!("  {}", crate::style::paint(line));
+    }
 }
 
 /// Rule 4, at the door.

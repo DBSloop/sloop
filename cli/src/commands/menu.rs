@@ -164,6 +164,12 @@ impl Doing for Machine {
         names
     }
 
+    fn on_the_server(&self, label: &str) -> Option<String> {
+        let registries = self.open().ok()?;
+        let (_, database) = registries.find(label).ok()?;
+        Some(database.database.clone())
+    }
+
     fn backups_of(&self, name: &str) -> Vec<String> {
         let Some(root) = self.store_root() else {
             return Vec::new();
