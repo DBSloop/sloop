@@ -170,6 +170,8 @@ pub fn argv(job: Job, answers: &Answers, world: &dyn Doing) -> Option<Vec<String
             out.extend(["server".to_owned(), "connection".to_owned()]);
             flag(&mut out, "--show-password", answers.yes(field::PASSWORD));
         }
+
+        Job::ServiceActivity => out.extend(["service".to_owned(), "activity".to_owned()]),
     }
 
     Some(out)

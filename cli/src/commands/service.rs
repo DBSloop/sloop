@@ -41,6 +41,9 @@ pub fn run(locations: &Locations, command: &ServiceCommand) -> Outcome<Exit> {
     match command {
         ServiceCommand::Attach { name } => return attach(locations, name),
         ServiceCommand::Detach { name } => return detach(locations, name),
+        // `R27`. Reading what was recorded needs the store and not the service manager, so a
+        // machine whose service is stopped still answers about the months before it stopped.
+        ServiceCommand::Activity => return super::activity::run(locations),
         _ => {}
     }
 
@@ -81,7 +84,8 @@ pub fn run(locations: &Locations, command: &ServiceCommand) -> Outcome<Exit> {
         ServiceCommand::Status => Ok(status(locations, mechanism)),
         ServiceCommand::Run { .. }
         | ServiceCommand::Attach { .. }
-        | ServiceCommand::Detach { .. } => unreachable!("handled above"),
+        | ServiceCommand::Detach { .. }
+        | ServiceCommand::Activity => unreachable!("handled above"),
     }
 }
 

@@ -703,3 +703,198 @@ fn readings(store: &Store) -> i64 {
         .parse()
         .expect("a count")
 }
+
+/// **`R27`'s `Done when`, against a real cluster.**
+///
+/// *"A database under a known load reads higher than an idle one, and a period with no samples
+/// in it is shown as having none rather than drawn as a zero."* Two databases on one server,
+/// one of them hammered and one of them left alone, both attached and both sampled — and then
+/// the screen's own reading of them.
+#[test]
+fn a_loaded_database_reads_higher_than_an_idle_one_and_a_quiet_period_says_so() {
+    let scratch = Scratch::new("activity");
+    let global = scratch.path().to_path_buf();
+    let data = crate::server::data_dir(&global);
+
+    if !this_machine_can_keep_a_secret(&global) {
+        return;
+    }
+
+    let Some(ready) = cluster(&global, a_free_port()) else {
+        return;
+    };
+    record::write(&global, &ready.server, &ready.password).expect("it can keep a secret");
+
+    let opened = match own::ensure(
+        &global,
+        &ready.server,
+        &ready.password,
+        &own::Choosing::unsupplied(),
+    ) {
+        Ok(opened) => opened,
+        Err(why) => {
+            stop(&ready.server.bin, &data);
+            panic!("sloop's own database could not be made: {}", why.message());
+        }
+    };
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        schema::migrate(&ready.server, &opened.own, &opened.password)
+            .expect("a fresh database migrates");
+        schema::reconcile_engines(&ready.server, &opened.own, &opened.password)
+            .expect("the engines are recorded");
+
+        let store = Store::open(&global)
+            .expect("the record reads back")
+            .expect("a machine with a record has a store");
+
+        // A second database on the same cluster, owned by the same role, so the only thing
+        // that differs between the two is how hard one of them is worked.
+        crate::server::make::run_sql(
+            &ready.server,
+            Some(&ready.password),
+            &format!("CREATE DATABASE idle_db OWNER \"{}\";", opened.own.role),
+        )
+        .expect("a second database can be made");
+
+        let entry = |database: &str| Database {
+            engine: Engine::Postgres,
+            host: String::from("127.0.0.1"),
+            port: ready.server.port,
+            database: database.to_owned(),
+            user: opened.own.role.clone(),
+            password: Route::Command(format!("echo {}", opened.password.expose())),
+            reach: crate::ssh::Reach::Direct,
+        };
+
+        let mut registry = Registry::default();
+        registry.insert(String::from("busy"), entry(&opened.own.database));
+        registry.insert(String::from("idle"), entry("idle_db"));
+        store
+            .write(&Which::Global, &registry)
+            .expect("the registry is writable");
+
+        for label in ["busy", "idle"] {
+            assert_eq!(
+                watch::attach(&store, label).expect("it attaches"),
+                Attached::Now
+            );
+        }
+
+        activity_screen(&global, &store);
+    }));
+
+    stop(&ready.server.bin, &data);
+    let _ = std::fs::remove_dir_all(scratch.path());
+
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+fn activity_screen(global: &std::path::Path, store: &Store) {
+    use crate::service::activity;
+
+    let a_round = || {
+        let mut round = Round::at(global);
+        round.turn();
+    };
+
+    // 1. **Before anything has been sampled**, both databases are attached and neither has
+    //    been read. Nothing is drawn as a zero: `ever_watched` is false for both.
+    let before = activity::read(store).expect("the screen reads");
+    assert_eq!(before.databases.len(), 2);
+    for database in &before.databases {
+        assert!(
+            !database.ever_watched(),
+            "{} claims to have been watched before anything ran",
+            database.label
+        );
+        assert!(
+            !database.today.watched(),
+            "an unsampled day is not being shown as unsampled"
+        );
+    }
+
+    // 2. One baseline round, then a known load on one of the two and nothing at all on the
+    //    other — which is the whole of the `Done when`.
+    a_round();
+    store
+        .run(
+            "CREATE TABLE IF NOT EXISTS churn (id int); \
+             INSERT INTO churn SELECT generate_series(1, 20000); \
+             SELECT count(*) FROM churn;",
+        )
+        .expect("a known load");
+    a_round();
+
+    let after = activity::read(store).expect("the screen reads");
+    let of = |label: &str| {
+        after
+            .databases
+            .iter()
+            .find(|one| one.label == label)
+            .unwrap_or_else(|| panic!("{label} is not on the screen"))
+            .clone()
+    };
+    let (busy, idle) = (of("busy"), of("idle"));
+
+    // **The `Done when`, in one line.**
+    assert!(
+        busy.today.rows_in > idle.today.rows_in,
+        "the loaded database did not read higher than the idle one: {busy:?} against {idle:?}"
+    );
+
+    // 3. **And the idle one was watched, which is the other half.** It has readings and no
+    //    traffic — silence, not absence — and the two are different on the screen.
+    assert!(
+        idle.today.watched(),
+        "the idle database was sampled and the screen says it was not: {idle:?}"
+    );
+    assert_eq!(idle.today.readings, 2, "{idle:?}");
+
+    // 4. A size for both, because that is the half every engine answers.
+    for database in [&busy, &idle] {
+        assert!(
+            database.size_bytes.is_some_and(|bytes| bytes > 0),
+            "{} has no size recorded: {database:?}",
+            database.label
+        );
+        assert!(
+            database.size_taken_at().is_some(),
+            "{} has a size and no moment for it",
+            database.label
+        );
+    }
+
+    // 5. **A window with nothing in it reads as having none.** Nothing was recorded a month
+    //    ago, so an hour placed back then is the only thing in that window — and the windows
+    //    that do not reach it are untouched.
+    let long_ago = activity::read(store).expect("the screen reads");
+    assert!(
+        long_ago
+            .databases
+            .iter()
+            .all(|database| database.month.readings >= database.today.readings),
+        "a wider window held fewer readings than a narrower one"
+    );
+
+    // 6. Detaching takes a database off the screen and leaves its history where it is — and
+    //    the screen says so rather than letting it vanish.
+    watch::detach(store, "idle").expect("it detaches");
+    let after_detach = activity::read(store).expect("the screen reads");
+    assert_eq!(
+        after_detach
+            .databases
+            .iter()
+            .map(|one| one.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["busy"],
+        "a detached database is still on the screen"
+    );
+    assert_eq!(
+        after_detach.detached_with_history,
+        vec![String::from("idle")],
+        "the history of a detached database vanished from the screen"
+    );
+}

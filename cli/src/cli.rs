@@ -472,6 +472,14 @@ pub enum ServiceCommand {
     /// Stop it now. It still starts again at the next boot.
     Stop,
 
+    /// What the service has recorded: rows in, rows out and size, by day, week and month.
+    ///
+    /// **Rows, not bytes.** No engine reports bytes per database — PostgreSQL counts rows,
+    /// MySQL's byte counters are server-wide — so what is shown is what is true, and every
+    /// line says which it is. A period nothing was watching reads as having no readings
+    /// rather than as a zero.
+    Activity,
+
     /// Is it installed, is it running, and when did it last do anything.
     ///
     /// Answers honestly when it is stopped, and when it was never installed at all — the
@@ -1184,6 +1192,7 @@ impl ServiceCommand {
             Self::Uninstall => "service uninstall",
             Self::Attach { .. } => "service attach",
             Self::Detach { .. } => "service detach",
+            Self::Activity => "service activity",
             Self::Start => "service start",
             Self::Stop => "service stop",
             Self::Status => "service status",

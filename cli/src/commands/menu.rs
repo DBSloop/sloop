@@ -200,7 +200,7 @@ impl Doing for Machine {
         let registries = self.open()?;
 
         match job {
-            Job::Setup | Job::ServerInstall | Job::ServerConnection => {
+            Job::Setup | Job::ServerInstall | Job::ServerConnection | Job::ServiceActivity => {
                 unreachable!("handled above, before the registries are opened")
             }
             Job::DbAdd => self.add(registries, answers),
@@ -330,6 +330,10 @@ impl Machine {
                     force: false,
                 },
             )),
+            // `R27`. What the service recorded is in sloop's own database, reached the same
+            // way `server connection` reaches it — and a machine whose service is stopped
+            // still has months of it to show.
+            Job::ServiceActivity => Some(commands::activity::show(&self.global)),
             _ => None,
         }
     }

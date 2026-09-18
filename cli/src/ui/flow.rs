@@ -63,6 +63,8 @@ pub enum Job {
     KeyImport,
     /// `query`
     Query,
+    /// `service activity`
+    ServiceActivity,
     /// `doctor`
     Doctor,
     /// `setup` — the one job that runs before there is a registry to read.
@@ -451,11 +453,15 @@ impl Job {
             // engine, version and the confirmation are all the command's own questions, on
             // the terminal it has been handed — which is also what lets the engine list show
             // MongoDB and SQL Server as rows nobody can choose, the way `R19d` asked.
+            // `service activity` asks nothing either: it is a reading of what is already
+            // recorded, and every choice it could offer — which database, which window — is
+            // on the screen at once instead.
             Self::Setup
             | Self::ServerInstall
             | Self::DbList
             | Self::KeyExport
-            | Self::KeyImport => Vec::new(),
+            | Self::KeyImport
+            | Self::ServiceActivity => Vec::new(),
 
             Self::DbAdd => registering(answers),
             Self::DbCreate => making(),

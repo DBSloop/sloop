@@ -1,5 +1,6 @@
 //! The commands themselves.
 
+pub mod activity;
 pub mod backup;
 pub mod backups;
 pub mod db;

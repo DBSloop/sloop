@@ -596,6 +596,14 @@ const HOME: &[Shelf] = &[
                 run_it: "Show me",
             },
             Leaf {
+                title: "What my databases have been doing",
+                blurb: "rows in, rows out and size, by day, week and month — needs the service",
+                command: "sloop service activity",
+                job: Job::ServiceActivity,
+                under: "This machine",
+                run_it: "Show me",
+            },
+            Leaf {
                 title: "Check my setup",
                 blurb: "what sloop can find on this machine, and what it cannot",
                 command: "sloop doctor",
