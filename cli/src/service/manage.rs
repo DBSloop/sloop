@@ -111,7 +111,17 @@ pub fn install(mechanism: Mechanism, definition: &Definition) -> Outcome<()> {
 }
 
 /// Start it now.
+///
+/// **Already running is success, not an error.** Every one of the three managers refuses a
+/// start against something already started -- Windows with 1056, systemd more quietly -- and
+/// all three callers want the same thing from it: that the service be running when this
+/// returns. `install` over an install hits this every time, and so does anybody who runs
+/// `start` twice.
 pub fn start(mechanism: Mechanism) -> Outcome<()> {
+    if state(mechanism) == State::Running {
+        return Ok(());
+    }
+
     match mechanism {
         Mechanism::Systemd => run("systemctl", &["start", SERVICE_NAME], "starting it").map(drop),
         // launchd's `kickstart` starts a loaded daemon; `bootstrap` would fail on one that is
@@ -129,7 +139,15 @@ pub fn start(mechanism: Mechanism) -> Outcome<()> {
 }
 
 /// Stop it now, leaving it registered for the next boot.
+///
+/// Already stopped is success, for the reason [`start`] gives: what the caller wants is the
+/// state afterwards, and `sc stop` against a stopped service is an error saying it is in the
+/// state that was asked for.
 pub fn stop(mechanism: Mechanism) -> Outcome<()> {
+    if !matches!(state(mechanism), State::Running) {
+        return Ok(());
+    }
+
     match mechanism {
         Mechanism::Systemd => run("systemctl", &["stop", SERVICE_NAME], "stopping it").map(drop),
         Mechanism::Launchd => run(
