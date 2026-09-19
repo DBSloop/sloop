@@ -21,6 +21,7 @@ use crate::crypt::PrivateKey;
 use crate::engine::Engine;
 use crate::engine::cluster_tests::{Cluster, skip};
 use crate::exit::Exit;
+use crate::failure::Outcome;
 use crate::registry::file::{Database, Encryption, KeyKept, Registry};
 use crate::registry::{Registries, Resolution, World, resolve};
 use crate::secret::Route;
@@ -71,30 +72,48 @@ fn seeded_key(registry: &mut Registry) -> PrivateKey {
     private
 }
 
-/// Wait, briefly and with a bound, until `label`'s lock can be taken again.
+/// Back one up, retrying while the previous run's lock is still coming free.
+///
+/// **This replaced a helper that caused the thing it was written to prevent.** That one
+/// waited by *taking* the lock and dropping it again — which proved the previous holder had
+/// let go, and then created a release of its own, with exactly the latency it was absorbing,
+/// immediately before the call it was protecting. It made the window narrower and left it
+/// open, which is why `test (ubuntu-latest)` went red once and `test (macos-latest)` went
+/// red again on a commit that had changed nothing about locking.
+///
+/// So nothing here takes the lock. The run being tested is the only thing that asks for it,
+/// and `7` — *another run is working on this* — is read as *not yet* rather than as an
+/// answer, within a bound.
 ///
 /// **The bound is the point.** Two seconds is far longer than any real gap this matters for,
-/// so a lock that is genuinely still held — the failure worth catching — still fails the
-/// test; what it absorbs is only the moment between a handle being dropped and the operating
-/// system saying so. See `crate::lock::tests::the_lock_goes_when_the_holder_does`, where the
-/// same wait is written for the same reason.
-fn wait_for_the_lock_to_go(store: &Path, label: &str) {
+/// so a lock genuinely still held — the failure worth catching — still fails the test. What
+/// it absorbs is only the moment between a handle being dropped and the operating system
+/// saying so, which no platform promises is zero. See
+/// `crate::lock::tests::the_lock_goes_when_the_holder_does`, written for the same reason.
+fn back_up_once_the_lock_is_free(
+    context: &mut Context<'_>,
+    name: &str,
+    mode: Mode,
+) -> Outcome<Exit> {
     let waited = std::time::Instant::now();
     loop {
-        match crate::lock::take(store, label, "test") {
-            Ok(held) => {
-                drop(held);
-                if waited.elapsed() > std::time::Duration::from_millis(1) {
-                    eprintln!("the {label} lock took {:?} to come free", waited.elapsed());
-                }
-                return;
+        let outcome = run(context, Some(name), false, mode);
+
+        let still_locked = outcome
+            .as_ref()
+            .err()
+            .is_some_and(|failure| failure.exit() == Exit::Locked);
+        if !still_locked {
+            if waited.elapsed() > std::time::Duration::from_millis(1) {
+                eprintln!("the {name} lock took {:?} to come free", waited.elapsed());
             }
-            Err(why) => assert!(
-                waited.elapsed() < std::time::Duration::from_secs(2),
-                "the {label} lock did not go when the run that took it finished: {}",
-                why.message()
-            ),
+            return outcome;
         }
+
+        assert!(
+            waited.elapsed() < std::time::Duration::from_secs(2),
+            "the {name} lock did not go when the run that took it finished: {outcome:?}"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
@@ -334,17 +353,12 @@ fn every_database_is_backed_up_and_a_broken_one_does_not_stop_the_rest() {
     // are accepted; what is not accepted is the first backup being replaced. One database
     // by name is exercised end to end by the test below.
     //
-    // **The lock the run above took has to be observably gone first**, and that wait is not
-    // politeness. `lock::tests::the_lock_goes_when_the_holder_does` already wrote this down
-    // for macOS: sloop guarantees the lock goes when the handle does, but that the *next*
-    // attempt in the same process sees it gone within zero nanoseconds is a timing property
-    // no operating system promises, and a loaded parallel test run is exactly where it is
-    // not provided. Without the wait this test asked its question of the kernel's scheduling
-    // instead of of `backup`, and answered `7` — which is how `test (ubuntu-latest)` went red
-    // on a commit that had changed nothing about locking.
-    wait_for_the_lock_to_go(&store, "orders");
-
-    let again = run(&mut context, Some("orders"), false, Mode::Sequential);
+    // **The run above still holds its lock for a moment after it returns**, and that is a
+    // timing property no operating system promises to make zero — a loaded parallel test run
+    // is exactly where it is not provided. So the second backup is retried while `7` is
+    // still the answer, rather than this test asking its question of the kernel's scheduling
+    // instead of of `backup`. See the helper.
+    let again = back_up_once_the_lock_is_free(&mut context, "orders", Mode::Sequential);
     let after = stored(&store, "orders");
     match again {
         Ok(exit) => {
