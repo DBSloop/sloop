@@ -16,6 +16,7 @@ import { Pending } from './pending';
 import { Postgres } from './postgres/postgres';
 import { Query } from './query/query';
 import { Service } from './service/service';
+import { Ssh } from './ssh/ssh';
 
 /**
  * The pages that have been written, by path.
@@ -36,6 +37,7 @@ const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   service: Service,
   activity: Activity,
   postgres: Postgres,
+  ssh: Ssh,
 };
 
 /**

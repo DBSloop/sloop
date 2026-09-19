@@ -122,6 +122,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         documentTitle: 'Back up a database through an SSH tunnel — sloop',
         title: 'Reaching a database over SSH',
         short: 'Over SSH',
+        written: true,
         blurb:
           'A database whose port is closed, reached by running the machine’s own ssh — never a client built into the binary.',
         covers: [

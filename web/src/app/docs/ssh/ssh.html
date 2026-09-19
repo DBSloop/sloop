@@ -1,0 +1,165 @@
+<!--
+  Reaching a database over SSH.
+
+  Real runs throughout: two registrations, db list, db edit --no-ssh, a failing
+  db test, and the CI guard. There is no live tunnel because this machine has no
+  sshd — which made the better capture anyway, since the failure is OpenSSH's
+  own message relayed word for word.
+
+  The four reasons and the one-forward-per-session rule are quoted from
+  cli/src/ssh/mod.rs; the denied crate families from ci/no-http-client.sh.
+-->
+<app-docs-page
+  heading="Reaching a database over SSH"
+  lede="A database whose port is closed to the world, reached through an SSH server — by running the ssh already on your machine, never a client built into sloop."
+  eyebrow="Databases"
+  path="ssh"
+>
+  <p>
+    Most databases worth backing up are not listening on the public internet. sloop reaches one
+    through an SSH server you can already log into: it opens a forward, binds a local port, and
+    hands that port to <code>pg_dump</code> or <code>mysqldump</code>, which never learn that SSH
+    was involved.
+  </p>
+
+  <h2 id="registering">Registering one</h2>
+  <p>
+    The SSH settings live on the record, beside the connection, so you give them once and every
+    command after that just takes the name:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="through a bastion" [lines]="registering" copy />
+  </div>
+
+  <div class="docs-bare mt-7 rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
+    <p class="flex items-center gap-2.5 font-mono text-xs text-warn">
+      <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-warn"></span>
+      --host is what the SSH server sees, not what you see
+    </p>
+    <p class="mt-3 max-w-measure text-sm text-muted">
+      This is the one thing that catches people, so sloop says it at registration time.
+      <code class="font-mono text-xs text-text">--host 127.0.0.1</code> above means
+      <em>localhost as the bastion sees it</em> — the database running on the bastion itself. A
+      database on a third machine would be its address on the bastion's network. And
+      <code class="font-mono text-xs text-text">--ssh-port</code> is the SSH server's port, never
+      the database's.
+    </p>
+  </div>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="and it stays on the record" [lines]="listed" copy />
+  </div>
+
+  <p>
+    <code>--ssh-user</code> falls back to <code>~/.ssh/config</code> and then to your own username.
+    <code>--ssh-port</code> is 22 when left out. <code>--ssh-identity</code> takes a particular
+    private key exactly as <code>ssh -i</code> does — and when you leave it out, the agent and
+    <code>~/.ssh/config</code> decide, which is the documented default.
+    <strong>sloop never reads your key file and never copies it.</strong>
+  </p>
+
+  <h2 id="passphrase">Where the key's passphrase comes from</h2>
+  <p>
+    The same four routes a database password takes, with the same flags wearing an
+    <code>--ssh-</code> prefix: <code>--ssh-keyring</code>, <code>--ssh-encrypted-file</code>,
+    <code>--ssh-env &lt;VARIABLE&gt;</code> and <code>--ssh-passphrase-from &lt;COMMAND&gt;</code>,
+    plus <code>--ssh-passphrase-stdin</code> for storing one with no terminal.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal
+      class="block"
+      caption="a named key, unlocked from a vault"
+      [lines]="withIdentity"
+      copy
+    />
+  </div>
+
+  <p>
+    A registry holds the <strong>route</strong> and never the passphrase, which is exactly the rule
+    <a routerLink="/docs/databases" fragment="where-the-password-lives">database passwords</a>
+    follow. And the note is the point rather than a problem: a command that is not installed yet is
+    fine at registration time, because it is run when it is needed rather than now.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="and off again" [lines]="removing" copy />
+  </div>
+
+  <p><code>--no-ssh</code> takes the forward off and the connection becomes a direct one.</p>
+
+  <h2 id="one-forward">One forward per session, not per command</h2>
+  <p>
+    sloop opens <strong>one long-lived forward per remote server</strong> — the first time something
+    needs it — and closes it when sloop exits. Ten operations against one server in one menu session
+    authenticate <strong>once</strong>. A tool that made you touch a hardware key before every
+    single command would be a tool people stop using.
+  </p>
+
+  <h2 id="why-shelling-out">Why sloop runs your ssh rather than embedding one</h2>
+  <p>
+    This is a deliberate decision and it is the same one sloop makes about <code>curl</code>. Four
+    reasons, and the first is the product:
+  </p>
+
+  <ol class="docs-bare mt-7 space-y-px overflow-hidden rounded-xl border border-line">
+    @for (reason of reasons; track reason.title; let i = $index) {
+      <li class="flex gap-4 bg-surface p-5 sm:gap-5 sm:p-6">
+        <span
+          class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-soft font-mono text-xs font-semibold text-accent"
+          aria-hidden="true"
+          >{{ i + 1 }}</span
+        >
+        <div class="min-w-0">
+          <p class="max-w-measure text-base font-semibold text-text">{{ reason.title }}</p>
+          <p class="mt-1.5 max-w-measure text-sm text-muted">{{ reason.detail }}</p>
+        </div>
+      </li>
+    }
+  </ol>
+
+  <div class="docs-bare mt-7 rounded-xl border border-accent/25 bg-accent-soft p-5 sm:p-6">
+    <p class="max-w-measure text-base text-text">
+      <strong class="font-semibold"
+        >Your credentials never leave your machine, and this is where that claim would have been
+        quietly broken.</strong
+      >
+      An embedded SSH client can open a socket to anywhere. So the build refuses one — the same
+      check that denies <code class="font-mono text-sm">reqwest</code> and
+      <code class="font-mono text-sm">hyper</code> denies
+      <code class="font-mono text-sm">ssh2</code>, <code class="font-mono text-sm">russh</code>,
+      <code class="font-mono text-sm">thrussh</code> and the rest, across normal, build
+      <em>and</em> dev dependencies, on every target.
+    </p>
+  </div>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="checked on every push" [lines]="guard" copy />
+  </div>
+
+  <p>
+    A claim that holds only because the check is narrow is not worth making. That is why the check
+    is not narrow — and why the honest way to reach a closed-off database is to run the
+    <code>ssh</code> you already trust.
+  </p>
+
+  <h2 id="when-it-fails">When it fails, it fails in OpenSSH's words</h2>
+  <p>Which is the best evidence there is for everything above. Here the bastion does not exist:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 3" [lines]="failing" copy />
+  </div>
+
+  <p>
+    <code>ssh: Could not resolve hostname …</code> is not sloop's sentence. It is the message your
+    own OpenSSH printed, handed straight back to you — so a wrong key, a rejected host, an expired
+    certificate or a <code>ProxyJump</code> that failed all arrive as the message you would have
+    seen typing <code>ssh</code> yourself, and you fix them the way you already know how.
+  </p>
+
+  <p>
+    Every <code>--ssh-</code> flag is on the <a routerLink="/docs/commands">command reference</a>,
+    generated from <code>--help</code>.
+  </p>
+</app-docs-page>
