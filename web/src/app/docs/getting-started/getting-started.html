@@ -55,9 +55,10 @@
       anything without an answer.
     </p>
     <p>
-      It uses a PostgreSQL 18 already serving on 5432 if you have one. Otherwise — including on the
-      machine above, which had PostgreSQL 17 and got named and left alone — it builds a cluster of
-      its own on <strong>5433</strong>, which disturbs nothing already running.
+      Answer yes and it downloads, checks and unpacks; answer anything else and nothing happens at
+      all. It uses a PostgreSQL 18 already serving on 5432 if you have one. Otherwise — including on
+      the machine above, which had PostgreSQL 17 and got named and left alone — it builds a cluster
+      of its own on <strong>5433</strong>, which disturbs nothing already running.
     </p>
   } @else {
     <p>
@@ -93,8 +94,16 @@
     </p>
   }
   <p>
-    It is safe to run again on a machine that is already set up, so it is the right thing to reach
-    for when you are not sure.
+    When it has finished it prints where your state now lives — the cluster it used or made, and the
+    connection string for sloop's own database, which is
+    <code>sloop_database</code> owned by <code>sloop_db_admin</code>, with that role's password in
+    {{ keyring() }}. <a routerLink="/docs/postgres">sloop's own PostgreSQL</a> covers all of it,
+    including how to open that database yourself.
+  </p>
+  <p>
+    <strong>It is safe to run again.</strong> On a machine that is already set up it reports what it
+    found rather than changing anything, and brings the schema forward if a newer sloop needs a
+    newer one — so it is the right thing to reach for when you are not sure, and after an upgrade.
   </p>
 
   <h2 id="register-a-database">2 · Register your first database</h2>
