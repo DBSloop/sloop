@@ -944,7 +944,8 @@ impl Adapter for MysqlFamily {
                 });
                 let note = (rows_in.is_none() && rows_out.is_none()).then(|| {
                     format!(
-                        "{} counts rows in performance_schema, and it is switched off on this                          server. Size is still recorded.",
+                        "{} counts rows in performance_schema, and it is switched off on this \
+                         server. Size is still recorded.",
                         self.engine().proper_name()
                     )
                 });
@@ -1152,7 +1153,8 @@ impl Adapter for MysqlFamily {
             )
             .map_err(|failure| {
                 failure.at(Exit::Restore).hint(
-                    "something outside this list may still point at it. Name that table too,                      or mirror the whole database",
+                    "something outside this list may still point at it. Name that table too, or \
+                     mirror the whole database",
                 )
             })?;
             gone += 1;

@@ -76,7 +76,7 @@ fn a_reading_with_no_rows_in_it_records_nothing_and_keeps_the_baseline() {
         rows_out: None,
         size_bytes: Some(4_096),
         note: Some(String::from(
-            "rows are not counted: this role cannot read                                  performance_schema",
+            "rows are not counted: this role cannot read performance_schema",
         )),
     };
     let sql = record("orders", &quiet).unwrap();

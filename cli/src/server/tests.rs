@@ -54,7 +54,8 @@ pub(crate) fn this_machine_can_keep_a_secret(global: &Path) -> bool {
 
     if kept.is_err() {
         eprintln!(
-            "skipping: this machine has no keyring and no SLOOP_PASSPHRASE, so sloop cannot              keep a password anywhere"
+            "skipping: this machine has no keyring and no SLOOP_PASSPHRASE, so sloop cannot keep a \
+             password anywhere"
         );
     }
     kept.is_ok()

@@ -1153,7 +1153,8 @@ fn copying(job: Job, answers: &Answers, known: &[String]) -> Vec<Step> {
         field::SAFE,
         "Dump the source to a file first?",
         false,
-        "it can be retried if the copy fails, but while it runs the file is an unencrypted          dump on this disk",
+        "it can be retried if the copy fails, but while it runs the file is an unencrypted dump on \
+         this disk",
     ));
     plan
 }
@@ -1175,7 +1176,8 @@ fn destination(job: Job, answers: &Answers, destinations: &[String]) -> Vec<Step
     );
     let only_a_new_one = (
         "A new one",
-        "sloop makes the database, its user and the grants first. Nothing else is          registered here to copy into",
+        "sloop makes the database, its user and the grants first. Nothing else is registered here \
+         to copy into",
         "new",
     );
 
@@ -1247,7 +1249,8 @@ fn how_much(answers: &Answers) -> Vec<Step> {
                 field::REFERENCES,
                 "Bring in the tables those ones point at?",
                 true,
-                "no means sloop refuses rather than copying a table whose foreign keys have                  nowhere to land",
+                "no means sloop refuses rather than copying a table whose foreign keys have \
+                 nowhere to land",
             ),
         ]);
     }

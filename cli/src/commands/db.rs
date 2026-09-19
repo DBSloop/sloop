@@ -631,7 +631,8 @@ pub fn unattended_needs(asked: &Building<'_>) -> Outcome<()> {
     )
     .hint(
         "unattended, it looks like this: --superuser-password-command \"op read \
-         op://vault/pg/root\" --role-password-stdin, with the new password piped in. Only          one of the two can use standard input, so the other takes a --…-password-command",
+         op://vault/pg/root\" --role-password-stdin, with the new password piped in. Only \
+         one of the two can use standard input, so the other takes a --…-password-command",
     ))
 }
 

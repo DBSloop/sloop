@@ -903,7 +903,8 @@ impl Adapter for Postgres {
             )
             .map_err(|failure| {
                 failure.at(Exit::Restore).hint(
-                    "something outside this list may still point at it. Name that table too,                      or mirror the whole database",
+                    "something outside this list may still point at it. Name that table too, or \
+                     mirror the whole database",
                 )
             })?;
             gone += 1;

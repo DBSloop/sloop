@@ -586,7 +586,8 @@ pub fn literal(password: &Secret) -> Outcome<String> {
             "the password came back empty, and a role that can log in is not given one",
         )
         .hint(
-            "whatever supplied it printed nothing — check `--superuser-password-command`,              or type the password instead",
+            "whatever supplied it printed nothing — check `--superuser-password-command`, or type \
+             the password instead",
         ));
     }
 

@@ -256,7 +256,8 @@ pub const READINGS: &[Reading] = &[
         table: "sealed_vault",
         // Never `blob` itself. A documented query is something somebody runs at a prompt,
         // and dumping ciphertext across a terminal helps nobody.
-        purpose: "which registries have a sealed vault, and how big each one is — never its                   contents",
+        purpose: "which registries have a sealed vault, and how big each one is — never its \
+                  contents",
         sql: "SELECT v.scope, p.directory AS project,
                      octet_length(v.blob) AS bytes, v.updated_at
                 FROM sealed_vault v
@@ -267,7 +268,8 @@ pub const READINGS: &[Reading] = &[
         table: "activity_hour",
         // The point of the table, as a query: four windows, one scan, no rollup tables. The
         // day is the sum of its hours, which is `R26`'s own `Done when`.
-        purpose: "rows in, rows out and size per database over an hour, a day, a week and a                   month — all from the one table, and every figure is rows rather than bytes",
+        purpose: "rows in, rows out and size per database over an hour, a day, a week and a month \
+                  — all from the one table, and every figure is rows rather than bytes",
         sql: "SELECT d.label,
                      sum(a.rows_in)  FILTER (WHERE a.hour >= date_trunc('day', now()))  AS in_today,
                      sum(a.rows_out) FILTER (WHERE a.hour >= date_trunc('day', now()))  AS out_today,
