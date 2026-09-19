@@ -1,0 +1,141 @@
+<!--
+  Activity and monitoring.
+
+  The three unsampled screens are real runs. The populated one is a shape with
+  invented numbers, and the page says so beside the block rather than only in a
+  comment — activity rows are written by a running installed service, and
+  installing one on the owner's machine to photograph a screen is not a trade
+  worth making. The class comment on `Activity` records what was tried.
+
+  The rule this page is measured against: nothing on it may imply sloop
+  measures network traffic.
+-->
+<app-docs-page
+  heading="Activity and monitoring"
+  lede="What the service records while it watches a database, how a day, a week and a month are all the same sum over a different range — and the numbers sloop will not pretend to have."
+  eyebrow="The background service"
+  path="activity"
+>
+  <p>
+    Once a database is <a routerLink="/docs/service" fragment="attaching">attached</a>, the service
+    takes a reading of it every round — 60 seconds by default. <code>sloop service activity</code>
+    is those readings, added up.
+  </p>
+
+  <h2 id="what-it-records">What it records</h2>
+  <p>
+    <strong>Per database, per UTC day.</strong> That single choice is why the screen can show three
+    windows without storing three things: a day, a week, a month and a year are all
+    <em>a sum over a range of days</em>, and the range is the only difference between them.
+  </p>
+  <p>
+    UTC rather than local, for the reason backups are named in UTC: a day that changes length twice
+    a year is a day that makes two months incomparable.
+  </p>
+
+  <!-- A list rather than a table: the third column is prose, and three columns
+       of prose at 390px broke `readings` across two lines mid-word. Same
+       information, same order, and each entry reads on its own. -->
+  <dl class="docs-bare mt-7 space-y-px overflow-hidden rounded-xl border border-line">
+    @for (measure of measures; track measure.name) {
+      <div class="bg-surface p-5 sm:p-6">
+        <dt class="font-mono text-sm font-semibold text-accent">{{ measure.name }}</dt>
+        <dd class="mt-2 max-w-measure text-sm text-text">{{ measure.is }}</dd>
+        <dd class="mt-1.5 max-w-measure text-sm text-muted">{{ measure.from }}</dd>
+      </div>
+    }
+  </dl>
+
+  <h2 id="what-it-does-not">What it does not record, and says so</h2>
+
+  <div class="docs-bare mt-7 rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
+    <p class="flex items-center gap-2.5 font-mono text-xs text-warn">
+      <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-warn"></span>
+      sloop does not measure network traffic
+    </p>
+    <p class="mt-3 max-w-measure text-sm text-muted">
+      <strong
+        >Bytes on the wire are not available per database on PostgreSQL, MySQL or MariaDB.</strong
+      >
+      No engine reports them. So sloop does not show a figure for them — not an estimate, not a
+      derived number, not a zero. It says the sentence instead, on the screen itself, every time.
+    </p>
+  </div>
+
+  <p>
+    <code>Moved</code> is the closest thing to it and is deliberately not called bandwidth: it is
+    bytes <strong>sloop itself</strong> read or wrote during a dump or a restore. sloop did that
+    reading and writing, so it knows the number exactly. It is a line of its own under a word of its
+    own, and it is never added to the row counts — they measure different things in different units.
+  </p>
+
+  <h3 id="no-readings">A period with no readings is not a period with no activity</h3>
+  <p>
+    If the service was not running, nothing was watched, and sloop will not write
+    <code>0</code> in a space where the honest answer is <em>nobody was looking</em>. That window
+    says <code>no readings in this period</code> instead — a zero there would be a claim about the
+    database, when the only true claim is about the service.
+  </p>
+
+  <h2 id="before-anything">Before a service has run</h2>
+  <p>Which is where every machine starts, and the screen is candid about it:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="nothing attached" [lines]="nothingAttached" copy />
+  </div>
+
+  <div class="mt-7">
+    <app-terminal
+      class="block"
+      caption="attached, never sampled"
+      [lines]="attachedUnsampled"
+      copy
+    />
+  </div>
+
+  <p>
+    <code>nothing recorded yet</code> and <code>no running service has picked it up yet</code> are
+    two different facts, and both are printed. Attaching a database does not record anything —
+    <a routerLink="/docs/service">installing and starting the service</a> is what does.
+  </p>
+
+  <h2 id="once-it-is-running">Once it has been running</h2>
+
+  <p class="docs-bare mt-7 rounded-xl border border-line bg-surface p-4 text-sm text-muted">
+    <strong class="font-semibold text-text">The numbers below are invented.</strong> Every other
+    block on this site is a real run; this one is the layout with made-up figures in it, because
+    activity rows are written only by an installed, running service and this documentation was not
+    going to install one on somebody's machine to take a picture. Every word, label and unit is
+    sloop's own.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="illustrative — not a capture" [lines]="populated" copy />
+  </div>
+
+  <p>
+    Three windows per database, in the same column so two lines can be compared by eye. Counts are
+    <strong>grouped, not shortened</strong> — <code>1,744,902</code> rather than <code>1.7M</code>,
+    because on a screen you are using to decide whether a database is being hammered, the difference
+    between 1,700,000 and 1,749,999 is the difference you came for.
+  </p>
+  <p>
+    <code>orders</code> above shows both halves of the honesty. Its week and month are populated and
+    <strong>today is not</strong> — the service stopped this morning, so there is nothing to report
+    for today and sloop says that rather than writing <code>0</code>. Note which window is the empty
+    one: thirty days contains the seven, so a populated week inside an empty month is a screen sloop
+    could never print. And <code>orders</code> has a <code>Moved</code> line where
+    <code>analytics</code> does not, because it is the one that has been backed up.
+  </p>
+  <p>
+    A database that is detached but still has history is listed under
+    <code>still recorded but no longer attached</code> rather than dropped —
+    <a routerLink="/docs/service" fragment="attaching">detaching stops the watching</a>, it does not
+    delete what was watched.
+  </p>
+
+  <p>
+    <code>service status</code> is the other half of this: attached, scheduled, last run, next run.
+    Both are on the <a routerLink="/docs/commands">command reference</a> with every flag they take.
+  </p>
+</app-docs-page>

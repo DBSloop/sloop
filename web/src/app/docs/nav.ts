@@ -244,6 +244,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         documentTitle: 'Database activity by day, week and month — sloop',
         title: 'Activity and monitoring',
         short: 'Activity',
+        written: true,
         blurb:
           'Rows in, rows out and size, per database per day — and the one number no engine will give you.',
         covers: [
