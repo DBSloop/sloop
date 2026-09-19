@@ -1,0 +1,111 @@
+name: Bug report
+description: Something sloop did that it should not have.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time.
+
+        **Not here:** a security vulnerability. Report one privately through
+        [the advisory form](https://github.com/DBSloop/sloop/security/advisories/new).
+
+        Nothing below should contain a password. `sloop --log-file <path>` writes a run's
+        output with credentials removed and colour stripped, which makes it safe to attach.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: The commands you ran
+      description: Enough to reproduce it. Exact flags matter.
+      render: shell
+      placeholder: |
+        sloop db add orders --engine postgres --host db.internal --port 5432 ...
+        sloop backup orders
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: sloop version
+      description: The output of `sloop --version`.
+      placeholder: sloop 0.1.0-rc.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os_version
+    attributes:
+      label: Which version of it
+      placeholder: Windows 11 24H2, macOS 15.2, Ubuntu 24.04
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Database engine
+      options:
+        - PostgreSQL
+        - MySQL
+        - MariaDB
+        - Not about a particular engine
+    validations:
+      required: true
+
+  - type: input
+    id: engine_version
+    attributes:
+      label: Which version of it
+      description: The server's version, and the client tools' if they differ.
+      placeholder: PostgreSQL 16.4 server, pg_dump 17.2
+
+  - type: input
+    id: exit_code
+    attributes:
+      label: Exit code
+      description: "`echo $?`, or `$LASTEXITCODE` in PowerShell."
+      placeholder: "4"
+
+  - type: textarea
+    id: output
+    attributes:
+      label: What it printed
+      description: The error and the hint under it. A `--log-file` is better still.
+      render: text
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: sloop doctor
+      description: Optional, and worth it for anything about dumps, restores or permissions.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: There is no password, passphrase or private key anywhere in this report.
+          required: true
+        - label: I searched the open issues for this.
+          required: true

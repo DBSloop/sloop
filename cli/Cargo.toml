@@ -12,6 +12,12 @@ homepage = "https://dbsloop.github.io"
 [package]
 name = "dbsloop"
 description = "Register your databases once, then back them up, restore, mirror and sync them. No credential ever leaves the machine."
+# **The repository's README is the crate's page.** Cargo resolves `readme` against this
+# manifest and packages the file it finds, so `../README.md` is copied into the crate as
+# `README.md` — one file, rendered by GitHub and crates.io both, with nothing to keep in
+# step. `ci/community-standards.sh` asserts the packaged copy is byte-identical to the one
+# in the repository, because a silent divergence here is a crates.io page nobody looks at.
+readme = "../README.md"
 categories = ["command-line-utilities", "database"]
 keywords = ["backup", "restore", "postgresql", "mysql", "database"]
 version.workspace = true

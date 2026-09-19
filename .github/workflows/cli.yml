@@ -21,6 +21,11 @@ on:
       # `ci/release-targets.sh` reads the release matrix, so a change to it has to re-run
       # the check that the matrix and the installers still name the same six targets.
       - .github/workflows/release.yml
+      # The community-standards job reads all of these, and a deletion is exactly the
+      # change it exists to catch -- so a push that touches one has to re-run it.
+      - "*.md"
+      - LICENSE-*
+      - .github/ISSUE_TEMPLATE/**
   pull_request:
     paths:
       - cli/**
@@ -30,6 +35,11 @@ on:
       # `ci/release-targets.sh` reads the release matrix, so a change to it has to re-run
       # the check that the matrix and the installers still name the same six targets.
       - .github/workflows/release.yml
+      # The community-standards job reads all of these, and a deletion is exactly the
+      # change it exists to catch -- so a push that touches one has to re-run it.
+      - "*.md"
+      - LICENSE-*
+      - .github/ISSUE_TEMPLATE/**
   workflow_dispatch:
 
 permissions:
@@ -242,6 +252,37 @@ jobs:
           SLOOP_TEST_MARIADB_BIN: /usr/bin
         run: cargo test --bin sloop engine::mysql_cluster_tests::mariadb -- --nocapture --test-threads=1
 
+  community:
+    name: the repository a stranger can trust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Every item on GitHub's community-standards checklist, present and written. Rule 14:
+      # a page somebody ticked off once is a page a tidy-up quietly un-ticks.
+      - name: Every community-standards item is there
+        working-directory: .
+        run: sh ci/community-standards.sh
+
+      # `cli/Cargo.toml` says `readme = "../README.md"`, which is what makes the crates.io
+      # page and the repository's front page the same file. Cargo's resolution is Cargo's,
+      # so the packaged copy is unwrapped and compared rather than trusted -- a divergence
+      # here is invisible until somebody lands on crates.io and reads the wrong thing.
+      - name: The crate publishes the repository's README, byte for byte
+        working-directory: .
+        run: |
+          set -euo pipefail
+          cargo package --manifest-path cli/Cargo.toml --no-verify --allow-dirty
+          crate=$(ls cli/target/package/dbsloop-*.crate | head -n 1)
+          test -n "$crate" || { echo "::error::cargo package produced no .crate"; exit 1; }
+          tar -xzf "$crate" -C cli/target/package
+          packaged=$(ls -d cli/target/package/dbsloop-*/ | head -n 1)README.md
+          if ! diff -u README.md "$packaged"; then
+            echo "::error::the packaged README is not the repository's README"
+            exit 1
+          fi
+          echo "crates.io will render the same README this repository shows"
+
   guarantee:
     name: nothing opens a socket
     runs-on: ubuntu-latest
@@ -339,7 +380,7 @@ jobs:
           shellcheck --shell=sh --severity=style \
             install/install.sh install/uninstall.sh \
             ci/install-roundtrip.sh ci/ascii-scripts.sh ci/no-http-client.sh \
-            ci/release-targets.sh ci/service-roundtrip.sh
+            ci/release-targets.sh ci/service-roundtrip.sh ci/community-standards.sh
 
       # A syntax error in an installer is a release that cannot be installed, and the file
       # is only ever read by a machine that has already been told to run it.

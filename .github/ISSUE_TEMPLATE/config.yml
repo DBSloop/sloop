@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/DBSloop/sloop/security/advisories/new
+    about: Report it privately here, never as a public issue. See SECURITY.md for scope.
+  - name: Documentation
+    url: https://dbsloop.github.io
+    about: Commands, flags and platform notes, before you file anything.
