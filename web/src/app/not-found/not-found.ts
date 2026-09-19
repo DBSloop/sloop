@@ -34,7 +34,7 @@ interface Destination {
          under it. Filling the rest of the viewport keeps this page from
          scrolling on a desktop without pinning it there on a phone, where the
          section list is taller than the screen and a scrollbar is correct. -->
-    <main class="mx-auto flex min-h-[calc(100dvh-65px)] max-w-3xl flex-col justify-center px-6 py-16">
+    <main id="content" tabindex="-1" class="mx-auto flex min-h-[calc(100dvh-65px)] max-w-3xl flex-col justify-center px-6 py-16">
       <p class="flex items-center gap-3 font-mono text-xs text-accent">
         <span aria-hidden="true" class="h-px w-6 bg-accent/45"></span>404
       </p>

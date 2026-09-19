@@ -131,9 +131,17 @@
         class="rounded-full bg-brand px-3.5 py-2 text-sm font-semibold text-brand-ink transition-[background-color,transform,box-shadow] duration-2 ease-out hover:bg-brand/90 hover:shadow-glow active:translate-y-px sm:px-4"
         >Docs</a
       >
+      <!--
+        `aria-label` because the word beside the icon is `hidden sm:inline`, and
+        below 640px this link is a mark with nothing to read. It had no
+        accessible name at all there, which is the one thing Lighthouse's
+        accessibility audit found on the site. The label is on the link rather
+        than the icon so it says the same thing at every width.
+      -->
       <a
         href="https://github.com/DBSloop/sloop"
         rel="noreferrer"
+        aria-label="sloop on GitHub"
         class="flex items-center gap-2 rounded-full border border-line px-3 py-2 text-sm font-medium text-muted transition-colors duration-2 ease-out hover:border-line-strong hover:text-text sm:px-3.5"
       >
         <svg

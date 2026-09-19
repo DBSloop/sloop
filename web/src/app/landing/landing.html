@@ -21,6 +21,9 @@
   in docs/OWNER-DECISIONS.md.
 -->
 <div class="bg-bg text-text">
+  <!-- A24. Everything between the navbar and the footer, so a screen reader
+       and the skip link above both have somewhere to land. -->
+  <main id="content" tabindex="-1">
   <!-- ═══ Hero ════════════════════════════════════════════════════════════ -->
   <section class="relative overflow-hidden">
     <!--
@@ -1094,6 +1097,8 @@
       </p>
     </div>
   </section>
+
+  </main>
 
   <!-- ═══ Footer ══════════════════════════════════════════════════════════ -->
   <footer class="mx-auto max-w-[84rem] px-5 py-14 sm:px-8 lg:px-12">

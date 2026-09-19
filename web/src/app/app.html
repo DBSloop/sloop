@@ -1,2 +1,26 @@
+<!--
+  A24. The first focusable thing in the document, and invisible until it is.
+
+  A docs page puts twenty-nine tab stops between the top of the document and
+  the first control inside the article — the lockup, the tabs, the theme
+  control, the filter, and then every link in the sidebar — and a keyboard user
+  met all of them again on every page. This is the one standard fix.
+
+  `:focus` rather than `:focus-visible`, because a skip link that stays hidden
+  when a browser focuses it on a click is a skip link that looks broken. The
+  target carries `tabindex="-1"` so the jump moves focus as well as the
+  viewport; without it the page scrolls and the next Tab starts from the
+  navbar again, which is the whole problem over.
+
+  The href is written out in full rather than left as `#content`. `App.skipTo`
+  says why, and it is not obvious: with a `<base href>` in the document, a
+  fragment-only link goes to the base.
+-->
+<a
+  [href]="skipTo()"
+  class="sr-only rounded-full font-semibold focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[60] focus:bg-brand focus:px-5 focus:py-2.5 focus:text-sm focus:text-brand-ink focus:shadow-2"
+  >Skip to content</a
+>
+
 <app-navbar />
 <router-outlet />

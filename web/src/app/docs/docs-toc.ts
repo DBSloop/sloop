@@ -1,5 +1,7 @@
 import {
+  type AfterViewInit,
   ChangeDetectionStrategy,
+  ChangeDetectorRef,
   Component,
   DOCUMENT,
   DestroyRef,
@@ -129,7 +131,7 @@ interface TocItem {
     }
   `,
 })
-export class DocsToc {
+export class DocsToc implements AfterViewInit {
   /** The article to read headings out of. */
   readonly within = input.required<HTMLElement>();
   readonly variant = input<'rail' | 'inline'>('rail');
@@ -148,11 +150,41 @@ export class DocsToc {
   protected readonly active = signal('');
 
   private readonly document = inject(DOCUMENT);
+  private readonly cdr = inject(ChangeDetectorRef);
+  private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
   private headings: HTMLElement[] = [];
   private frame = 0;
 
+  /**
+   * Read the headings during the render itself, browser or not.
+   *
+   * **`A24`, and it was worth a CLS of 0.41 on every docs page.** The collection
+   * used to happen only in `afterNextRender`, which is browser-only by design —
+   * so a prerendered page shipped this component empty and then grew a list of
+   * eight links the moment the bundle booted. On a phone the inline variant sits
+   * *above* the article, so the whole page jumped down by the height of that
+   * list on every first load.
+   *
+   * `ngAfterViewInit` runs on the server too, and by then the projected article
+   * is in the DOM with its headings in it — the same DOM the browser will read a
+   * moment later, which is why hydration finds what it expects. The observers
+   * and the scroll listener stay where they were: those are browser work, and
+   * there is nothing to observe during a render that happens once.
+   */
+  ngAfterViewInit(): void {
+    this.collect();
+    if (!this.isBrowser) {
+      // The write above happens after this view has been checked, and a
+      // prerender serialises what was checked — so on the server the list has
+      // to be rendered explicitly or it is serialised empty, which is the bug
+      // this whole hook exists to fix. In the browser `afterNextRender` runs
+      // inside the normal cycle and needs none of this.
+      this.cdr.detectChanges();
+    }
+  }
+
   constructor() {
-    const isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
+    const isBrowser = this.isBrowser;
     const view = this.document.defaultView;
 
     const onScroll = () => {
@@ -182,6 +214,8 @@ export class DocsToc {
       if (!isBrowser || !view) {
         return;
       }
+      // `ngAfterViewInit` has already read them; this is the re-read after
+      // hydration, which costs nothing and keeps the two paths identical.
       this.collect();
 
       // **A page's headings can change without a navigation**, and on the

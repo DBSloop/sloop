@@ -35,7 +35,13 @@
 
   --ch-text: 237 233 228; /* 15.8:1 on --ch-bg */
   --ch-muted: 167 158 149; /*  7.4:1 - comfortable secondary */
-  --ch-faint: 133 125 116; /*  4.8:1 - labels and metadata */
+
+  /* A24 raised this from 133 125 116, which was tuned against --ch-bg alone.
+     It measured 4.8:1 there and 4.2:1 on --ch-surface-2 - and a faint label is
+     almost always inside a panel rather than on the page, so the number that
+     mattered was the one nobody had checked. 5.3 / 5.0 / 4.6 on bg, surface and
+     surface-2 now, so it clears 4.5 wherever it is actually used. */
+  --ch-faint: 140 132 123; /*  5.3:1 - labels and metadata */
 
   --ch-accent: 217 119 87; /*  6.3:1 - the brand, readable as-is on dark */
   --ch-accent-soft: 38 23 18; /* a tinted panel */
@@ -64,7 +70,11 @@
 
   --p-light-text: 26 23 20; /* 17.1:1 */
   --p-light-muted: 87 80 74; /*  7.5:1 */
-  --p-light-faint: 119 111 102; /*  4.7:1 */
+
+  /* The same correction as --ch-faint above, and for the same reason: 119 111
+     102 was 4.7:1 on the page and 4.5:1 on --p-light-surface-2, which is where
+     a label usually sits. 5.3 / 5.5 / 4.9 now. */
+  --p-light-faint: 112 104 95; /*  5.3:1 */
 
   /* #D97757 is only 3.0:1 on a light page, which fails as text and as a focus
      ring. The brand mark keeps the real orange - see --ch-brand - and this is

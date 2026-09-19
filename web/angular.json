@@ -31,6 +31,13 @@
             "outputMode": "static"
           },
           "configurations": {
+            // A24. `inlineCritical` is off, and that is a measured decision
+            // rather than a default being left alone: extracting a critical
+            // subset and loading the rest with `media="print" onload=...`
+            // restyles the page a moment after it paints, which measured a
+            // CLS of 0.136 on a docs page. Blocking on the whole sheet instead
+            // brings it to 0.031 - inside the good band - and the sheet is
+            // 8 KB over the wire on a site with no images above the fold.
             "production": {
               "budgets": [
                 {
@@ -44,7 +51,15 @@
                   "maximumError": "8kB"
                 }
               ],
-              "outputHashing": "all"
+              "outputHashing": "all",
+              "optimization": {
+                "scripts": true,
+                "fonts": true,
+                "styles": {
+                  "minify": true,
+                  "inlineCritical": false
+                }
+              }
             },
             "development": {
               "optimization": false,
