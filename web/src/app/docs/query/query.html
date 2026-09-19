@@ -1,0 +1,179 @@
+<!--
+  Reading a database.
+
+  The read-only guarantee is the page, and it was attacked rather than asserted:
+  six real runs across PostgreSQL 17.9 and MySQL 8.4.11, including a write
+  hidden behind an allowed first word that both servers refused anyway.
+
+  The builder's questions are quoted from source, because a prompt drawn in raw
+  mode is never recorded by a redirected run. The class comment on `Query` names
+  the files and says which blocks are captured and which are quoted.
+-->
+<app-docs-page
+  heading="Reading a database"
+  lede="Pick a table, tick the columns, choose the test. No SQL — and nothing either form runs can write, because the server is what refuses it."
+  eyebrow="Reading"
+  path="query"
+>
+  <p>
+    <code>sloop query</code> opens a database for reading. There are two ways in: a builder that
+    asks questions, and <code>--sql</code> for one statement when you already know what you want.
+    Neither can change anything, and the second half of this page is about why that is a
+    <em>guarantee</em> rather than a promise.
+  </p>
+
+  <h2 id="the-builder">The builder</h2>
+  <p>
+    <code>sloop query shop</code> with no other flags. Six questions, and
+    <strong>the only thing you type is a value</strong> — every table, every column and every test
+    is picked from a list the database itself supplied.
+  </p>
+
+  <!-- A screen of prompts cannot be shown as a transcript: inquire draws them
+       in raw mode and a redirected run records nothing. So the questions are
+       listed in the order they are asked, quoted from the source that asks
+       them. -->
+  <ol class="docs-bare mt-7 space-y-px overflow-hidden rounded-xl border border-line">
+    @for (step of steps; track step.asks; let i = $index) {
+      <li class="flex gap-4 bg-surface p-5 sm:gap-5 sm:p-6">
+        <span
+          class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-soft font-mono text-xs font-semibold text-accent"
+          aria-hidden="true"
+          >{{ i + 1 }}</span
+        >
+        <div class="min-w-0">
+          <p class="max-w-measure font-mono text-sm font-semibold text-text">{{ step.asks }}</p>
+          <p class="mt-1.5 max-w-measure text-sm text-muted">{{ step.detail }}</p>
+        </div>
+      </li>
+    }
+  </ol>
+
+  <div class="docs-bare mt-7 rounded-xl border border-accent/25 bg-accent-soft p-5 sm:p-6">
+    <p class="max-w-measure text-base text-text">
+      <strong class="font-semibold"
+        >There is no <code class="font-mono text-sm">DROP</code> on any of those lists, so there is
+        no <code class="font-mono text-sm">DROP</code> to catch.</strong
+      >
+      The builder is safe because of what it can produce, not because of what it screens out — and
+      that is a different kind of safe from a filter.
+    </p>
+  </div>
+
+  <p>
+    The builder ends in a <strong>scrollable grid, two hundred rows at a time</strong>. The page is
+    a <code>LIMIT</code> in the statement rather than a window over everything the server sent, so a
+    table nobody could print is a table you can open and page through.
+  </p>
+
+  <h2 id="sql">--sql, for one statement</h2>
+  <p>
+    The flag form exists for two reasons: somebody who knows SQL should not have to click through a
+    builder to run one statement, and
+    <strong>a session done by hand should become a line you can schedule</strong>.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="one statement" [lines]="sql" copy />
+  </div>
+
+  <p>
+    <code>--sql</code> <strong>prints</strong> rather than opening the grid, and the choice is made
+    by which form you used rather than by guessing at what is attached — a flag form that opened a
+    full-screen grid could not go in a script at all.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="a bigger result" [lines]="many" copy />
+  </div>
+
+  <p>
+    And because the builder is a screen of questions, it refuses to start where there is nobody to
+    answer them — naming the flag that does the job instead:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 2" [lines]="noTerminal" copy />
+  </div>
+
+  <h2 id="read-only">Nothing it runs can write, and the server is what says so</h2>
+  <p>
+    <code>--sql</code> takes any statement you give it. It is
+    <strong>not checked against a list of forbidden words</strong>. Instead, every statement either
+    form produces runs inside a transaction that sloop has told the server is
+    <strong>read-only</strong> — and from there it is the engine's rule, not sloop's.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal
+      class="block"
+      caption="PostgreSQL refusing, three ways"
+      [lines]="postgresRefuses"
+      copy
+    />
+  </div>
+
+  <p>
+    Read the error text: <code>cannot execute UPDATE in a read-only transaction</code> is
+    <strong>PostgreSQL talking</strong>, not sloop. sloop did not inspect that statement, decide it
+    was a write and block it. It handed it to the server inside a read-only transaction and the
+    server refused it.
+  </p>
+
+  <h3 id="why-not-a-word-list">Why that is not the same as a word list</h3>
+  <p>
+    A blacklist checks the first word. So here is a statement whose first word is
+    <code>WITH</code> — allowed by any such list — which deletes every row in a table:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="both servers, both refused" [lines]="hidden" copy />
+  </div>
+
+  <p>
+    Neither engine let it through. <strong>That is the whole argument for the approach</strong>: a
+    filter has to imagine every shape a write can take, and a read-only transaction does not have to
+    imagine anything. The engine knows what writes because the engine does the writing.
+  </p>
+
+  <h3 id="per-engine">Where MySQL and MariaDB need one more thing</h3>
+  <p>
+    On PostgreSQL the guarantee is complete and it is entirely the server's. On the MySQL family it
+    is not, and sloop is explicit about the difference rather than quietly papering over it.
+  </p>
+  <p>
+    A <code>READ ONLY</code> transaction on MySQL refuses every data change — including the hidden
+    one above. It does <strong>not</strong> refuse DDL, because <code>CREATE TABLE</code> performs
+    an implicit commit that ends the transaction <em>before</em> it runs. There is no session-level
+    setting that closes that gap; <code>read_only</code> is a server-wide switch and belongs to the
+    administrator. So sloop adds a fence of its own there, and says which of the two refused you:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="sloop, not the server" [lines]="mysqlDdl" copy />
+  </div>
+
+  <p>
+    <code>sloop only reads, and CREATE is not a statement that reads</code> — sloop's words this
+    time, and the hint says exactly why sloop had to be the one to say them. Two fences on those two
+    engines, both needed, and the message tells you which one you hit.
+  </p>
+
+  <div class="docs-bare mt-7 rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
+    <p class="flex items-center gap-2.5 font-mono text-xs text-warn">
+      <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-warn"></span>
+      What this is not
+    </p>
+    <p class="mt-3 max-w-measure text-sm text-muted">
+      It is not a permission system. A read-only transaction stops the statement from writing; it
+      does not stop the role from <em>reading</em> anything that role may read. If a database holds
+      something a person should not see, that is a <a routerLink="/docs/privileges">grant</a> to get
+      right, not a flag on this command.
+    </p>
+  </div>
+
+  <p>
+    The flags <code>query</code> takes are on the
+    <a routerLink="/docs/commands">command reference</a>, generated from <code>--help</code>.
+  </p>
+</app-docs-page>

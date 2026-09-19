@@ -12,6 +12,7 @@ import { GettingStarted } from './getting-started/getting-started';
 import { Install } from './install/install';
 import { Overview } from './overview/overview';
 import { Pending } from './pending';
+import { Query } from './query/query';
 
 /**
  * The pages that have been written, by path.
@@ -28,6 +29,7 @@ const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   backups: Backups,
   'backup-key': BackupKey,
   'mirror-and-sync': MirrorAndSync,
+  query: Query,
 };
 
 /**

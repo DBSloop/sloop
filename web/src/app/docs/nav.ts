@@ -203,6 +203,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         path: 'query',
         documentTitle: 'Read a database table without writing SQL — sloop query',
         title: 'Reading a database',
+        written: true,
         blurb:
           'Pick a table, tick the columns, choose the test. Nothing it runs can write, and the server is what guarantees that.',
         covers: [
