@@ -52,9 +52,9 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # The floor `web/package.json` names, and what the lockfile was
           # resolved against.
@@ -76,7 +76,7 @@ jobs:
       - run: node tools/site.mjs
 
       - name: Keep the built site for the publish job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: site
           path: web/dist/web/browser
@@ -90,9 +90,9 @@ jobs:
     name: reference
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -116,7 +116,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: The site this run built
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: site
           path: site
