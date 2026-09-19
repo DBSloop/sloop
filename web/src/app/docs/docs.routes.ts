@@ -13,6 +13,7 @@ import { GettingStarted } from './getting-started/getting-started';
 import { Install } from './install/install';
 import { Overview } from './overview/overview';
 import { Pending } from './pending';
+import { Postgres } from './postgres/postgres';
 import { Query } from './query/query';
 import { Service } from './service/service';
 
@@ -34,6 +35,7 @@ const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   query: Query,
   service: Service,
   activity: Activity,
+  postgres: Postgres,
 };
 
 /**

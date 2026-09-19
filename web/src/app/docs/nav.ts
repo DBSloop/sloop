@@ -267,6 +267,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         documentTitle: 'sloop setup and its own PostgreSQL — server and connection',
         title: 'sloop’s own PostgreSQL',
         short: 'sloop’s PostgreSQL',
+        written: true,
         blurb:
           'The registry, the schedules and the service’s readings live in a PostgreSQL 18 of sloop’s own. Here is how to open it yourself.',
         covers: [

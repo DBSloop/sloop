@@ -1,0 +1,175 @@
+<!--
+  sloop's own PostgreSQL.
+
+  Four real runs: server connection, server list, setup on a machine already set
+  up, and reset --dry-run. The table list is read from sloop_database itself
+  rather than from the migration source.
+
+  `server install` is described rather than captured — it downloads a database
+  server, and getting-started already carries the captured first-run offer.
+-->
+<app-docs-page
+  heading="sloop’s own PostgreSQL"
+  lede="The registry, the schedules and everything the service has recorded live in a PostgreSQL 18 of sloop’s own. It is not sealed — here is how to open it yourself."
+  eyebrow="This machine"
+  path="postgres"
+>
+  <p>
+    sloop keeps its state in a database rather than a file, and the reason is the background
+    service: two processes writing the same registry at the same time is a problem a file format
+    solves badly and a database solved decades ago. Schedules, run history and per-day activity are
+    all things you want to <em>query</em>, which settles the rest of the argument.
+  </p>
+  <p class="docs-bare mt-5 text-sm text-faint">
+    <span
+      aria-hidden="true"
+      class="mr-2.5 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
+    ></span
+    >Showing <strong class="font-semibold text-text">{{ osLabel() }}</strong
+    >. Every path on this page follows it.
+  </p>
+
+  <h2 id="opening-it">Opening it yourself</h2>
+  <p>
+    Nothing about it is hidden. It is an ordinary PostgreSQL on an ordinary port, and sloop will
+    tell you exactly how to reach it:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the whole connection" [lines]="connection" copy />
+  </div>
+
+  <p>
+    <code>psql</code>, DataGrip, TablePlus, anything that speaks the protocol.
+    <code>--show-password</code> adds the password, and it
+    <strong>only works on a terminal</strong> — there is no way to get it into a pipe, which is the
+    point.
+  </p>
+
+  <div class="docs-bare mt-7 rounded-xl border border-accent/25 bg-accent-soft p-5 sm:p-6">
+    <p class="max-w-measure text-base text-text">
+      <strong class="font-semibold">And it still holds no passwords.</strong> Not for your databases
+      — the registry stores which of the four routes to take and the value is fetched when it is
+      needed. Opening this database tells you everything about what sloop knows and nothing you
+      could use to connect to anything else.
+    </p>
+  </div>
+
+  <h2 id="what-is-in-it">What is in it</h2>
+  <p>Twelve tables at schema version 9, read from the database rather than from the source:</p>
+
+  <dl class="docs-bare mt-7 space-y-px overflow-hidden rounded-xl border border-line">
+    @for (held of tables; track held.table) {
+      <div class="bg-surface px-5 py-4 sm:px-6">
+        <dt class="font-mono text-sm text-accent">{{ held.table }}</dt>
+        <dd class="mt-1 max-w-measure text-sm text-muted">{{ held.holds }}</dd>
+      </div>
+    }
+  </dl>
+
+  <h2 id="setup">sloop setup</h2>
+  <p>
+    One command, run once. It finds a PostgreSQL 18 on the machine or offers to get one, makes
+    sloop's database and role, and applies the schema. On a machine where all of that is already
+    true it says so and changes nothing:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="already set up" [lines]="setupAgain()" copy />
+  </div>
+
+  <p>
+    <a routerLink="/docs/getting-started">Getting started</a> has the other case — a first run on a
+    machine with no PostgreSQL 18, where it describes what it would download and asks before doing
+    it.
+  </p>
+  <p>
+    For a run with nobody to ask, four flags:
+    <code>--superuser-password-command</code> and <code>--superuser-password-stdin</code> for the
+    password of a PostgreSQL already on the machine, and <code>--db-password-command</code> and
+    <code>--db-password-stdin</code> for the one to give sloop's own user. Leave the second pair out
+    and sloop generates one — which is the better answer, because a generated password is one nobody
+    has ever seen in a shell.
+  </p>
+
+  <h3 id="no-administrator">Nothing here needs {{ elevation() }}</h3>
+  <p>
+    Everything sloop installs goes under <code>{{ store() }}</code> — the cluster, its data
+    directory, the binaries. Nothing is put in <code>{{ systemPlace() }}</code
+    >, and no part of <code>setup</code> asks to be elevated.
+  </p>
+  <p>
+    That is also why the port is <strong>5433</strong> rather than 5432: a PostgreSQL already
+    serving on the default port belongs to somebody else, and sloop builds its own cluster beside it
+    rather than touching it.
+  </p>
+
+  <h2 id="servers-it-installed">Servers sloop installed for you</h2>
+  <p>
+    <code>server install</code> is a different job from <code>setup</code>, and the difference is
+    whose databases end up on the server. <code>setup</code> prepares the one sloop keeps
+    <em>its own</em> state in. <code>server install</code> installs one for
+    <strong>your</strong> databases — a PostgreSQL, MySQL or MariaDB to develop against, under the
+    same store and with the same no-administrator rule.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="none here" [lines]="serverList" copy />
+  </div>
+
+  <p>
+    <code>server list</code> lists those, not sloop's own — which is why the machine above says
+    <code>None</code> while a sloop PostgreSQL is running on it. <code>--version</code> picks one;
+    left out, <code>install</code> lists what is available.
+  </p>
+
+  <h2 id="origin">origin, and how much reset destroys</h2>
+  <p>
+    <code>server.toml</code> records one thing that matters more than the rest: whether sloop
+    <strong>installed</strong> that PostgreSQL or <strong>found</strong> it.
+  </p>
+
+  <!-- Two cards rather than a two-row table: a `code` cell cannot shrink, so a
+       three-column table put `ORIGIN` and `machine` on two lines each at this
+       width. Same comparison, and it reads from either end. -->
+  <div class="docs-bare mt-7 grid gap-4 md:grid-cols-2">
+    @for (origin of origins; track origin.value; let i = $index) {
+      <div
+        class="rounded-xl border p-5 sm:p-6"
+        [class]="i === 0 ? 'border-accent/30 bg-accent-soft' : 'border-line bg-surface'"
+      >
+        <p class="font-mono text-sm" [class]="i === 0 ? 'text-accent' : 'text-faint'">
+          origin = "{{ origin.value }}"
+        </p>
+        <p class="mt-2 max-w-measure text-base font-semibold text-text">{{ origin.means }}</p>
+        <p class="mt-3 font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">
+          What reset does
+        </p>
+        <p class="mt-1 max-w-measure text-sm text-muted">{{ origin.reset }}</p>
+      </div>
+    }
+  </div>
+
+  <p>
+    <code>reset</code> says which of those it is looking at, and then names every file it will
+    remove one at a time rather than sweeping the store:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="a rehearsal" [lines]="reset()" copy />
+  </div>
+
+  <p>
+    <strong>Backups are never removed.</strong> Not by <code>reset</code>, not by
+    <code>uninstall</code>, not ever — a registry is a minute of typing and a PostgreSQL is a
+    download, and a dump that is gone is gone. And note the sentence under it: reset can take the
+    <em>key</em> with the database if the private half was never exported, which would leave backups
+    that exist and cannot be opened. <a routerLink="/docs/backup-key">Export the key</a> before you
+    reset anything.
+  </p>
+
+  <p>
+    Every flag on this page is on the <a routerLink="/docs/commands">command reference</a>,
+    generated from <code>--help</code>.
+  </p>
+</app-docs-page>
