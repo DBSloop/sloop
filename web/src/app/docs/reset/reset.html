@@ -1,0 +1,254 @@
+<!--
+  Reset and uninstall.
+
+  The page for the command that destroys a database server, so it is written to
+  leave nobody surprised afterwards: what goes and what stays side by side, the
+  one question that decides how much goes, the proof that the other databases
+  survived, and the single thing that can still be lost.
+
+  Both destructive runs on this page are real, against an isolated machine built
+  for them. The class comment on `Reset` says how, and names the one piece of
+  state that was assembled by hand.
+-->
+<app-docs-page
+  heading="Reset and uninstall"
+  lede="Put the machine back to the moment sloop was installed — and the one thing that can still be lost when you do."
+  eyebrow="This machine"
+  path="reset"
+>
+  <p>
+    Two commands, and the second is the first plus the binary. They share one implementation, so
+    they can never drift into destroying different things.
+  </p>
+
+  <div class="docs-bare mt-2 rounded-xl border border-accent/25 bg-accent-soft p-5 sm:p-6">
+    <p class="max-w-measure text-base text-text">
+      <strong class="font-semibold">Backups are never deleted.</strong> Not by
+      <code class="font-mono text-sm">reset</code>, not by
+      <code class="font-mono text-sm">uninstall</code>, not ever. A registry is a minute of typing
+      and a PostgreSQL is a download; a dump that is gone is gone.
+    </p>
+  </div>
+
+  <h2 id="what-goes">What goes, and what stays</h2>
+  <p>
+    <code>sloop reset</code> surveys the machine before it does anything to it, and prints both
+    columns. The last thing you read before a database stops existing should be a list of what is
+    going, not a yes-or-no.
+  </p>
+
+  <div class="docs-bare mt-7 grid gap-4 sm:grid-cols-2">
+    <div class="rounded-xl border border-bad/30 bg-surface p-5 sm:p-6">
+      <p class="flex items-center gap-2.5 font-mono text-xs text-bad">
+        <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-bad"></span>
+        This will remove
+      </p>
+      <ul class="mt-4 space-y-4">
+        @for (item of goes; track item.what) {
+          <li>
+            <p class="font-mono text-sm text-text">{{ item.what }}</p>
+            <p class="mt-1 text-sm text-muted">{{ item.detail }}</p>
+          </li>
+        }
+      </ul>
+    </div>
+
+    <div class="rounded-xl border border-ok/30 bg-surface p-5 sm:p-6">
+      <p class="flex items-center gap-2.5 font-mono text-xs text-ok">
+        <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-ok"></span>
+        This will keep
+      </p>
+      <ul class="mt-4 space-y-4">
+        @for (item of stays; track item.what) {
+          <li>
+            <p class="font-mono text-sm text-text">{{ item.what }}</p>
+            <p class="mt-1 text-sm text-muted">{{ item.detail }}</p>
+          </li>
+        }
+      </ul>
+    </div>
+  </div>
+
+  <p>Which is exactly what it prints, and it prints it before it asks:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="said first, not after" [lines]="announcement()" />
+  </div>
+
+  <p>
+    That run was a scheduled one — no terminal, so nothing to type at, so it stopped at
+    <code>2</code> and named the flag.
+    <a routerLink="/docs/automation" fragment="never-asks">The automation page</a> has the rule it
+    is following.
+  </p>
+
+  <h2 id="origin">One question decides how much goes</h2>
+  <p>
+    <strong>Who installed the PostgreSQL.</strong> sloop wrote the answer down at
+    <a routerLink="/docs/postgres">setup</a> — <code>origin</code> in
+    <code>server.toml</code> — and reset reads it rather than guessing.
+  </p>
+
+  <div class="docs-bare mt-7 space-y-5">
+    <div class="rounded-xl border border-line bg-surface p-5 sm:p-6">
+      <p class="font-mono text-sm text-accent">origin = sloop</p>
+      <p class="mt-2 max-w-measure text-sm text-muted">
+        sloop downloaded it and installed it under <code class="font-mono">~/.sloop</code>, so it is
+        sloop's to take away. The cluster and its binaries go, in one directory.
+        <code class="font-mono">sloop setup</code> downloads and installs again.
+      </p>
+      <div class="mt-5">
+        <app-terminal class="block" caption="sloop brought it" [lines]="owner()" />
+      </div>
+    </div>
+
+    <div class="rounded-xl border border-line bg-surface p-5 sm:p-6">
+      <p class="font-mono text-sm text-accent">origin = machine</p>
+      <p class="mt-2 max-w-measure text-sm text-muted">
+        The PostgreSQL was already here and sloop was a guest on it. Two statements run —
+        <code class="font-mono">DROP DATABASE</code> and <code class="font-mono">DROP ROLE</code> —
+        and both name something sloop created. Not the server, not another database, not another
+        role.
+      </p>
+      <div class="mt-5">
+        <app-terminal class="block" caption="sloop was a guest" [lines]="guest()" />
+      </div>
+    </div>
+  </div>
+
+  <p>
+    <strong>That second claim is the one worth testing rather than believing</strong>, so here it is
+    on a server carrying two other databases and a role that was never sloop's:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="before, and after" [lines]="survivors" />
+  </div>
+
+  <p>And in the store, one directory is left standing:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="what is left" [lines]="afterwards()" />
+  </div>
+
+  <h2 id="typed">The name, typed out</h2>
+  <p>
+    This destroys a database. So it is the
+    <a routerLink="/docs/automation" fragment="never-asks">strongest form</a> of the rule:
+    <code>sloop_database</code>, typed out, or <code>--confirm sloop_database</code> for a run with
+    nobody there. <code>-y</code> will not do it and <code>--force</code> will not do it.
+  </p>
+  <p>A typo stops the run before a socket is opened:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="caught early" [lines]="typo" />
+  </div>
+
+  <h2 id="the-key">The one thing that can still be lost</h2>
+  <p>
+    Backups survive reset. <strong>Being able to read them may not</strong>, and this is the whole
+    reason the page exists.
+  </p>
+  <p>
+    An encrypted backup is readable only with its <a routerLink="/docs/backup-key">private key</a>.
+    On a machine with a working keyring that key lives in the keyring, which reset does not touch.
+    But on a machine with no keyring — a headless Linux box — the key lives in the Argon2id vault,
+    and <strong>the vault is inside <code>sloop_database</code></strong>, which is precisely what
+    reset destroys.
+  </p>
+
+  <div class="docs-bare mt-7 rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
+    <p class="flex items-center gap-2.5 font-mono text-xs text-warn">
+      <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-warn"></span>
+      Run this before you run reset
+    </p>
+    <p class="mt-3 max-w-measure text-sm text-text">
+      <code class="font-mono">sloop key export</code> — and keep the line it prints somewhere sloop
+      cannot reach. Without it, every encrypted backup this machine took becomes a file nobody can
+      open. There is no recovery, no reset and nobody to ask.
+    </p>
+  </div>
+
+  <p>
+    Reset says so itself, in the block above, before the name is typed rather than after. It is the
+    only warning on this page that describes something irreversible that reset does not do — it
+    describes what <em>you</em> will have done by running it unprepared.
+  </p>
+
+  <h2 id="uninstall">uninstall is reset plus the binary</h2>
+  <p>
+    Everything above, and then sloop itself: the directory the installer made and the
+    <code>PATH</code> entry that points at it.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="and then it is gone" [lines]="uninstalling()" />
+  </div>
+
+  <p>
+    <strong>The open shell is the one thing it cannot fix.</strong> A shell read its environment
+    when it started and keeps it; <code>sloop</code> will still resolve in the window you ran this
+    in until you open a new one. It says so rather than leaving you to notice.
+  </p>
+
+  <h2 id="scripts">The other way to take the binary off</h2>
+  <p>
+    If the binary is gone, or broken, or was never on <code>PATH</code>, there is a script — the
+    counterpart of the one that installed it:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal
+      class="block"
+      [caption]="os() === 'windows' ? 'PowerShell' : 'sh'"
+      [lines]="scriptLine()"
+      copy
+    />
+  </div>
+
+  <p>
+    <strong>It will not quietly strand sloop's state behind a binary that could still remove it.</strong>
+    A script cannot know which PostgreSQL was sloop's, so rather than guessing it stops and names
+    both ways forward — the same shape rule 4 takes in the CLI, in a file with no terminal at all:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="it stops" [lines]="scriptRefusal()" />
+  </div>
+
+  <p>Told which you meant, it takes the binary and leaves the rest:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="only the binary" [lines]="binaryOnlyRun()" copy />
+  </div>
+
+  @if (os() === 'windows') {
+    <p>
+      The <code>PATH</code> entry is removed through the registry with expansion turned off, so an
+      entry somebody wrote as <code>%USERPROFILE%\bin</code> is not replaced with today's answer to
+      it — and the entry sloop removes is matched after expansion, so it goes whether it was written
+      as <code>%LOCALAPPDATA%\Programs\sloop\bin</code> or in full.
+    </p>
+  } @else {
+    <p>
+      The <code>PATH</code> block comes out of every startup file that could be holding one —
+      <code>.bashrc</code>, <code>.bash_profile</code>, <code>.profile</code>,
+      <code>.zshrc</code>, <code>.kshrc</code> and fish's <code>conf.d</code> — not only the current
+      shell's. Somebody who installed under bash and has since moved to zsh has the block in
+      <code>.bashrc</code>, and looking at <code>$SHELL</code> alone would leave it there pointing
+      at a binary that no longer exists.
+    </p>
+  }
+
+  <h2 id="coming-back">Coming back</h2>
+  <p>
+    <code>sloop setup</code>, and the machine is ready again. What it cannot restore is what was in
+    the database it destroyed: the registry, the schedules and the service's history are gone, and
+    the databases they described have to be registered again.
+  </p>
+  <p>
+    The backups are still on disk with their manifests, so
+    <a routerLink="/docs/backups">restoring one</a> needs the database registered again and — if it
+    was encrypted — the key you exported.
+  </p>
+</app-docs-page>

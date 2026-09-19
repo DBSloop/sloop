@@ -17,6 +17,7 @@ import { Pending } from './pending';
 import { Postgres } from './postgres/postgres';
 import { Privileges } from './privileges/privileges';
 import { Query } from './query/query';
+import { Reset } from './reset/reset';
 import { Security } from './security/security';
 import { Service } from './service/service';
 import { Ssh } from './ssh/ssh';
@@ -44,6 +45,7 @@ const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   security: Security,
   privileges: Privileges,
   automation: Automation,
+  reset: Reset,
 };
 
 /**

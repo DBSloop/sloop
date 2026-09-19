@@ -284,6 +284,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         path: 'reset',
         documentTitle: 'Reset and uninstall sloop without deleting backups',
         title: 'Reset and uninstall',
+        written: true,
         blurb:
           'Put the machine back to the moment sloop was installed — and the one thing that can still be lost.',
         covers: [
@@ -291,7 +292,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
           'How origin decides whether a PostgreSQL is destroyed or merely left alone.',
           'That backups are never deleted. Not by reset, not by uninstall, not ever.',
           'The one thing that can still be lost: an encrypted backup needs a private key, and the Argon2id vault holding it is inside the database reset destroys.',
-          'sloop uninstall and uninstall.sh, and what --binary-only leaves behind.',
+          'sloop uninstall, and the uninstall script — including what its --binary-only leaves behind.',
         ],
       },
     ],
