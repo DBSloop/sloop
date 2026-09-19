@@ -86,15 +86,14 @@ and Windows. Unpack one and put `sloop` somewhere on your `PATH`.
 ### Or build it
 
 ```sh
-cargo install dbsloop --version 0.1.0-rc.2
+cargo install dbsloop
 
 git clone https://github.com/DBSloop/sloop
 cd sloop/cli && cargo install --path .
 ```
 
 The crate is `dbsloop` and the command is `sloop` — `sloop` on crates.io belongs to an
-abandoned 2019 project. The version is named because sloop is on release candidates until
-1.0, and Cargo does not pick one of those up on its own.
+abandoned 2019 project.
 
 ---
 
