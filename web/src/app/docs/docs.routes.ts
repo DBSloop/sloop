@@ -13,6 +13,7 @@ import { Install } from './install/install';
 import { Overview } from './overview/overview';
 import { Pending } from './pending';
 import { Query } from './query/query';
+import { Service } from './service/service';
 
 /**
  * The pages that have been written, by path.
@@ -30,6 +31,7 @@ const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   'backup-key': BackupKey,
   'mirror-and-sync': MirrorAndSync,
   query: Query,
+  service: Service,
 };
 
 /**

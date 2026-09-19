@@ -1,0 +1,236 @@
+<!--
+  The background service.
+
+  `service install` was never completed here: it registers a real service with
+  the machine this session runs on. What is captured is the run refusing, which
+  is the block the page most needs anyway. So every block shows an uninstalled
+  machine — which is an honest state, and the one the reader is in while
+  following the page.
+
+  The class comment on `Service` says which lines are quoted from source (the
+  Linux and macOS spellings, read on a Windows machine) and which are real runs.
+-->
+<app-docs-page
+  heading="The background service"
+  lede="A nightly backup with a retention policy, and not a line of cron anywhere. sloop registers itself with the machine and does the work with nobody logged in."
+  eyebrow="The background service"
+  path="service"
+>
+  <p>
+    Everything else in these docs is a command you type. This is the one that runs when you are not
+    there — and it is <strong>not a wrapper around your scheduler</strong>. sloop registers itself
+    with the machine's own service manager and does the work itself.
+  </p>
+  <p class="docs-bare mt-5 text-sm text-faint">
+    <span
+      aria-hidden="true"
+      class="mr-2.5 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
+    ></span
+    >Showing <strong class="font-semibold text-text">{{ osLabel() }}</strong
+    >. What gets registered, and how you elevate, both change with it.
+  </p>
+
+  <div class="docs-bare mt-7 rounded-xl border border-accent/25 bg-accent-soft p-5 sm:p-6">
+    <p class="max-w-measure text-base text-text">
+      <strong class="font-semibold">Nothing is written to {{ scheduler() }}.</strong>
+      The service takes the backup itself and applies the retention policy itself — running the same
+      <code class="font-mono text-sm">backup</code> and
+      <code class="font-mono text-sm">backups prune</code> you would have typed, with
+      <code class="font-mono text-sm">--yes</code> and never
+      <code class="font-mono text-sm">--force</code>.
+    </p>
+  </div>
+
+  <h2 id="elevation">Elevation, before anything happens</h2>
+  <p>
+    On {{ osLabel() }} sloop registers <strong>{{ registers() }}</strong
+    >. Changing what a machine runs at boot needs an administrator, and sloop checks that
+    <strong>before it does anything</strong> rather than failing halfway with a permission error:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="not elevated" [lines]="refusal()" copy />
+  </div>
+
+  <p>
+    <code>Nothing has been changed by this run.</code> That is the part worth trusting — the check
+    happens first, so a refused run leaves the machine exactly as it was. To go ahead,
+    {{ elevate() }} and run <code>{{ elevatedRun() }}</code
+    >.
+  </p>
+
+  <p>Four commands need that. Five do not:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Command</th>
+        <th>What it does</th>
+        <th>Needs elevation</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (duty of duties; track duty.command) {
+        <tr>
+          <td>
+            <code>{{ duty.command }}</code>
+          </td>
+          <td>{{ duty.does }}</td>
+          <td>
+            @if (duty.elevated) {
+              <strong class="text-accent">yes</strong>
+            } @else {
+              <span class="text-faint">no</span>
+            }
+          </td>
+        </tr>
+      }
+    </tbody>
+  </table>
+
+  <p>
+    <code>install</code> takes <code>--no-start</code> to register it and leave it stopped,
+    <code>--interval &lt;SECONDS&gt;</code> for the gap between rounds of readings (60 by default),
+    and <code>--user &lt;USER&gt;</code> to run as a particular account — Linux and macOS only,
+    because a Windows service runs as <code>LocalSystem</code>.
+  </p>
+
+  <h2 id="attaching">Attaching a database</h2>
+  <p>
+    Installing the service does not make it watch anything. <code>service attach</code> does, and it
+    is picked up <strong>without a restart</strong>:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="one database" [lines]="attach" copy />
+  </div>
+
+  <div class="docs-bare mt-7 rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
+    <p class="flex items-center gap-2.5 font-mono text-xs text-warn">
+      <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-warn"></span>
+      The service only watches the global registry
+    </p>
+    <p class="mt-3 max-w-measure text-sm text-muted">
+      A service has no working directory, so there is no project for it to be standing in. A
+      database registered only in a project cannot be attached, and this is the first thing that
+      goes wrong for somebody who put everything in one.
+    </p>
+  </div>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 2" [lines]="projectOnly" copy />
+  </div>
+
+  <p>
+    <code>sloop db add &lt;name&gt; --global …</code> is the fix, and
+    <a routerLink="/docs/databases" fragment="which-registry">which registry a bare name means</a>
+    is the page for why there are two.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="and back off again" [lines]="detach" copy />
+  </div>
+
+  <p>
+    Detaching stops the watching. It does <strong>not</strong> delete anything already recorded —
+    and neither does <code>service uninstall</code>.
+  </p>
+
+  <h2 id="scheduling">Scheduling a backup</h2>
+  <p>
+    Attached means sampled. <strong>Scheduled</strong> means backed up, and that is a second,
+    separate step:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="nightly, with retention" [lines]="schedule" copy />
+  </div>
+
+  <p>
+    One line, and it carries both halves: <code>--every 1d</code> is how often, and
+    <code>--keep 7 --keep-for-days 30</code> is what survives. The retention is applied by the
+    service after each run — and <strong>only after a backup that worked</strong>, so a failed night
+    never prunes the copies that succeeded.
+  </p>
+  <p>
+    <code>--every</code> takes <code>30m</code>, <code>6h</code>, <code>1d</code>, <code>2w</code> —
+    the same spelling <code>backups prune --older-than</code> takes.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="off, and on again" [lines]="scheduleOff" copy />
+  </div>
+
+  <p>
+    <code>--off</code> stops the backups and <strong>leaves the database attached</strong>, so it
+    keeps being sampled for <a routerLink="/docs/activity">activity</a>. Attaching and scheduling
+    are separate on purpose, and turning one off does not turn the other off.
+  </p>
+
+  <h3 id="missed-and-collided">A missed run, and a collision</h3>
+  <p>
+    A machine that was asleep for a week does not wake up owing you a hundred and sixty-eight
+    backups. <strong>A missed run is caught up once and labelled late</strong>, and the next one is
+    measured from now rather than from the schedule it fell off.
+  </p>
+  <p>
+    And if a scheduled run meets one you started by hand, the schedule stands aside: one lockfile
+    per database, and the run that finds it held
+    <a routerLink="/docs/backups" fragment="the-lock">exits <code>7</code> having taken nothing</a>.
+    The manual run finishes untouched.
+  </p>
+
+  <h2 id="status">Checking on it</h2>
+  <p><code>service status</code> answers four questions: installed, running, last run, next run.</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="before anything is set up" [lines]="statusFresh()" copy />
+  </div>
+
+  <div class="mt-7">
+    <app-terminal
+      class="block"
+      caption="two attached, one scheduled"
+      [lines]="statusWatching()"
+      copy
+    />
+  </div>
+
+  <p>
+    Every line of that is a fact rather than a guess — <code>not picked up yet</code>,
+    <code>never run</code>, <code>no service has ever read this list</code>. On a machine where the
+    service <em>is</em> installed and running, those become the times it actually ran and the time
+    it runs next.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="and what it has recorded" [lines]="activity" copy />
+  </div>
+
+  <p>
+    <a routerLink="/docs/activity">Activity and monitoring</a> is the page for what those numbers
+    are and, just as importantly, what sloop will not pretend to measure.
+  </p>
+
+  <h2 id="nothing-to-nightly">From nothing to a nightly backup</h2>
+  <p>Four commands, and only the first needs an elevated terminal:</p>
+
+  <ol>
+    <li>
+      <code>{{ elevatedRun() }}</code> — register it with the machine.
+    </li>
+    <li>
+      <code>sloop db add orders --global --url …</code> — the service reads the global registry.
+    </li>
+    <li><code>sloop service attach orders</code> — start watching it.</li>
+    <li>
+      <code>sloop service schedule orders --every 1d --keep 7 --keep-for-days 30</code> — nightly,
+      keeping a week, pruning after a month.
+    </li>
+  </ol>
+
+  <p>
+    Then <code>sloop service status</code> whenever you want to know it is still true. Every flag
+    any of these takes is on the <a routerLink="/docs/commands">command reference</a>.
+  </p>
+</app-docs-page>

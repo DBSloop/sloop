@@ -225,6 +225,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         documentTitle: 'Scheduled database backups without cron — sloop service',
         title: 'The background service',
         short: 'The service',
+        written: true,
         blurb:
           'sloop registers itself with your machine and backs your databases up on a schedule, with nobody logged in.',
         covers: [
