@@ -1,0 +1,311 @@
+<!--
+  Backups, retention and restoring.
+
+  Every block was captured from a throwaway PostgreSQL 17.9 cluster built for
+  it; the class comment on `Backups` says which commands were run, how the
+  awkward ones (exit 6, exit 7, a failed --all) were actually produced, and
+  names the two substitutions.
+
+  One platform at a time: every path is behind the OS strip.
+-->
+<app-docs-page
+  heading="Backups, retention and restoring"
+  lede="Take a copy, prove every row arrived, delete what is past its retention, and put one back. And know the difference between a run that finished and a run that finished checked."
+  eyebrow="Backups"
+  path="backups"
+>
+  <p>
+    <code>sloop backup shop</code> dumps the database, counts what arrived, and writes a manifest
+    beside it. Everything else on this page is a variation on that sentence — more than one
+    database, keeping fewer of them, or going the other way.
+  </p>
+  <p class="docs-bare mt-5 text-sm text-faint">
+    <span
+      aria-hidden="true"
+      class="mr-2.5 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
+    ></span
+    >Showing <strong class="font-semibold text-text">{{ osLabel() }}</strong
+    >. Change it in the strip above and every path on this page follows.
+  </p>
+
+  <h2 id="the-key-first">The key comes first, once</h2>
+  <p>
+    Backups are encrypted, and <strong>the first one will not run</strong> until the key has been
+    copied somewhere sloop cannot reach. This is not a nag that can be dismissed and forgotten — it
+    is a refusal, and with no terminal to ask at it exits <code>2</code>:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 2" [lines]="refusal" copy />
+  </div>
+
+  <p>
+    <code>sloop key export</code> once, and every run after it goes through.
+    <a routerLink="/docs/backup-key">The backup key</a> is the page for what that key is and what
+    losing it costs; everything below assumes it has been done.
+  </p>
+
+  <h2 id="taking-one">Taking one</h2>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="one database" [lines]="first()" copy />
+  </div>
+
+  <p>
+    Two timestamps, both deliberate. The directory is named in <strong>UTC</strong> so backups sort
+    correctly and survive a daylight-saving change; every line a human reads is in
+    <strong>local time</strong>. The <code>sha256</code> is over the dump as written, and
+    <code>backups list --check</code> compares it again later.
+  </p>
+
+  <h3 id="all-of-them">Every database, and the one that fails</h3>
+  <p>
+    <code>--all</code> is the one you schedule, and its rule is the important one:
+    <strong>it never stops on a failure.</strong> One unreachable database in a set of thirty must
+    not cost you the other twenty-nine.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="three of four" [lines]="all()" copy />
+  </div>
+
+  <p>
+    The run worked to the end, backed up the three that answered, and named the one that did not.
+    The last line is the one to read in a log — <strong>zero, one or several</strong>, always
+    counted and always named. The exit code is the failure's own: <code>3</code> here, because what
+    went wrong was a connection.
+  </p>
+
+  <h3 id="sequential-or-replace">A directory per run, or one kept current</h3>
+  <p>
+    <code>--sequential</code> is the default and is what you saw above: a directory per run, named
+    for the moment it was taken, kept until retention removes it.
+  </p>
+  <p>
+    <code>--replace</code> keeps exactly one, at a fixed path ending in <code>latest</code>. For a
+    database you want a current copy of rather than a history — and the path never changes, so
+    something else can pick it up without being told where to look.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="one copy, fixed path" [lines]="replace()" copy />
+  </div>
+
+  <h2 id="on-disk">What is written to disk</h2>
+  <p>
+    Inside the registry the database belongs to — <code>{{ backupRoot() }}</code> for this project,
+    or <code>{{ globalStore() }}</code> for the global one. Backups never leave the registry that
+    took them.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="two files per backup" [lines]="layout()" copy />
+  </div>
+
+  <p>
+    Two files, and the second is why any of this can be checked later. The manifest is plain JSON
+    and holds everything needed to judge the dump without opening it:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="manifest.json" [lines]="manifest" copy />
+  </div>
+
+  <p>
+    <strong>Per-table row counts are the part that matters.</strong> They are what a restore checks
+    itself against, and what makes <em>it finished</em> and <em>it is correct</em> two different
+    statements rather than one. Note what is <em>not</em> here: no password, no key, nothing that
+    could not be pasted into a public issue. The recipient is the <strong>public</strong> half of
+    the key.
+  </p>
+
+  <h2 id="seeing-what-is-there">Seeing what is there</h2>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="sizes only" [lines]="list" copy />
+  </div>
+
+  <p>
+    That reads sizes and manifests — fast, and enough for a glance.
+    <code>--check</code> does the expensive thing instead: it hashes every dump on disk and compares
+    each one with what its manifest recorded. One byte of the oldest <code>archive</code> dump was
+    overwritten before this run:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="every dump hashed" [lines]="check" copy />
+  </div>
+
+  <p>
+    It names both hashes rather than saying "corrupt", and the listing
+    <strong>exits <code>6</code></strong
+    >. A listing that returned success over a backup that cannot be restored would be worse than no
+    listing at all — so the exit code carries it, and a scheduled <code>--check</code> can act on
+    it.
+  </p>
+
+  <h2 id="retention">Retention</h2>
+  <p>
+    <code>backups prune</code> deletes what is past a limit,
+    <strong>after showing you which</strong>. Two limits, and they can be combined:
+    <code>--keep &lt;N&gt;</code> for the newest N, and <code>--older-than &lt;AGE&gt;</code> for
+    <code>12h</code>, <code>30d</code>, <code>6w</code>.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="rehearsal, then the real thing" [lines]="prune" copy />
+  </div>
+
+  <p>
+    <code>--dry-run</code> is a real rehearsal: it does every bit of reading and deciding and stops
+    where it would delete. The list it prints is the list the real run removes.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="by age" [lines]="pruneAge" copy />
+  </div>
+
+  <p>
+    A <code>--replace</code> copy is <strong>skipped by retention and says so</strong>. There is one
+    of it, at a fixed path, and deleting it on age would leave a database with no current copy at
+    all — which is the opposite of what a retention rule is for.
+    <code>--include-broken</code> widens the sweep to unfinished and damaged directories, which are
+    otherwise left alone so that a failure is still there to look at.
+  </p>
+
+  <h2 id="restoring">Putting one back</h2>
+  <p>
+    <code>restore</code> replaces what is in the database now. It is destructive, so it is
+    <strong>typed rather than clicked</strong> — and from a scheduled run, where there is nobody to
+    type, it refuses:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 2" [lines]="restoreRefusal" copy />
+  </div>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the newest backup" [lines]="restore()" copy />
+  </div>
+
+  <p>
+    With no <code>--from</code> it takes the newest. Everything after <code>loaded in</code> is the
+    part that makes this a restore rather than a file copy: it reads the per-table counts out of the
+    manifest and counts the database it has just written, table by table, and only then says the two
+    matched.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="a particular one" [lines]="from" copy />
+  </div>
+
+  <p>
+    <code>--from</code> takes the directory's own name — the UTC stamp, exactly as
+    <code>backups list</code> shows it. A name that is not there is an error before anything is
+    touched, not halfway through.
+  </p>
+
+  <h2 id="the-lock">One lockfile per database</h2>
+  <p>
+    A backup that overruns must not race the next scheduled run. Each database has one lock, and a
+    run that finds it held <strong>takes nothing and exits <code>7</code></strong
+    >. Two backups of the same 2,000,000-row table, started at the same moment — this is what the
+    one that lost printed:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 7" [lines]="lock()" copy />
+  </div>
+
+  <p>
+    It names the command holding the lock, its process id, when it started, and the file. And the
+    hint says the thing that matters to whatever is reading the exit code:
+    <strong><code>7</code> means this run did not start, not that your backup failed</strong>. The
+    data is exactly as it was.
+  </p>
+
+  <h2 id="verification">Verification is exact, not estimated</h2>
+  <p>
+    Every table is counted on <strong>both sides</strong> with <code>count(*)</code> — one
+    <code>query_to_xml</code> statement against one snapshot for PostgreSQL, one
+    <code>UNION ALL</code> for the MySQL family. Not a sample, not the catalogue's opinion.
+  </p>
+
+  <div class="docs-bare mt-7 rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
+    <p class="flex items-center gap-2.5 font-mono text-xs text-warn">
+      <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-warn"></span>
+      Why an estimate is not proof
+    </p>
+    <p class="mt-3 max-w-measure text-sm text-muted">
+      <code class="font-mono text-xs text-text">n_live_tup</code> is a planner statistic, and it has
+      been observed reporting <strong>double</strong> the true count on a table this project was
+      looking at. It also reports <strong>zero</strong> for every table of a freshly restored
+      database until something analyses it — so a verification built on estimates would call a
+      perfect restore a catastrophe.
+    </p>
+  </div>
+
+  <p>
+    The estimate is still available, for a table too large to count on every run.
+    <code>SLOOP_VERIFY=fast</code> asks for it, and sloop
+    <strong>labels it wherever it appears</strong>:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="a glance, and it says so" [lines]="fast" copy />
+  </div>
+
+  <p>
+    <em>a glance and not a proof</em> is sloop's own wording, printed every time. And under fast
+    mode a count can never fail a run on its own — only a table that is genuinely
+    <strong>not there</strong>, which is a fact from the catalogue rather than from a statistic.
+  </p>
+
+  <h3 id="drift">Drift is not loss</h3>
+  <p>
+    A source that is still being written to gains and loses rows while a dump is being taken, so two
+    sides differing by a few rows is <strong>the normal state of a live database</strong>, not a
+    fault. sloop says so in those words rather than calling it an error.
+  </p>
+  <p>
+    What is not normal, and what does fail: a table that arrived <strong>empty</strong> when the
+    source had rows, or a table that <strong>did not arrive at all</strong>. Those are the two
+    things a dump silently losing data looks like, and both are failures.
+  </p>
+
+  <h2 id="zero-against-six">Exit 0 against exit 6</h2>
+  <p>
+    Both mean the work completed. Only one of them means the work was proved, and automation that
+    treats them the same is automation that will one day keep a backup nobody can restore.
+  </p>
+
+  <!-- Two cards rather than a table: this is the one comparison on the page a
+       reader has to leave with, and a pair reads at a glance from either end. -->
+  <div class="docs-bare mt-7 grid gap-4 sm:grid-cols-2">
+    @for (ending of endings; track ending.code) {
+      <div
+        class="rounded-xl border p-5 sm:p-6"
+        [class]="ending.code === '0' ? 'border-line bg-surface' : 'border-accent/30 bg-accent-soft'"
+      >
+        <p class="font-mono text-xs" [class]="ending.code === '0' ? 'text-faint' : 'text-accent'">
+          exit {{ ending.code }}
+        </p>
+        <p class="mt-2 text-base font-semibold text-text">{{ ending.title }}</p>
+        <p class="mt-2 max-w-measure text-sm text-muted">{{ ending.means }}</p>
+        <p class="mt-3 max-w-measure text-sm text-faint">{{ ending.then }}</p>
+      </div>
+    }
+  </div>
+
+  <p>
+    So <code>6</code> is neither success nor a crash, which is exactly why it has its own number. A
+    script that checks <code>if exit == 0</code> and nothing else will treat a backup whose dump no
+    longer matches its manifest as a good night's work.
+  </p>
+
+  <p>
+    Every flag on this page, and every one it did not need, is on the
+    <a routerLink="/docs/commands">command reference</a> — generated from <code>--help</code> rather
+    than written beside it.
+  </p>
+</app-docs-page>

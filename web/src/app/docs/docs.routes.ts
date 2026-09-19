@@ -1,6 +1,7 @@
 import { Type } from '@angular/core';
 import { Routes } from '@angular/router';
 
+import { Backups } from './backups/backups';
 import { Commands } from './commands/commands';
 import { Databases } from './databases/databases';
 import { Docs } from './docs';
@@ -22,6 +23,7 @@ const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   'getting-started': GettingStarted,
   commands: Commands,
   databases: Databases,
+  backups: Backups,
 };
 
 /**

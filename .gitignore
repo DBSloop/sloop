@@ -32,8 +32,13 @@ web/.nx/
 *.env
 !*.env.example
 
-# Backups hold real production data.
-backups/
+# Backups hold real production data. Anchored, and the anchor matters: a bare
+# `backups/` matches a directory of that name at any depth, and it silently
+# swallowed `web/src/app/docs/backups/` — the page documenting them. Real
+# backups only ever land under a registry's `.sloop/`, which is ignored above,
+# or in one of these two at the root.
+/backups/
+/cli/backups/
 
 # Editor / OS
 .DS_Store

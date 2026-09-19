@@ -142,6 +142,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         documentTitle: 'Database backup, retention and restore — sloop',
         title: 'Backups, retention and restoring',
         short: 'Backups and restoring',
+        written: true,
         blurb:
           'Take one, prove every row arrived, delete what is past its retention, and put it back when you need it.',
         covers: [
