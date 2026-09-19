@@ -87,6 +87,13 @@ function help(sloop, path, long) {
  *
  * clap prints `Usage:`, `Arguments:`, `Options:` and `Commands:` flush left,
  * and everything before the first of them is the description.
+ *
+ * **A section ends at the next flush-left line, not at the end of the output.**
+ * clap's `after_help` is printed at column zero with no header of its own, and
+ * without this it was swallowed by whichever section came last — bare `sloop`
+ * grew an option called *Run `sloop` with no command for the interactive menu.*
+ * Every real entry inside a section is indented by at least two, so column zero
+ * is the boundary.
  */
 function sections(text) {
   const lines = text.split('\n');
@@ -106,29 +113,73 @@ function sections(text) {
       current = 'usage';
       continue;
     }
+    if (current !== 'description' && line.trim() && !/^\s/.test(line)) {
+      current = 'after';
+      found.after ??= [];
+    }
     (found[current] ??= []).push(line);
   }
   return found;
 }
 
+/** A line holding a flag, an argument or a subcommand name and nothing else. */
+const SPEC_ONLY =
+  /^(?:-{1,2}[^\s,]+(?:,\s*-{1,2}[^\s,]+)*(?:[ =](?:<[^>]+>|\[[^\]]+\]))?|<[^>]+>|\[[^\]]+\])$/;
+
+/** Two columns on one line: the spec, a run of spaces, then the description. */
+const TWO_COLUMN = /^(\s{2,})(\S.*?)(\s{2,})(\S.*)$/;
+
 /**
- * Turn an indented, column-aligned clap section into `{ spec, text }` entries.
+ * Turn an indented clap section into `{ spec, text }` entries.
  *
- * clap wraps a long description onto continuation lines indented to the column
- * the description starts at. The column is found from the first entry rather
- * than assumed, because it is computed per command from the longest flag in it.
+ * **clap prints two layouts and the difference is not cosmetic.** When every
+ * flag in a command is short enough, the description sits on the same line in a
+ * second column. When one is not, clap drops the whole block to a vertical
+ * layout: the spec alone on its line, the description indented underneath it.
+ *
+ * `sloop db create`, `sloop setup` and bare `sloop` print the second one, and
+ * reading them with the first one's rule turned every flag into two useless
+ * rows — a spec with no description, then prose with no flag. That is what
+ * `A8` shipped: 32 of 32 rows wrong on `db create`, 21 of 21 on `setup`. The
+ * layout is now detected per section rather than assumed, because a command can
+ * print one layout for `Arguments:` and the other for `Options:` — `db create`
+ * does exactly that.
+ *
+ * In the two-column layout a wrapped description continues on a line indented
+ * to the description column, which is computed per command from the longest
+ * flag in it and so is read from the first entry rather than assumed.
+ *
+ * In the vertical layout the spec's own indentation is **not** a usable signal:
+ * clap indents `-C, --project` by two and `--engine` by six so the long forms
+ * line up. So a line opens a new entry when the whole of it is a spec and
+ * nothing else, which is true of every spec line in that layout and false of
+ * every description — including one that happens to begin with a dash.
  */
 function entries(lines = []) {
+  const kept = lines.filter((line) => line.trim());
   const out = [];
+
+  if (!kept.some((line) => TWO_COLUMN.test(line))) {
+    for (const raw of kept) {
+      const text = raw.trim();
+      if (!out.length || SPEC_ONLY.test(text)) {
+        out.push({ spec: text, text: '' });
+        continue;
+      }
+      const last = out[out.length - 1];
+      last.text += `${last.text ? ' ' : ''}${text}`;
+    }
+    return out.map((entry) => ({ ...entry, text: entry.text.trim() }));
+  }
+
   let column = null;
-  for (const raw of lines) {
-    if (!raw.trim()) continue;
+  for (const raw of kept) {
     const indent = raw.length - raw.trimStart().length;
     if (column !== null && indent >= column && out.length) {
       out[out.length - 1].text += ` ${raw.trim()}`;
       continue;
     }
-    const split = /^(\s{2,})(\S.*?)(\s{2,})(\S.*)$/.exec(raw);
+    const split = TWO_COLUMN.exec(raw);
     if (!split) {
       // A spec too long for its own line: clap puts the description underneath.
       out.push({ spec: raw.trim(), text: '' });
@@ -195,10 +246,49 @@ function paragraphs(lines) {
     .filter(Boolean);
 }
 
+/**
+ * Refuse to write a reference that parsed badly.
+ *
+ * **Rule 14: a concern that is only stated is a concern that gets forgotten.**
+ * `--check` catches the JSON drifting from the binary, which is a different
+ * failure — the first version of this file parsed one layout, wrote rows with
+ * no flag and no description for three commands, and `--check` was perfectly
+ * happy because the JSON matched what the parser produced. So the parser now
+ * checks its own output, and a clap layout nobody anticipated fails the build
+ * with the command and the row named instead of shipping.
+ */
+function audit(all) {
+  const wrong = [];
+  for (const node of all) {
+    for (const flag of node.options) {
+      if (!flag.long && !flag.short) {
+        wrong.push(`${node.name}: "${flag.spec}" is not a flag`);
+      } else if (!flag.text) {
+        wrong.push(`${node.name}: ${flag.spec} has no description`);
+      }
+    }
+    for (const argument of node.arguments) {
+      if (!/^[<[]/.test(argument.name)) {
+        wrong.push(`${node.name}: "${argument.name}" is not an argument`);
+      }
+    }
+  }
+  if (wrong.length) {
+    fail(
+      `${wrong.length} row(s) did not parse. The help layout has changed:`,
+      ...wrong.slice(0, 12).map((line) => `  ${line}`),
+      ...(wrong.length > 12 ? [`  … and ${wrong.length - 12} more`] : []),
+      '',
+      'Nothing was written. Fix entries()/sections() rather than the JSON.',
+    );
+  }
+}
+
 function build() {
   const sloop = binary();
   const version = execFileSync(sloop, ['--version'], { encoding: 'utf8' }).trim();
   const all = walk(sloop);
+  audit(all);
 
   // **The global flags are the ones every command has.** They are not a list
   // kept somewhere; they are an intersection, so a flag that stops being global

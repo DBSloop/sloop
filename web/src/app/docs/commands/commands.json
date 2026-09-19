@@ -182,13 +182,6 @@
           "value": null,
           "spec": "-V, --version",
           "text": "Print version"
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Run `sloop` with no command for the interactive menu.",
-          "text": ""
         }
       ],
       "children": [
@@ -215,13 +208,6 @@
           "value": null,
           "spec": "-V, --version",
           "text": "Print version"
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Run `sloop` with no command for the interactive menu.",
-          "text": ""
         }
       ]
     },
@@ -847,308 +833,154 @@
           "long": "--engine",
           "value": "ENGINE",
           "spec": "--engine <ENGINE>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Which engine: postgres, mysql or mariadb",
-          "text": ""
+          "text": "Which engine: postgres, mysql or mariadb"
         },
         {
           "short": null,
           "long": "--global",
           "value": null,
           "spec": "--global",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Use the global registry, whichever directory you are standing in",
-          "text": ""
+          "text": "Use the global registry, whichever directory you are standing in"
         },
         {
           "short": "-C",
           "long": "--project",
           "value": "PATH|NAME",
           "spec": "-C, --project <PATH|NAME>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Work on this project: a directory, or a name `sloop init` recorded",
-          "text": ""
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
         },
         {
           "short": null,
           "long": "--host",
           "value": "HOST",
           "spec": "--host <HOST>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "The server it goes on [default: 127.0.0.1]",
-          "text": ""
+          "text": "The server it goes on [default: 127.0.0.1]"
         },
         {
           "short": null,
           "long": "--password-command",
           "value": "COMMAND",
           "spec": "--password-command <COMMAND>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Take the password from this command's output instead of wherever the registry says",
-          "text": ""
+          "text": "Take the password from this command's output instead of wherever the registry says"
         },
         {
           "short": null,
           "long": "--port",
           "value": "PORT",
           "spec": "--port <PORT>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Its port. The engine's own default when left out",
-          "text": ""
+          "text": "Its port. The engine's own default when left out"
         },
         {
           "short": null,
           "long": "--superuser",
           "value": "USER",
           "spec": "--superuser <USER>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "The account to create it with — `postgres` or `root` when left out",
-          "text": ""
+          "text": "The account to create it with — `postgres` or `root` when left out"
         },
         {
           "short": "-y",
           "long": "--yes",
           "value": null,
           "spec": "-y, --yes",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Answer yes to a question this would otherwise stop and ask",
-          "text": ""
+          "text": "Answer yes to a question this would otherwise stop and ask"
         },
         {
           "short": null,
           "long": "--force",
           "value": null,
           "spec": "--force",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Override a refusal that is there to protect something",
-          "text": ""
+          "text": "Override a refusal that is there to protect something"
         },
         {
           "short": null,
           "long": "--superuser-password-stdin",
           "value": null,
           "spec": "--superuser-password-stdin",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Read that account's password from standard input",
-          "text": ""
+          "text": "Read that account's password from standard input"
         },
         {
           "short": null,
           "long": "--confirm",
           "value": "NAME",
           "spec": "--confirm <NAME>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "The name of the thing being destroyed, typed out",
-          "text": ""
+          "text": "The name of the thing being destroyed, typed out"
         },
         {
           "short": null,
           "long": "--superuser-password-command",
           "value": "COMMAND",
           "spec": "--superuser-password-command <COMMAND>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Run this and read that account's password from its output",
-          "text": ""
+          "text": "Run this and read that account's password from its output"
         },
         {
           "short": null,
           "long": "--database",
           "value": "NAME",
           "spec": "--database <NAME>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "The database's own name on the server. Asked for when left out",
-          "text": ""
+          "text": "The database's own name on the server. Asked for when left out"
         },
         {
           "short": "-q",
           "long": "--quiet",
           "value": null,
           "spec": "-q, --quiet",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Say nothing but what went wrong",
-          "text": ""
+          "text": "Say nothing but what went wrong"
         },
         {
           "short": null,
           "long": "--json",
           "value": null,
           "spec": "--json",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Print one JSON document instead of talking",
-          "text": ""
+          "text": "Print one JSON document instead of talking"
         },
         {
           "short": null,
           "long": "--role",
           "value": "USER",
           "spec": "--role <USER>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "The user to create and hand it to. Asked for when left out",
-          "text": ""
+          "text": "The user to create and hand it to. Asked for when left out"
         },
         {
           "short": null,
           "long": "--no-color",
           "value": null,
           "spec": "--no-color",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Never colour the output, whatever this terminal supports",
-          "text": ""
+          "text": "Never colour the output, whatever this terminal supports"
         },
         {
           "short": null,
           "long": "--role-password-stdin",
           "value": null,
           "spec": "--role-password-stdin",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Read the new user's password from standard input instead of generating one",
-          "text": ""
+          "text": "Read the new user's password from standard input instead of generating one"
         },
         {
           "short": null,
           "long": "--log-file",
           "value": "PATH",
           "spec": "--log-file <PATH>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Append everything this run prints to a file as well",
-          "text": ""
+          "text": "Append everything this run prints to a file as well"
         },
         {
           "short": null,
           "long": "--role-password-command",
           "value": "COMMAND",
           "spec": "--role-password-command <COMMAND>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Run this and read the new user's password from its output",
-          "text": ""
+          "text": "Run this and read the new user's password from its output"
         },
         {
           "short": null,
           "long": "--dry-run",
           "value": null,
           "spec": "--dry-run",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Say what would happen and change nothing",
-          "text": ""
+          "text": "Say what would happen and change nothing"
         },
         {
           "short": "-h",
           "long": "--help",
           "value": null,
           "spec": "-h, --help",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Print help (see more with '--help')",
-          "text": ""
+          "text": "Print help (see more with '--help')"
         }
       ],
       "children": [],
@@ -1158,224 +990,70 @@
           "long": "--engine",
           "value": "ENGINE",
           "spec": "--engine <ENGINE>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Which engine: postgres, mysql or mariadb",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Use the global registry, whichever directory you are standing in",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Work on this project: a directory, or a name `sloop init` recorded",
-          "text": ""
+          "text": "Which engine: postgres, mysql or mariadb"
         },
         {
           "short": null,
           "long": "--host",
           "value": "HOST",
           "spec": "--host <HOST>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "The server it goes on [default: 127.0.0.1]",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Take the password from this command's output instead of wherever the registry says",
-          "text": ""
+          "text": "The server it goes on [default: 127.0.0.1]"
         },
         {
           "short": null,
           "long": "--port",
           "value": "PORT",
           "spec": "--port <PORT>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Its port. The engine's own default when left out",
-          "text": ""
+          "text": "Its port. The engine's own default when left out"
         },
         {
           "short": null,
           "long": "--superuser",
           "value": "USER",
           "spec": "--superuser <USER>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "The account to create it with — `postgres` or `root` when left out",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Answer yes to a question this would otherwise stop and ask",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Override a refusal that is there to protect something",
-          "text": ""
+          "text": "The account to create it with — `postgres` or `root` when left out"
         },
         {
           "short": null,
           "long": "--superuser-password-stdin",
           "value": null,
           "spec": "--superuser-password-stdin",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Read that account's password from standard input",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "The name of the thing being destroyed, typed out",
-          "text": ""
+          "text": "Read that account's password from standard input"
         },
         {
           "short": null,
           "long": "--superuser-password-command",
           "value": "COMMAND",
           "spec": "--superuser-password-command <COMMAND>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Run this and read that account's password from its output",
-          "text": ""
+          "text": "Run this and read that account's password from its output"
         },
         {
           "short": null,
           "long": "--database",
           "value": "NAME",
           "spec": "--database <NAME>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "The database's own name on the server. Asked for when left out",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Say nothing but what went wrong",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Print one JSON document instead of talking",
-          "text": ""
+          "text": "The database's own name on the server. Asked for when left out"
         },
         {
           "short": null,
           "long": "--role",
           "value": "USER",
           "spec": "--role <USER>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "The user to create and hand it to. Asked for when left out",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Never colour the output, whatever this terminal supports",
-          "text": ""
+          "text": "The user to create and hand it to. Asked for when left out"
         },
         {
           "short": null,
           "long": "--role-password-stdin",
           "value": null,
           "spec": "--role-password-stdin",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Read the new user's password from standard input instead of generating one",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Append everything this run prints to a file as well",
-          "text": ""
+          "text": "Read the new user's password from standard input instead of generating one"
         },
         {
           "short": null,
           "long": "--role-password-command",
           "value": "COMMAND",
           "spec": "--role-password-command <COMMAND>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Run this and read the new user's password from its output",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Say what would happen and change nothing",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Print help (see more with '--help')",
-          "text": ""
+          "text": "Run this and read the new user's password from its output"
         }
       ]
     },
@@ -3621,381 +3299,143 @@
           "long": "--global",
           "value": null,
           "spec": "--global",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Use the global registry, whichever directory you are standing in",
-          "text": ""
+          "text": "Use the global registry, whichever directory you are standing in"
         },
         {
           "short": null,
           "long": "--superuser-password-command",
           "value": "COMMAND",
           "spec": "--superuser-password-command <COMMAND>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "A command that prints the superuser password of the PostgreSQL already on this machine,",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "for a run with no terminal to ask at",
-          "text": ""
+          "text": "A command that prints the superuser password of the PostgreSQL already on this machine, for a run with no terminal to ask at"
         },
         {
           "short": "-C",
           "long": "--project",
           "value": "PATH|NAME",
           "spec": "-C, --project <PATH|NAME>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Work on this project: a directory, or a name `sloop init` recorded",
-          "text": ""
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
         },
         {
           "short": null,
           "long": "--superuser-password-stdin",
           "value": null,
           "spec": "--superuser-password-stdin",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Read that password from standard input instead of asking for it",
-          "text": ""
+          "text": "Read that password from standard input instead of asking for it"
         },
         {
           "short": null,
           "long": "--db-password-command",
           "value": "COMMAND",
           "spec": "--db-password-command <COMMAND>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "A command that prints the password to give sloop's own database user",
-          "text": ""
+          "text": "A command that prints the password to give sloop's own database user"
         },
         {
           "short": null,
           "long": "--password-command",
           "value": "COMMAND",
           "spec": "--password-command <COMMAND>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Take the password from this command's output instead of wherever the registry says",
-          "text": ""
+          "text": "Take the password from this command's output instead of wherever the registry says"
         },
         {
           "short": null,
           "long": "--db-password-stdin",
           "value": null,
           "spec": "--db-password-stdin",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Read that password from standard input instead of generating one",
-          "text": ""
+          "text": "Read that password from standard input instead of generating one"
         },
         {
           "short": "-y",
           "long": "--yes",
           "value": null,
           "spec": "-y, --yes",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Answer yes to a question this would otherwise stop and ask",
-          "text": ""
+          "text": "Answer yes to a question this would otherwise stop and ask"
         },
         {
           "short": null,
           "long": "--force",
           "value": null,
           "spec": "--force",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Override a refusal that is there to protect something",
-          "text": ""
+          "text": "Override a refusal that is there to protect something"
         },
         {
           "short": null,
           "long": "--confirm",
           "value": "NAME",
           "spec": "--confirm <NAME>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "The name of the thing being destroyed, typed out",
-          "text": ""
+          "text": "The name of the thing being destroyed, typed out"
         },
         {
           "short": "-q",
           "long": "--quiet",
           "value": null,
           "spec": "-q, --quiet",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Say nothing but what went wrong",
-          "text": ""
+          "text": "Say nothing but what went wrong"
         },
         {
           "short": null,
           "long": "--json",
           "value": null,
           "spec": "--json",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Print one JSON document instead of talking",
-          "text": ""
+          "text": "Print one JSON document instead of talking"
         },
         {
           "short": null,
           "long": "--no-color",
           "value": null,
           "spec": "--no-color",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Never colour the output, whatever this terminal supports",
-          "text": ""
+          "text": "Never colour the output, whatever this terminal supports"
         },
         {
           "short": null,
           "long": "--log-file",
           "value": "PATH",
           "spec": "--log-file <PATH>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Append everything this run prints to a file as well",
-          "text": ""
+          "text": "Append everything this run prints to a file as well"
         },
         {
           "short": null,
           "long": "--dry-run",
           "value": null,
           "spec": "--dry-run",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Say what would happen and change nothing",
-          "text": ""
+          "text": "Say what would happen and change nothing"
         },
         {
           "short": "-h",
           "long": "--help",
           "value": null,
           "spec": "-h, --help",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Print help (see more with '--help')",
-          "text": ""
+          "text": "Print help (see more with '--help')"
         }
       ],
       "children": [],
       "ownOptions": [
         {
           "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Use the global registry, whichever directory you are standing in",
-          "text": ""
-        },
-        {
-          "short": null,
           "long": "--superuser-password-command",
           "value": "COMMAND",
           "spec": "--superuser-password-command <COMMAND>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "A command that prints the superuser password of the PostgreSQL already on this machine,",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "for a run with no terminal to ask at",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Work on this project: a directory, or a name `sloop init` recorded",
-          "text": ""
+          "text": "A command that prints the superuser password of the PostgreSQL already on this machine, for a run with no terminal to ask at"
         },
         {
           "short": null,
           "long": "--superuser-password-stdin",
           "value": null,
           "spec": "--superuser-password-stdin",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Read that password from standard input instead of asking for it",
-          "text": ""
+          "text": "Read that password from standard input instead of asking for it"
         },
         {
           "short": null,
           "long": "--db-password-command",
           "value": "COMMAND",
           "spec": "--db-password-command <COMMAND>",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "A command that prints the password to give sloop's own database user",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Take the password from this command's output instead of wherever the registry says",
-          "text": ""
+          "text": "A command that prints the password to give sloop's own database user"
         },
         {
           "short": null,
           "long": "--db-password-stdin",
           "value": null,
           "spec": "--db-password-stdin",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Read that password from standard input instead of generating one",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Answer yes to a question this would otherwise stop and ask",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Override a refusal that is there to protect something",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "The name of the thing being destroyed, typed out",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Say nothing but what went wrong",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Print one JSON document instead of talking",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Never colour the output, whatever this terminal supports",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Append everything this run prints to a file as well",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Say what would happen and change nothing",
-          "text": ""
-        },
-        {
-          "short": null,
-          "long": null,
-          "value": null,
-          "spec": "Print help (see more with '--help')",
-          "text": ""
+          "text": "Read that password from standard input instead of generating one"
         }
       ]
     },
