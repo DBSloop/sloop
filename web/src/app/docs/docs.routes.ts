@@ -1,6 +1,7 @@
 import { Type } from '@angular/core';
 import { Routes } from '@angular/router';
 
+import { BackupKey } from './backup-key/backup-key';
 import { Backups } from './backups/backups';
 import { Commands } from './commands/commands';
 import { Databases } from './databases/databases';
@@ -24,6 +25,7 @@ const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   commands: Commands,
   databases: Databases,
   backups: Backups,
+  'backup-key': BackupKey,
 };
 
 /**

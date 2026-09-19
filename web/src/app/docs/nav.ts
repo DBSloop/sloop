@@ -160,6 +160,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         path: 'backup-key',
         documentTitle: 'Encrypted database backups and the age key — sloop',
         title: 'The backup key',
+        written: true,
         blurb:
           'An age keypair, and the asymmetry is the point: a scheduled backup needs no secret, and only a restore does.',
         covers: [

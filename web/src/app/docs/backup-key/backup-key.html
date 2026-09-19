@@ -1,0 +1,252 @@
+<!--
+  The backup key.
+
+  The move between machines was performed rather than described — two project
+  registries, one cluster, a real exit 5 in the middle where the key was
+  missing. The class comment on `BackupKey` says how, and names the two
+  substitutions: every key on this page is replaced, and the paths are the
+  reader's.
+-->
+<app-docs-page
+  heading="The backup key"
+  lede="Backups are encrypted to an age keypair, and the asymmetry is the whole design: taking one needs no secret, and only putting one back does."
+  eyebrow="Backups"
+  path="backup-key"
+>
+  <p>
+    When a registry takes its first backup, sloop makes it an
+    <a href="https://age-encryption.org" rel="noreferrer">age</a> keypair. Every backup that
+    registry takes from then on is encrypted to it — and the two halves of that pair live in
+    completely different places, for completely different reasons.
+  </p>
+  <p class="docs-bare mt-5 text-sm text-faint">
+    <span
+      aria-hidden="true"
+      class="mr-2.5 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
+    ></span
+    >Showing <strong class="font-semibold text-text">{{ osLabel() }}</strong
+    >. Change it in the strip above and every path and store name follows.
+  </p>
+
+  <h2 id="the-asymmetry">The asymmetry is the point</h2>
+  <p>
+    A symmetric key would mean the secret has to be present to <em>write</em> an encrypted backup —
+    so a nightly job would need it unlocked, sitting somewhere a scheduler can reach, at three in
+    the morning, unattended. That is the thing worth avoiding, and splitting the pair is what avoids
+    it.
+  </p>
+
+  <!-- The two halves, attribute by attribute. A table would put the labels in a
+       header row a phone scrolls away from; this repeats them down each column
+       so either half reads on its own. -->
+  <div class="docs-bare mt-7 grid gap-4 md:grid-cols-2">
+    @for (half of halves(); track half.name; let i = $index) {
+      <div
+        class="rounded-xl border p-5 sm:p-6"
+        [class]="i === 0 ? 'border-line bg-surface' : 'border-accent/30 bg-accent-soft'"
+      >
+        <p class="text-base font-semibold text-text">{{ half.name }}</p>
+        <p
+          class="mt-1 break-all font-mono text-[0.6875rem] leading-relaxed"
+          [class]="i === 0 ? 'text-faint' : 'text-accent'"
+        >
+          {{ half.kind }}
+        </p>
+
+        <dl class="mt-5 space-y-4">
+          <div>
+            <dt class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">
+              Where it lives
+            </dt>
+            <dd class="mt-1 max-w-measure text-sm text-muted">{{ half.lives }}</dd>
+          </div>
+          <div>
+            <dt class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">
+              What needs it
+            </dt>
+            <dd class="mt-1 max-w-measure text-sm text-muted">{{ half.needed }}</dd>
+          </div>
+          <div>
+            <dt class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">
+              What losing it costs
+            </dt>
+            <dd class="mt-1 max-w-measure text-sm text-muted">{{ half.lost }}</dd>
+          </div>
+        </dl>
+      </div>
+    }
+  </div>
+
+  <p>
+    So a scheduled backup holds nothing you would mind it holding, and the one thing worth
+    protecting is read by exactly one command. That is the design, and everything below is a
+    consequence of it.
+  </p>
+
+  <h2 id="the-refusal">The first backup will not run until you have a copy</h2>
+  <p>
+    A key that exists only inside one machine is not a backup strategy — it is a machine you cannot
+    afford to lose. So sloop says this once, hard, and <strong>refuses</strong> rather than warning:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 2" [lines]="refusal" copy />
+  </div>
+
+  <p>
+    On a terminal it asks and will take <em>no</em> for an answer — declining explicitly is a
+    decision, and it only has to be made once. With no terminal to ask at, as above, it exits
+    <code>2</code> and names the command that settles it. Nothing was dumped, nothing was written.
+  </p>
+
+  <h2 id="exporting">Exporting it</h2>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the run that makes the key" [lines]="exportFirst()" copy />
+  </div>
+
+  <p>
+    The private key goes to <strong>standard output</strong>, deliberately, so that
+    <code>sloop key export &gt; backup-key.txt</code> is the whole of writing it down and the shell
+    decides where it lands. Everything else on that block — the heading, the public key, the warning
+    — goes to standard error, so the redirect captures the key and nothing else.
+  </p>
+
+  <div class="docs-bare mt-7 rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
+    <p class="flex items-center gap-2.5 font-mono text-xs text-warn">
+      <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-warn"></span>
+      Somewhere sloop cannot reach
+    </p>
+    <p class="mt-3 max-w-measure text-sm text-muted">
+      A password manager, a safe, a printed page. <strong>Not</strong> the machine sloop runs on,
+      and not a disk it backs up — a key stored beside the backups it opens is one disk failure away
+      from being neither a key nor a backup.
+    </p>
+  </div>
+
+  <p>
+    Running it again does not make a second key. The first word is the whole difference —
+    <em>a new backup key</em> on the run that created one, <em>the backup key</em> every time after:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the same key, again" [lines]="exportAgain()" copy />
+  </div>
+
+  <h2 id="moving-a-machine">Moving to another machine</h2>
+  <p>
+    This is the whole reason <code>export</code> and <code>import</code> exist, and it is worth
+    walking through in order — because the step in the middle is the one that surprises people.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="1 · a backup on the old machine" [lines]="taken()" copy />
+  </div>
+
+  <p>
+    Copy that <code>backups</code> directory to the new machine — any way you like, it is ordinary
+    files — into the registry there. sloop finds it immediately and reads it perfectly:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="2 · the new machine sees it" [lines]="seenThere" copy />
+  </div>
+
+  <p>
+    Size, timestamp, row count, all of it. <strong>That is the manifest talking</strong>, which is
+    plain JSON and not encrypted. The dump beside it is another matter:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="3 · exit 5" [lines]="withoutKey()" copy />
+  </div>
+
+  <p>
+    It names the public key the backup was encrypted to, so you can tell <em>which</em> key you are
+    looking for rather than guessing. This is what losing the key looks like from the inside: a
+    listing that reads perfectly and a dump that opens for nobody.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="4 · the key" [lines]="importing()" copy />
+  </div>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="5 · the same command, now" [lines]="restored()" copy />
+  </div>
+
+  <p>
+    Nothing about the backup changed between step 3 and step 5. The only difference is
+    {{ keyring() }}.
+  </p>
+
+  <h2 id="one-key-per-registry">One key per registry, and sloop keeps it that way</h2>
+  <p>
+    Importing the key that is already there is a no-op, and it says so rather than pretending to
+    work:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="nothing to do" [lines]="sameAgain()" copy />
+  </div>
+
+  <p>
+    Importing a <strong>different</strong> key into a registry that already has one is refused.
+    Accepting it would silently make every backup already taken unreadable — the registry would
+    encrypt new ones to the new key and have nothing left that opens the old ones:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="a refusal that protects" [lines]="differentKey()" copy />
+  </div>
+
+  <p>
+    The way out is deliberately manual, because it should be: take the
+    <code>[encryption]</code> block out of the registry by hand, keep the old key, and let sloop
+    make or take a new one. A flag for this would be a flag whose worst case is losing every backup
+    you have, and <code>--force</code> is not offered here.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="and a key that is not one" [lines]="malformed" copy />
+  </div>
+
+  <h2 id="what-you-lose">What you lose, and to what</h2>
+  <p>
+    Two different losses, and the page is only worth reading if you leave able to tell them apart.
+  </p>
+
+  <h3 id="losing-the-machine">Losing the machine</h3>
+  <p>
+    <strong>Nothing, if you exported the key.</strong> The backups are ordinary files — copy them
+    wherever they need to go. A new machine, <code>sloop key import</code>, and
+    <code>sloop restore</code> works exactly as it did. That is steps 1 to 5 above, and it is the
+    case sloop is built for.
+  </p>
+
+  <h3 id="losing-the-key">Losing the key</h3>
+  <p>
+    <strong>Every backup it ever encrypted.</strong> Not damaged, not partially readable — the dumps
+    are <code>age</code> ciphertext and nothing opens them. sloop cannot help, there is no recovery
+    path, and there is nobody to ask: the private half was never anywhere but that one machine's
+    keyring, which is the property that made the scheduled backup safe in the first place.
+  </p>
+  <p>
+    Which is why the refusal at the top of this page exists, why it is a refusal and not a warning,
+    and why it fires before the first encrypted backup rather than after it.
+  </p>
+
+  <div class="docs-bare mt-7 rounded-xl border border-accent/25 bg-accent-soft p-5 sm:p-6">
+    <p class="max-w-measure text-base text-text">
+      <strong class="font-semibold">Export it once, today.</strong> It takes one command and one
+      paste into a password manager, it never has to be done again for that registry, and it is the
+      difference between losing a laptop and losing everything that was ever on it.
+    </p>
+  </div>
+
+  <p>
+    The <a routerLink="/docs/backups">backups page</a> is what those encrypted files are and how
+    they are taken, pruned and put back. Every flag both pages mention is on the
+    <a routerLink="/docs/commands">command reference</a>.
+  </p>
+</app-docs-page>
