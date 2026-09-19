@@ -66,6 +66,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         title: 'Installation',
         blurb:
           'The one-liner for your platform, what it does to PATH, and both ways to take sloop off again.',
+        written: true,
         covers: [
           'The install one-liner for each platform, one block per platform and never two at once.',
           'Where the binary lands, how PATH is changed — and that the open shell has to be restarted.',

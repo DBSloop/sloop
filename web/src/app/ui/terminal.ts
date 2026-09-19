@@ -10,6 +10,7 @@ import {
   inject,
   input,
   signal,
+  viewChild,
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 
@@ -107,34 +108,88 @@ const BEFORE_REPLAY_IS_OFFERED = 900;
 
         <span class="ml-1.5 truncate">{{ caption() }}</span>
 
-        @if (canReplay()) {
-          <button
-            type="button"
-            class="ml-auto flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-mono text-xs text-term-dim transition-colors duration-2 ease-out hover:bg-term-line hover:text-term-text"
-            (click)="replay()"
-          >
-            <svg
-              class="h-3.5 w-3.5"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-              focusable="false"
+        <span class="ml-auto flex shrink-0 items-center gap-1">
+          @if (canReplay()) {
+            <button
+              type="button"
+              class="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-mono text-xs text-term-dim transition-colors duration-2 ease-out hover:bg-term-line hover:text-term-text"
+              (click)="replay()"
             >
-              <path d="M13.5 8a5.5 5.5 0 1 1-1.9-4.16" />
-              <path d="M13.2 2.3v2.9h-2.9" />
-            </svg>
-            Run it again
-          </button>
-        } @else if (meta()) {
-          <span class="ml-auto shrink-0 truncate text-term-dim/80">{{ meta() }}</span>
-        }
+              <svg
+                class="h-3.5 w-3.5"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path d="M13.5 8a5.5 5.5 0 1 1-1.9-4.16" />
+                <path d="M13.2 2.3v2.9h-2.9" />
+              </svg>
+              Run it again
+            </button>
+          } @else if (meta()) {
+            <span class="shrink-0 truncate text-term-dim/80">{{ meta() }}</span>
+          }
+
+          @if (canCopy()) {
+            <button
+              type="button"
+              class="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-mono text-xs transition-colors duration-2 ease-out hover:bg-term-line hover:text-term-text"
+              [class]="copied() ? 'text-term-ok' : 'text-term-dim'"
+              [attr.aria-label]="
+                commands().length > 1
+                  ? 'Copy all ' + commands().length + ' commands'
+                  : 'Copy the command'
+              "
+              (click)="copyCommands()"
+            >
+              @if (copied()) {
+                <svg
+                  class="h-3.5 w-3.5"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path d="M3 8.5 6.2 11.7 13 4.9" />
+                </svg>
+                Copied
+              } @else {
+                <svg
+                  class="h-3.5 w-3.5"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <rect x="5.75" y="5.75" width="8.5" height="8.5" rx="2" />
+                  <path d="M10.25 2.75H3.75a1 1 0 0 0-1 1v6.5" />
+                </svg>
+                Copy
+              }
+            </button>
+          }
+        </span>
       </figcaption>
 
-      <div class="scroller overflow-x-auto px-4 py-4 sm:px-5">
+      <div
+        #scroller
+        class="scroller overflow-x-auto px-4 py-4 sm:px-5"
+        [class.is-clipped]="clipped()"
+        (scroll)="onScroll()"
+      >
         <code [class]="bodyClass()">
           @for (line of lines(); track $index; let i = $index) {
             <span
@@ -209,7 +264,7 @@ const BEFORE_REPLAY_IS_OFFERED = 900;
     @supports not selector(::-webkit-scrollbar) {
       .scroller {
         scrollbar-width: thin;
-        scrollbar-color: rgb(var(--ch-term-line)) transparent;
+        scrollbar-color: rgb(var(--ch-term-dim) / 0.55) transparent;
       }
     }
 
@@ -221,8 +276,13 @@ const BEFORE_REPLAY_IS_OFFERED = 900;
       background-color: transparent;
     }
 
+    /* Resting, this used to be --ch-term-line: 34,31,29 on a background of
+       9,8,8. That is a contrast of about 1.1:1 — a scrollbar that is there and
+       cannot be seen, which is worse than none, because the reader concludes
+       the line is simply cut off. It is the block's own dim grey now, and
+       brightens further on hover. */
     .scroller::-webkit-scrollbar-thumb {
-      background-color: rgb(var(--ch-term-line));
+      background-color: rgb(var(--ch-term-dim) / 0.55);
       border: 3px solid transparent;
       background-clip: content-box;
       border-radius: 999px;
@@ -230,7 +290,16 @@ const BEFORE_REPLAY_IS_OFFERED = 900;
     }
 
     .scroller:hover::-webkit-scrollbar-thumb {
-      background-color: rgb(var(--ch-term-dim) / 0.7);
+      background-color: rgb(var(--ch-term-dim) / 0.85);
+    }
+
+    /* And the second half of the same problem: a scrollbar says there is more
+       only to somebody who looks down. A line that runs off the right edge
+       fades out, so it reads as continuing rather than as ending there. The
+       class comes off as soon as the block is scrolled to its end. */
+    .scroller.is-clipped {
+      -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 3rem), transparent 100%);
+      mask-image: linear-gradient(to right, #000 calc(100% - 3rem), transparent 100%);
     }
   `,
 })
@@ -250,11 +319,62 @@ export class Terminal {
    */
   readonly compact = input(false, { transform: (value: boolean | string) => value !== false });
 
+  /**
+   * Offer a copy button, and copy the commands rather than the transcript.
+   *
+   * **Opt-in, and deliberately not the default.** The owner's rule: *only use
+   * copy button if user needs to copy that button, not for example shell
+   * window.* Most blocks on this site are showing what something prints — a
+   * listing, a status screen, a verified backup — and a copy button on one of
+   * those offers to put somebody else's output on your clipboard, which is a
+   * button that can only be pressed by mistake. A block sets this when the
+   * commands in it are meant to be run as they stand.
+   *
+   * What it copies is the `prompt` lines, without the `$ `, one per line — so
+   * a five-line sequence pastes as a five-line sequence and the output
+   * interleaved between them is left behind. A block with no command in it
+   * gets no button whatever this says.
+   */
+  readonly copy = input(false, { transform: (value: boolean | string) => value !== false });
+
+  /**
+   * `min-w-max` is load-bearing, and its absence was a real bug.
+   *
+   * Each line is a block-level span with `white-space: pre`. A block box takes
+   * its containing block's width whatever is inside it, so a line longer than
+   * the block **overflowed its own box without making the box any wider** —
+   * `scrollWidth` stayed equal to `clientWidth`, the scroller had nothing to
+   * scroll, and the end of a long command was simply clipped with no scrollbar
+   * and no way to reach it. `min-width: max-content` sizes the body to its
+   * longest line, so the overflow becomes real and the block scrolls.
+   *
+   * Not on `compact`: those are the hero's ornament windows, each already cut
+   * to fit its own longest line, and a scrollbar on a 224px decoration is
+   * clutter rather than an affordance.
+   */
   protected readonly bodyClass = computed(() =>
     this.compact()
       ? 'block font-mono text-xs leading-relaxed'
-      : 'block font-mono text-xs leading-relaxed sm:text-sm',
+      : 'block min-w-max font-mono text-xs leading-relaxed sm:text-sm',
   );
+
+  /** The lines somebody would actually type, in order. */
+  protected readonly commands = computed(() =>
+    this.lines()
+      .filter((line) => line.kind === 'prompt')
+      .map((line) => line.text),
+  );
+
+  protected readonly canCopy = computed(
+    () => this.copy() && !this.compact() && this.commands().length > 0,
+  );
+  protected readonly copied = signal(false);
+
+  /**
+   * True while the block is scrolled horizontally and there is more to the
+   * right. Drives the fade at the right edge — see the note in `styles`.
+   */
+  protected readonly clipped = signal(false);
 
   /**
    * How far the run has got: the index of the line being written, and how many
@@ -273,11 +393,83 @@ export class Terminal {
 
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly document = inject(DOCUMENT);
+  private readonly scroller = viewChild.required<ElementRef<HTMLElement>>('scroller');
   private timer = 0;
+  private copyTimer = 0;
+  private watcher: ResizeObserver | undefined;
+
+  /**
+   * Put the commands on the clipboard.
+   *
+   * The fallback matters more here than it looks: the clipboard API is refused
+   * on an insecure origin and in a browser that has not granted the
+   * permission, and a Copy button that silently does nothing is worse than no
+   * button. When it is refused, the block is selected instead, so the
+   * keyboard shortcut still works and the reader can see what they are about
+   * to take.
+   */
+  protected async copyCommands(): Promise<void> {
+    const view = this.document.defaultView;
+    const text = this.commands().join('\n');
+    try {
+      await view?.navigator.clipboard.writeText(text);
+    } catch {
+      const body = this.host.nativeElement.querySelector('code');
+      const selection = view?.getSelection();
+      if (body && selection) {
+        const range = this.document.createRange();
+        range.selectNodeContents(body);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      return;
+    }
+    this.copied.set(true);
+    view?.clearTimeout(this.copyTimer);
+    this.copyTimer = view?.setTimeout(() => this.copied.set(false), 1600) ?? 0;
+  }
+
+  /** Is there more of this line to the right than is being shown? */
+  protected onScroll(): void {
+    const box = this.scroller().nativeElement;
+    // A one-pixel allowance: fractional layout widths mean `scrollLeft +
+    // clientWidth` lands just short of `scrollWidth` at the true end, and a
+    // fade that never quite goes away reads as a rendering fault.
+    this.clipped.set(box.scrollWidth - box.clientWidth - box.scrollLeft > 1);
+  }
 
   constructor() {
     const isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
-    inject(DestroyRef).onDestroy(() => this.document.defaultView?.clearTimeout(this.timer));
+    inject(DestroyRef).onDestroy(() => {
+      const view = this.document.defaultView;
+      view?.clearTimeout(this.timer);
+      view?.clearTimeout(this.copyTimer);
+      this.watcher?.disconnect();
+    });
+
+    // The block can start clipped, and can become clipped when the window
+    // narrows or the OS tab swaps one command for a longer one — so it is
+    // watched rather than measured once.
+    afterNextRender(() => {
+      const view = this.document.defaultView;
+      if (!isBrowser || !view) {
+        return;
+      }
+      this.onScroll();
+      if (typeof view.ResizeObserver === 'function') {
+        this.watcher = new view.ResizeObserver(() => this.onScroll());
+        const box = this.scroller().nativeElement;
+        this.watcher.observe(box);
+        // And the body inside it: the box keeps its width while the content
+        // changes under it — a webfont arriving, or the OS tab swapping one
+        // command for a longer one — and only the second of those moves the
+        // point at which the block is clipped.
+        const body = box.firstElementChild;
+        if (body) {
+          this.watcher.observe(body);
+        }
+      }
+    });
 
     afterNextRender(() => {
       const view = this.document.defaultView;

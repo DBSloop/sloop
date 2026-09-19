@@ -158,8 +158,11 @@ export class DocsToc {
       });
     };
 
+    let watcher: MutationObserver | undefined;
+
     inject(DestroyRef).onDestroy(() => {
       view?.removeEventListener('scroll', onScroll);
+      watcher?.disconnect();
       if (this.frame) {
         view?.cancelAnimationFrame(this.frame);
       }
@@ -169,27 +172,61 @@ export class DocsToc {
       if (!isBrowser || !view) {
         return;
       }
-      this.headings = Array.from(
-        this.within().querySelectorAll<HTMLElement>('h2[id], h3[id]'),
-      ).filter((heading) => heading.textContent?.trim());
+      this.collect();
 
-      this.items.set(
-        this.headings.map((heading) => ({
-          id: heading.id,
-          text: heading.textContent?.trim() ?? '',
-          level: heading.tagName === 'H3' ? 3 : 2,
-        })),
-      );
+      // **A page's headings can change without a navigation**, and on the
+      // installation page they do: the OS strip is global state, the article
+      // renders one platform's sections, and picking macOS removes the
+      // SmartScreen heading and adds the Gatekeeper one. Reading the headings
+      // once after the first render left the contents describing a page that
+      // was no longer on screen.
+      //
+      // So the article is watched rather than sampled. It is the same contract
+      // as before — the contents are whatever the article says they are — held
+      // for the whole time the page is open instead of for one frame of it.
+      if (typeof view.MutationObserver === 'function') {
+        watcher = new view.MutationObserver(() => {
+          // Coalesced into a frame: one `@if` switching platforms fires a
+          // stream of records, and re-reading the DOM for each of them is
+          // work for the same answer.
+          if (this.frame) {
+            return;
+          }
+          this.frame = view.requestAnimationFrame(() => {
+            this.frame = 0;
+            this.collect();
+          });
+        });
+        watcher.observe(this.within(), { childList: true, subtree: true });
+      }
 
       // The rail is the only variant that highlights. The inline disclosure is
       // closed most of the time, and marking something inside a closed box is
       // work for nobody.
-      if (this.variant() !== 'rail' || this.headings.length < 2) {
+      if (this.variant() !== 'rail') {
         return;
       }
-      this.mark();
       view.addEventListener('scroll', onScroll, { passive: true });
     });
+  }
+
+  /** Read the article's headings, and say which one the reader is in. */
+  private collect(): void {
+    this.headings = Array.from(
+      this.within().querySelectorAll<HTMLElement>('h2[id], h3[id]'),
+    ).filter((heading) => heading.textContent?.trim());
+
+    this.items.set(
+      this.headings.map((heading) => ({
+        id: heading.id,
+        text: heading.textContent?.trim() ?? '',
+        level: heading.tagName === 'H3' ? 3 : 2,
+      })),
+    );
+
+    if (this.variant() === 'rail' && this.headings.length > 1) {
+      this.mark();
+    }
   }
 
   /**

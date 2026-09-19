@@ -1,0 +1,434 @@
+<!--
+  Installation.
+
+  One platform at a time. `A6`'s bar is that a reader on any one OS never sees
+  an instruction for another, so every command block here is behind the OS strip
+  in the toolbar rather than stacked three deep. The three are named once, in
+  prose, because somebody deciding which machine to put this on still has to
+  know what there is.
+
+  Where each transcript came from, and the one path substitution in them, are in
+  the class comment on `Install`.
+-->
+<app-docs-page
+  heading="Installation"
+  lede="One line on Windows, Linux or macOS. It checks what it downloads before it unpacks anything, puts the binary on PATH, and tells you to restart your shell — which is the one step people miss."
+  eyebrow="Start here"
+  path="install"
+>
+  <p>
+    sloop is a single binary with nothing beside it: no runtime to install first, no service to
+    register, no account. It builds for <strong>Windows, Linux and macOS</strong> on both x86-64 and
+    aarch64, and the installer picks the right one by asking the machine rather than asking you.
+  </p>
+  <!-- Not a flex row. A flex container turns each run of text into its own
+       anonymous item, so `gap` lands between "Showing", the platform and the
+       full stop after it — which read as a stray space in the middle of a
+       sentence. The dot is an inline marker with its own margin instead. -->
+  <p class="docs-bare mt-5 text-sm text-faint">
+    <span
+      aria-hidden="true"
+      class="mr-2.5 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
+    ></span
+    >Showing <strong class="font-semibold text-text">{{ osLabel() }}</strong
+    >. Change it in the strip above and the whole page follows.
+  </p>
+
+  <h2 id="install-it">Install it</h2>
+  @if (os() === 'windows') {
+    <p>
+      In PowerShell. <code>irm</code> is <code>Invoke-WebRequest</code> and <code>iex</code> is
+      <code>Invoke-Expression</code>, so this downloads the script and runs it — no administrator
+      rights, and nothing outside your own user profile is touched.
+    </p>
+  } @else if (os() === 'macos') {
+    <p>
+      In Terminal, or in whatever you use instead. No <code>sudo</code>: everything goes under your
+      home directory.
+    </p>
+  } @else {
+    <p>
+      In any POSIX shell. No <code>sudo</code>: everything goes under your home directory, and the
+      binary is statically linked against musl, so it runs on a distribution sloop has never heard
+      of.
+    </p>
+  }
+
+  <div class="mt-7">
+    <app-terminal class="block" [caption]="installCaption()" [lines]="installing()" copy />
+  </div>
+
+  <p>
+    <strong>Then restart your shell.</strong> A shell reads its startup environment once, when it
+    starts, and the one you just ran that in has already done so — so <code>sloop</code> will not be
+    found in it however correct the install was. Open a new terminal, or paste the
+    <code>export</code>
+    @if (os() === 'windows') {
+      <span>— on Windows, the <code>$env:Path</code> line —</span>
+    }
+    the installer prints for this window only.
+  </p>
+  <p>
+    After that, <a routerLink="/docs/getting-started">getting started</a> takes you from here to a
+    verified backup you can restore.
+  </p>
+
+  <h2 id="what-it-did">What it just did</h2>
+  @if (os() === 'windows') {
+    <p>
+      It worked out that this machine is <code>{{ target() }}</code
+      >, downloaded <code>{{ archive() }}</code> and <code>SHA256SUMS</code> from the same release,
+      checked the first against the second <em class="italic">before unpacking a byte of it</em>,
+      and put <code>sloop.exe</code> in <code>%LOCALAPPDATA%\Programs\sloop\bin</code>.
+    </p>
+    <p>
+      Then it added that directory to your <code>PATH</code> — in <code>HKCU\Environment</code>,
+      which is your own user's environment and needs no elevation. The entry is written as
+      <code>%LOCALAPPDATA%\Programs\sloop\bin</code> rather than expanded, so it survives a renamed
+      account or a restored image, and the installer broadcasts <code>WM_SETTINGCHANGE</code> so
+      terminals opened afterwards pick it up without a sign-out. Running the installer twice leaves
+      one entry, not two.
+    </p>
+  } @else {
+    <p>
+      It worked out that this machine is <code>{{ target() }}</code
+      >, downloaded <code>{{ archive() }}</code> and <code>SHA256SUMS</code> from the same release,
+      checked the first against the second <em class="italic">before unpacking a byte of it</em>,
+      and put <code>sloop</code> in <code>~/.local/bin</code>.
+    </p>
+    <p>
+      Then it appended a marked block to the startup file your login shell actually reads. Which
+      file that is depends on the shell, and getting it wrong is how an installer reports success
+      and leaves you with <code>sloop: command not found</code>:
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>Your shell</th>
+          <th>The file it writes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>zsh</code></td>
+          <td>
+            <code>${{ '{' }}ZDOTDIR:-~{{ '}' }}/.zshrc</code>
+          </td>
+        </tr>
+        @if (os() === 'macos') {
+          <tr>
+            <td><code>bash</code></td>
+            <td>
+              the first of <code>~/.bash_profile</code>, <code>~/.bash_login</code> and
+              <code>~/.profile</code> that already exists
+            </td>
+          </tr>
+        } @else {
+          <tr>
+            <td><code>bash</code></td>
+            <td><code>~/.bashrc</code></td>
+          </tr>
+        }
+        <tr>
+          <td><code>fish</code></td>
+          <td><code>~/.config/fish/conf.d/sloop.fish</code></td>
+        </tr>
+        <tr>
+          <td><code>ksh</code></td>
+          <td><code>~/.kshrc</code></td>
+        </tr>
+        <tr>
+          <td>anything else</td>
+          <td><code>~/.profile</code></td>
+        </tr>
+      </tbody>
+    </table>
+    @if (os() === 'macos') {
+      <p>
+        <strong>bash on macOS is the one that catches people out.</strong> Terminal starts a
+        <em class="italic">login</em> shell, and a login bash reads the first of those three files
+        and no other — so writing <code>~/.bashrc</code> would be writing to a file nothing opens.
+        Creating a <code>~/.bash_profile</code> on a machine that keeps its settings in
+        <code>~/.profile</code> would silently stop bash reading <code>~/.profile</code> at all, so
+        an existing file always wins and a new one is created only when there is nothing.
+      </p>
+    }
+    <p>
+      The block is fenced between <code># &gt;&gt;&gt; sloop &gt;&gt;&gt;</code> and
+      <code># &lt;&lt;&lt; sloop &lt;&lt;&lt;</code>, and the path inside it is written with
+      <code>$HOME</code> rather than expanded. The markers are what makes removing it later an exact
+      operation rather than a person editing a file by hand. Running the installer twice leaves one
+      block, not two.
+    </p>
+  }
+
+  <h2 id="options">Installer options</h2>
+  <p>
+    Four of them, and they do the same four things on every platform. The last one is the one to
+    reach for if you manage <code>PATH</code> yourself.
+  </p>
+  @if (os() === 'windows') {
+    <table>
+      <thead>
+        <tr>
+          <th>Parameter</th>
+          <th>What it does</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>-Version &lt;x.y.z&gt;</code></td>
+          <td>install that release instead of the latest. A leading <code>v</code> is fine</td>
+        </tr>
+        <tr>
+          <td><code>-Dir &lt;path&gt;</code></td>
+          <td>install there instead of <code>%LOCALAPPDATA%\Programs\sloop\bin</code></td>
+        </tr>
+        <tr>
+          <td><code>-From &lt;url|dir&gt;</code></td>
+          <td>fetch from there instead of GitHub releases — an internal mirror, or a directory</td>
+        </tr>
+        <tr>
+          <td><code>-NoModifyPath</code></td>
+          <td>install, and leave <code>PATH</code> alone</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>
+      Passing one through the pipe needs the script turned into a script block first, because
+      <code>iex</code> has nowhere to put an argument:
+    </p>
+  } @else {
+    <table>
+      <thead>
+        <tr>
+          <th>Option</th>
+          <th>What it does</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>--version &lt;x.y.z&gt;</code></td>
+          <td>install that release instead of the latest. A leading <code>v</code> is fine</td>
+        </tr>
+        <tr>
+          <td><code>--dir &lt;path&gt;</code></td>
+          <td>install there instead of <code>~/.local/bin</code></td>
+        </tr>
+        <tr>
+          <td><code>--from &lt;url|dir&gt;</code></td>
+          <td>fetch from there instead of GitHub releases — an internal mirror, or a directory</td>
+        </tr>
+        <tr>
+          <td><code>--no-modify-path</code></td>
+          <td>install, and touch no startup file at all</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>
+      Passing one through the pipe needs <code>sh</code> told where its own arguments stop, which is
+      what the bare <code>--</code> after <code>-s</code> is for:
+    </p>
+  }
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="with options" [lines]="withOptions()" copy />
+  </div>
+
+  <h3 id="environment-variables">…or as environment variables</h3>
+  @if (os() === 'windows') {
+    <p>
+      Three of the four also arrive from the environment, which is easier than a script block when
+      the value comes from somewhere else anyway:
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>Variable</th>
+          <th>The same as</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>SLOOP_VERSION</code></td>
+          <td><code>-Version</code></td>
+        </tr>
+        <tr>
+          <td><code>SLOOP_INSTALL_DIR</code></td>
+          <td><code>-Dir</code></td>
+        </tr>
+        <tr>
+          <td><code>SLOOP_INSTALL_BASE</code></td>
+          <td><code>-From</code></td>
+        </tr>
+      </tbody>
+    </table>
+    <p>
+      There is no environment variable for <code>-NoModifyPath</code> on Windows; it is a parameter
+      only.
+    </p>
+  } @else {
+    <p>
+      All four also arrive from the environment, which is what a configuration-management tool
+      usually wants:
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>Variable</th>
+          <th>The same as</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>SLOOP_VERSION</code></td>
+          <td><code>--version</code></td>
+        </tr>
+        <tr>
+          <td><code>SLOOP_INSTALL_DIR</code></td>
+          <td><code>--dir</code></td>
+        </tr>
+        <tr>
+          <td><code>SLOOP_INSTALL_BASE</code></td>
+          <td><code>--from</code></td>
+        </tr>
+        <tr>
+          <td><code>SLOOP_NO_MODIFY_PATH</code></td>
+          <td><code>--no-modify-path</code>, when set to anything at all</td>
+        </tr>
+      </tbody>
+    </table>
+  }
+
+  <h2 id="by-hand">Or take the archive by hand</h2>
+  <p>
+    Every <a href="https://github.com/DBSloop/sloop/releases" rel="noreferrer">release</a> carries
+    six archives and a single <code>SHA256SUMS</code> over all of them, in
+    <code>sha256sum -c</code> format so you can check one without trusting a script to do it.
+    <strong>No version appears in an asset name</strong>, which is what makes
+    <code>/releases/latest/download/&lt;asset&gt;</code> resolve to the newest release with no API
+    call and no token.
+  </p>
+  <p>
+    This machine takes <code>{{ archive() }}</code
+    >. Swap <code>x86_64</code> for <code>aarch64</code> if yours is
+    @if (os() === 'macos') {
+      <span
+        >an Intel Mac rather than Apple silicon — the archive above is the Apple silicon one</span
+      >
+    } @else {
+      <span>ARM</span>
+    }
+    .
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="checking it yourself" [lines]="byHand()" copy />
+  </div>
+
+  @if (os() === 'windows') {
+    <h3 id="smartscreen">SmartScreen, if you downloaded it with a browser</h3>
+    <p>
+      <strong>sloop's binaries are not code-signed</strong>, so a file fetched with a browser
+      carries the Mark of the Web and SmartScreen will warn about it. Either use
+      <em class="italic">More info → Run anyway</em>, or take the mark off:
+    </p>
+    <p><code>Unblock-File .\sloop.exe</code></p>
+    <p>
+      <strong>The one-liner at the top of this page is unaffected</strong>, and so is
+      <code>irm</code> on its own: neither sets the Mark of the Web, so there is nothing to warn
+      about. This applies only to a manual download through a browser.
+    </p>
+  } @else if (os() === 'macos') {
+    <h3 id="gatekeeper">Gatekeeper, if you downloaded it with a browser</h3>
+    <p>
+      <strong>sloop's binaries are not notarised</strong>, so a file fetched with a browser gets a
+      <code>com.apple.quarantine</code> attribute and Gatekeeper refuses to run it. Either
+      right-click it in Finder and choose <em class="italic">Open</em>, or take the attribute off:
+    </p>
+    <p><code>xattr -d com.apple.quarantine ~/.local/bin/sloop</code></p>
+    <p>
+      <strong>The one-liner at the top of this page is unaffected</strong>, and so is
+      <code>curl</code> on its own: neither sets the quarantine attribute, so there is nothing for
+      Gatekeeper to object to. This applies only to a manual download through a browser.
+    </p>
+  } @else {
+    <p>
+      Nothing signs or quarantines a binary on Linux, so there is no extra step. The archive holds
+      the binary at the top level and nothing else.
+    </p>
+  }
+
+  <h2 id="with-cargo">Or build it with cargo</h2>
+  <p>
+    <strong>The crate is <code>dbsloop</code> and the command is <code>sloop</code></strong>
+    — <code>sloop</code> on crates.io belongs to an abandoned 2019 project, and Cargo lets a binary
+    be named independently of the package that ships it.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="from crates.io" [lines]="withCargo()" copy />
+  </div>
+
+  <p>
+    That puts the binary in <code>~/.cargo/bin</code>, which cargo's own installer already put on
+    your <code>PATH</code> — so none of the <code>PATH</code> handling above applies. To build the
+    working tree instead:
+  </p>
+  <p>
+    <code>git clone https://github.com/DBSloop/sloop</code> then
+    <code>cd sloop/cli &amp;&amp; cargo install --path .</code>
+  </p>
+
+  <h2 id="removing-it">Removing it</h2>
+  <p>
+    <strong
+      ><code>sloop uninstall</code> is the one to run first, while the binary still works.</strong
+    >
+    It knows what sloop built on this machine — a PostgreSQL it downloaded, its own database, the
+    role that owns it, the registry — and it removes all of that, then the binary and the
+    <code>PATH</code> entry, at the end. A script cannot do that, because a script cannot know which
+    PostgreSQL was sloop's.
+  </p>
+  <div class="mt-7">
+    <app-terminal class="block" caption="the one to run" [lines]="uninstallCommand" copy />
+  </div>
+
+  <p>
+    The script below is the <strong>fallback</strong>, for a machine where the binary is gone, or
+    broken, or was never on <code>PATH</code>. It removes the binary and the <code>PATH</code> entry
+    and nothing else — so it is not a shorter way of doing the command above, it is what is left
+    when that command cannot run. If sloop's own state is still there and the binary could still
+    remove it, the script <em class="italic">stops</em> and names the flag rather than deciding for
+    you.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal
+      class="block"
+      caption="only if sloop uninstall cannot run"
+      [lines]="removing()"
+      copy
+    />
+  </div>
+
+  <p>
+    @if (os() === 'windows') {
+      <code>-BinaryOnly</code>
+    } @else {
+      <code>--binary-only</code>
+    }
+    says take the binary and the <code>PATH</code> entry and leave sloop's database, registry and
+    config alone — for replacing sloop rather than removing it.
+    <a routerLink="/docs/reset">Reset and uninstall</a> covers what each of them destroys and what
+    it leaves.
+  </p>
+  <div class="docs-bare mt-7 rounded-xl border border-accent/25 bg-accent-soft p-5 sm:p-6">
+    <p class="max-w-measure text-base text-text">
+      <strong class="font-semibold">Backups are never deleted.</strong> Not by the uninstall script,
+      not by <code class="font-mono text-sm">sloop uninstall</code>, not by
+      <code class="font-mono text-sm">sloop reset</code>, not ever. A registry is a minute of typing
+      and a PostgreSQL is a download; a dump that is gone is gone.
+    </p>
+  </div>
+</app-docs-page>

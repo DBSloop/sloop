@@ -129,6 +129,13 @@
   padding: 0.125em 0.36em;
   font-size: 0.875em;
   color: rgb(var(--ch-text));
+  /* A target triple or an archive name is longer than the space left on a
+     line, and a chip that wraps is drawn by default as one box with its
+     border missing at the break — which reads as a rendering fault. `clone`
+     gives each fragment its own border and padding, so it reads as two
+     chips, which is what it is. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 /* …but not inside a heading, where it is already display type, and not inside

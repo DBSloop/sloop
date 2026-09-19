@@ -1,9 +1,22 @@
+import { Type } from '@angular/core';
 import { Routes } from '@angular/router';
 
 import { Docs } from './docs';
 import { DOCS_PAGES } from './nav';
+import { Install } from './install/install';
 import { Overview } from './overview/overview';
 import { Pending } from './pending';
+
+/**
+ * The pages that have been written, by path.
+ *
+ * Everything not in here renders `Pending`. Adding a page is one entry plus the
+ * `written: true` in `nav.ts` that A23 will read when it decides what belongs in
+ * the sitemap.
+ */
+const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
+  install: Install,
+};
 
 /**
  * `/docs`, and a child route for every page in the tree.
@@ -36,7 +49,10 @@ export const docsRoutes: Routes = [
       },
       ...DOCS_PAGES.map((page) => ({
         path: page.path,
-        component: Pending,
+        // A page that has been written takes its own component; the rest render
+        // `Pending`, which says so. One line per page, and it is the only edit
+        // an entry makes here.
+        component: WRITTEN[page.path] ?? Pending,
         // Read by the shell for the breadcrumb, and by the page itself for
         // everything on it.
         data: { page: page.path },
