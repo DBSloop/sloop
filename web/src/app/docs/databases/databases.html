@@ -1,0 +1,432 @@
+<!--
+  Databases, registries and projects.
+
+  Every terminal block below was captured from a real run against throwaway
+  PostgreSQL and MySQL clusters built for it; the class comment on `Databases`
+  says which, when, from which binary, and names the two path substitutions.
+
+  One platform at a time, like every page in this section: each path and each
+  shell line is behind the OS strip, so the Windows tab never hands a reader a
+  POSIX path and the Linux tab never hands them a PowerShell one.
+
+  The flag tables are deliberately not here. They are generated from --help on
+  /docs/commands, and one generated table beats two that can disagree.
+-->
+<app-docs-page
+  heading="Databases, registries and projects"
+  lede="Register a database once and you type its name from then on. This is where that name is looked up — and what happens on a machine where two registries both hold it."
+  eyebrow="Databases"
+  path="databases"
+>
+  <p>
+    sloop never asks for a connection twice. You <strong>register</strong> a database — a name, a
+    connection and where its password comes from — and every command after that takes the name.
+    <code>sloop backup shop</code>, <code>sloop restore shop</code>, <code>sloop query shop</code>.
+  </p>
+  <p>
+    The set of databases sloop knows is a <strong>registry</strong>. There is one global registry
+    per machine and as many project registries as you make, which is what the second half of this
+    page is about.
+  </p>
+  <p class="docs-bare mt-5 text-sm text-faint">
+    <span
+      aria-hidden="true"
+      class="mr-2.5 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
+    ></span
+    >Showing <strong class="font-semibold text-text">{{ osLabel() }}</strong
+    >. Change it in the strip above and every path on this page follows.
+  </p>
+
+  <h2 id="registering-one">Registering one</h2>
+  <p>
+    Two ways, and they produce the same record. Give the whole connection as a URL, or give the
+    fields one at a time — useful when a password manager holds the pieces separately, or when a
+    host name has a character you would rather not escape.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="one string" [lines]="addByUrl" copy />
+  </div>
+
+  <p>
+    <code>--test</code> is the reason the engine line comes first: it opens the connection
+    <strong>before</strong> saving anything and refuses to save a record that does not work. Without
+    it the record is written as given and the first backup is where you find out.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="field by field" [lines]="addByFields" copy />
+  </div>
+
+  <p>
+    The name is yours — <code>ledger</code> above is filed under that name while the database on the
+    server is also called <code>ledger</code>, and neither has to match the other.
+    <a routerLink="/docs/databases" fragment="renaming">Renaming</a> says what happens when they
+    stop matching.
+  </p>
+
+  <p>
+    <strong>The password is asked for on a terminal</strong> and never appears in the command. It is
+    not in <code>argv</code>, so it is not in <code>ps</code>, and it is not in the registry either
+    — only the route to it is. That is the next section.
+  </p>
+
+  <h3 id="it-does-not-guess">It does not guess, and it does not prompt for the connection</h3>
+  <p>
+    With neither <code>--engine</code> nor <code>--url</code>, <code>db add</code> stops and names
+    both. The menu asks those questions; the command does not, because a command that prompts is a
+    command that hangs in a scheduled run.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 2" [lines]="addWithNeither" copy />
+  </div>
+
+  <h3 id="the-other-engines">MySQL and MariaDB</h3>
+  <p>
+    The same command, a different scheme. <code>postgres</code>, <code>mysql</code> and
+    <code>mariadb</code> are the three sloop speaks, and MariaDB is its own engine rather than a
+    MySQL setting because it ships <code>mariadb-dump</code> where MySQL ships
+    <code>mysqldump</code>.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="mysql" [lines]="addMysql" copy />
+  </div>
+
+  <p>
+    <code>over TLS</code> is not something sloop turned on. It reports what the connection actually
+    negotiated, and it says <code>not encrypted</code> just as plainly when that is the truth —
+    which is what the PostgreSQL blocks above say.
+  </p>
+
+  <h2 id="where-the-password-lives">Where the password lives</h2>
+  <p>
+    <strong>A registry holds a route, never a value.</strong> There is no spelling of a password a
+    registry will accept, which is what makes it impossible to put one there by accident. Four
+    routes, one flag each:
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Flag</th>
+        <th>Where it lives</th>
+        <th>For</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>--keyring</code></td>
+        <td>{{ keyring() }}</td>
+        <td>the default, and what you want unless something below applies</td>
+      </tr>
+      <tr>
+        <td><code>--encrypted-file</code></td>
+        <td>XChaCha20-Poly1305, key from Argon2id</td>
+        <td>a headless machine with no keyring running</td>
+      </tr>
+      <tr>
+        <td><code>--env &lt;VARIABLE&gt;</code></td>
+        <td>an environment variable, read every run</td>
+        <td>automation, and CI in particular</td>
+      </tr>
+      <tr>
+        <td><code>--password-from &lt;COMMAND&gt;</code></td>
+        <td>whatever that command prints</td>
+        <td>a team password manager</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the other three routes" [lines]="addRoutes" copy />
+  </div>
+
+  <p>
+    Both notes are the point rather than a warning to fix. A variable that is not set yet and a
+    command that is not installed yet are both fine at registration time, because
+    <strong>neither is read until the run that needs it</strong> — so
+    <code>{{ setVariable() }}</code> works on a machine where nothing was stored.
+  </p>
+
+  <p>
+    <code>db list</code> shows every record and the route beside it. It is the one command here you
+    can run with somebody watching:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="never a secret" [lines]="list()" copy />
+  </div>
+
+  <div class="docs-bare mt-7 rounded-xl border border-accent/25 bg-accent-soft p-5 sm:p-6">
+    <p class="max-w-measure text-base text-text">
+      <strong class="font-semibold">Nothing on that listing is a password.</strong> Not one of those
+      phrases <em>can</em> be one — the registry stores which of the four routes to take, and the
+      value is fetched at the moment it is needed and handed to the client through a pipe. It never
+      reaches <code class="font-mono text-sm">argv</code>, so it never reaches
+      <code class="font-mono text-sm">ps</code>.
+    </p>
+  </div>
+
+  <h2 id="creating-one">Creating one, rather than registering one</h2>
+  <p>
+    <code>db create</code> is for a database that does not exist yet. It makes the database
+    <strong>and the role that owns it</strong>, grants that role what a backup needs, then registers
+    the result — so the account sloop uses afterwards is one that was made for the job rather than
+    the superuser you happened to have.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="server, role, record" [lines]="create" copy />
+  </div>
+
+  <p>
+    The superuser password is <strong>used once and kept nowhere</strong>. The new role's password
+    is the one that gets stored, and sloop generates it when you do not supply one — so the
+    credential sloop holds from then on is a credential nobody has ever seen in a shell.
+  </p>
+
+  <p>
+    Two passwords, one standard input. When both would have to be typed and there is no terminal to
+    type at, it says which flag is missing rather than hanging:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 2" [lines]="createNoTerminal" copy />
+  </div>
+
+  <h2 id="checking-and-changing">Checking and changing what is registered</h2>
+  <p>
+    <code>db test</code> opens the connection and reports what answered — engine, version, and what
+    is securing the link. With no name it does that for every registered database, which is the
+    quickest way to find the one that broke.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="what answered" [lines]="test" copy />
+  </div>
+
+  <p>
+    A password route that cannot be followed fails here too, and fails loudly. A command that is not
+    installed is not a connection problem, so the message names the command rather than the host:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="a route that goes nowhere" [lines]="testBadRoute" copy />
+  </div>
+
+  <p>
+    <code>db edit</code> changes a field without re-registering. It prints the old connection and
+    the new one, in that order, so what changed is visible rather than implied:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="one field" [lines]="edit" copy />
+  </div>
+
+  <h2 id="renaming">Renaming, and the name on the server</h2>
+  <p>
+    <code>db rename</code> changes <strong>the name sloop files it under</strong>. The database's
+    own name on the server does not change, is not contacted, and does not need to match — they are
+    two different names and sloop never conflates them.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the label, not the database" [lines]="rename" copy />
+  </div>
+
+  <p>
+    Everything keyed to that database follows the rename: its backups move with it on disk, and its
+    schedule and its activity history stay attached. The password does not move, because it is filed
+    under the connection rather than the label — which is also why renaming does not make you type
+    it again.
+  </p>
+
+  <p>
+    After that rename, <code>db test accounts</code> reports
+    <code>postgres://app&#64;127.0.0.1:5442/ledger</code>. That is not a mistake in the listing:
+    <strong>accounts</strong> is what you type and <strong>ledger</strong> is what the server calls
+    it.
+  </p>
+
+  <h2 id="forgetting-versus-destroying">Forgetting one, and destroying one</h2>
+  <p>
+    Two commands that sound similar and are not remotely the same. <code>db remove</code> forgets a
+    record. <code>db drop</code> destroys a database on a server.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="forgetting" [lines]="remove" copy />
+  </div>
+
+  <p>
+    That third line is printed every time, before the question, because the difference is worth
+    stating rather than assuming. Removing takes the password out of {{ keyring() }} as well — a
+    credential for a database sloop no longer knows about is a credential nobody is going to
+    remember to delete.
+  </p>
+
+  <p>
+    <code>db drop</code> is the destructive one, and it is
+    <strong>typed rather than clicked</strong>. What you type is the database's own name on the
+    server, not the label — because the label is what sloop calls it and the name is what is about
+    to stop existing.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="destroying" [lines]="drop" copy />
+  </div>
+
+  <div class="docs-bare mt-7 rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
+    <p class="flex items-center gap-2.5 font-mono text-xs text-warn">
+      <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-warn"></span>
+      Nothing is kept
+    </p>
+    <p class="mt-3 max-w-measure text-sm text-muted">
+      <code class="font-mono text-xs text-text">db drop</code> takes no safety copy. That was
+      removed deliberately: a dump taken on the way past had no manifest, read as wreckage in
+      <code class="font-mono text-xs text-text">backups list</code> for ever, and could not be
+      restored from. So the command says so <strong>before</strong> the question, while there is
+      still time to run <code class="font-mono text-xs text-text">sloop backup</code> instead.
+    </p>
+  </div>
+
+  <p>
+    Note the last line: dropping does not remove the record. The name stays registered and now
+    points at nothing, and <code>db remove</code> is what forgets it. Two commands, two decisions.
+  </p>
+
+  <p>
+    From a scheduled run there is no terminal to type at, so it refuses — and
+    <code>--confirm</code> is the only thing that answers it. <code>--yes</code> does not, and is
+    not consulted:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="two refusals, both exit 2" [lines]="dropRefusals" copy />
+  </div>
+
+  <p>
+    <code>--confirm</code> has to match exactly, which is the property that makes it safe in a file:
+    a scheduled line names the database it destroys and cannot be repointed at a different one by
+    editing a single flag.
+  </p>
+
+  <h2 id="registries">Registries, global and project</h2>
+  <p>
+    Everything above went into the <strong>global registry</strong> — one per machine, the one a
+    bare name uses when nothing else applies. <code>sloop init</code> makes a
+    <strong>project registry</strong> in a directory, and a project's databases belong to that
+    directory rather than to the machine.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" [caption]="project()" [lines]="init()" copy />
+  </div>
+
+  <p>
+    Two things that line records. The project has a <strong>name</strong>, taken from the directory,
+    and that name reaches it from anywhere on the machine as <code>sloop -C acme-api</code> — so a
+    scheduled backup does not have to know where the checkout is. And <code>.sloop</code> ignores
+    itself, so a project registry inside a repository never shows up in <code>git status</code>.
+  </p>
+
+  <h2 id="which-registry">Which registry a bare name means</h2>
+  <p>
+    Five rules, checked in order, and <strong>the first one that matches wins</strong>. This is the
+    whole of it — there is no sixth case and no per-command exception.
+  </p>
+
+  <!-- The ladder. It is the answer to the question this page exists for, so it
+       is the one thing on the page that is not prose and not a transcript: five
+       numbered rungs, the flag in the mono column, the rule in the text one. -->
+  <ol class="docs-bare mt-7 space-y-px overflow-hidden rounded-xl border border-line">
+    @for (step of steps; track step.rule; let i = $index) {
+      <li class="flex gap-4 bg-surface p-5 sm:gap-5 sm:p-6">
+        <span
+          class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-soft font-mono text-xs font-semibold text-accent"
+          aria-hidden="true"
+          >{{ i + 1 }}</span
+        >
+        <div class="min-w-0">
+          @if (step.how) {
+            <p class="font-mono text-xs text-accent">{{ step.how }}</p>
+          } @else {
+            <p class="font-mono text-xs text-faint">no flag, no variable, no .sloop</p>
+          }
+          <p class="mt-1.5 max-w-measure text-base font-semibold text-text">{{ step.rule }}</p>
+          <p class="mt-1 max-w-measure text-sm text-muted">{{ step.text }}</p>
+        </div>
+      </li>
+    }
+  </ol>
+
+  <p>
+    So a name registered in <strong>both</strong> belongs to the project, because rung four is
+    reached before rung five. sloop does not leave that to be worked out — it says so in the listing
+    and names the rung it took when it registers:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="both registries hold a shop" [lines]="shadowed()" copy />
+  </div>
+
+  <p>
+    <code>global, shadowed</code> is the answer to the question this page exists for. The global
+    <code>shop</code> is still there, still backed up, still restorable — it is just not what a bare
+    <code>shop</code> reaches while you are standing in this directory. The footer line underneath
+    says where a bare name is looked for, in order, from wherever you happen to be.
+  </p>
+
+  <p>And the shadowed one is one prefix away:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the explicit qualifier" [lines]="qualified" copy />
+  </div>
+
+  <p>
+    <code>global:shop</code> forces rung one for a single name, and <code>--global</code> forces it
+    for the whole command. Neither has to be spelled out from inside the project — both work from
+    anywhere, and so do the two that reach the other way:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="from anywhere else" [lines]="fromElsewhere()" copy />
+  </div>
+
+  <h2 id="where-the-store-lives">Where the store lives</h2>
+  <p>
+    <code>{{ store() }}</code> — the same path on all three platforms, spelled the way each one
+    spells it. A store left behind in an older location is <strong>moved there once</strong> rather
+    than ignored, so an upgrade does not quietly strand a registry.
+  </p>
+  <p>
+    A project's store is <code>.sloop</code> inside the project directory:
+    <code>{{ projectStore() }}</code> for the one above.
+  </p>
+
+  <h3 id="a-database-not-a-file">The registry is a database, not a file</h3>
+  <p>
+    It lives in the PostgreSQL that <code>sloop setup</code> prepares — sloop's own, on its own
+    port, holding the registry, the schedules and what the background service has seen. You can open
+    it yourself, and sloop tells you how:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="open it yourself" [lines]="connection" copy />
+  </div>
+
+  <p>
+    Nothing about that is sealed. It is an ordinary PostgreSQL on an ordinary port, and
+    <code>psql</code>, DataGrip or anything else that speaks the protocol will read it —
+    <strong>and it still holds no passwords</strong>, only the four routes to them, for exactly the
+    reason the listing further up holds none.
+  </p>
+
+  <p>
+    The flags on this page are the ones worth explaining. Every flag each of these commands takes is
+    on the <a routerLink="/docs/commands">command reference</a>, which is generated from
+    <code>--help</code> rather than written beside it.
+  </p>
+</app-docs-page>

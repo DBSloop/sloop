@@ -103,6 +103,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         documentTitle: 'Connect PostgreSQL, MySQL and MariaDB databases to sloop',
         title: 'Databases, registries and projects',
         short: 'Databases and registries',
+        written: true,
         blurb:
           'Register a database once, then name it. Where that name is looked up, and what happens when two registries both hold it.',
         covers: [

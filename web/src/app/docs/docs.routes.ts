@@ -2,6 +2,7 @@ import { Type } from '@angular/core';
 import { Routes } from '@angular/router';
 
 import { Commands } from './commands/commands';
+import { Databases } from './databases/databases';
 import { Docs } from './docs';
 import { DOCS_PAGES } from './nav';
 import { GettingStarted } from './getting-started/getting-started';
@@ -20,6 +21,7 @@ const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   install: Install,
   'getting-started': GettingStarted,
   commands: Commands,
+  databases: Databases,
 };
 
 /**
