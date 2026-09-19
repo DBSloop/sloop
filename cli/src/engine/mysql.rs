@@ -227,6 +227,7 @@ impl MysqlFamily {
                     said.trim()
                 ),
             )
+            .hint("`sloop doctor` reports which client tools sloop found and where")
         })
     }
 
@@ -536,7 +537,9 @@ impl MysqlFamily {
                 destination,
             ));
         }
-        rewritten.map_err(|why| Failure::new(Exit::Restore, why))?;
+        rewritten.map_err(|error| {
+            Failure::new(Exit::Restore, format!("the rows stopped moving: {error}"))
+        })?;
 
         Merged::from_markers(
             &shape.table,
@@ -773,7 +776,7 @@ fn from_stderr(tool: &Path, said: &str, otherwise: Exit, target: &Target<'_>) ->
              dump that something else wrote",
         )
     } else {
-        failure
+        failure.hint(crate::engine::advice_for(exit))
     }
 }
 
@@ -806,6 +809,7 @@ impl Adapter for MysqlFamily {
                         target.describe()
                     ),
                 )
+                .hint("check it answers at all: `sloop db test <name>`")
             })?;
 
         self.refuse_the_other_family(said, target)?;
@@ -817,6 +821,10 @@ impl Adapter for MysqlFamily {
                     "{} gave a version this sloop cannot read: {said}",
                     target.describe()
                 ),
+            )
+            .hint(
+                "sloop speaks to MySQL and MariaDB; a proxy in front of one can answer for \
+                 it in a shape sloop does not know",
             )
         })?;
 
@@ -881,6 +889,10 @@ impl Adapter for MysqlFamily {
                             Failure::new(
                                 Exit::Mismatch,
                                 format!("could not read a row count for {table}"),
+                            )
+                            .hint(
+                                "verification counts every row on both sides; `VERIFY=fast` \
+                                 skips the count and reports the planner's estimate instead",
                             )
                         })?;
                 Ok(TableCount { table, rows })
@@ -999,7 +1011,8 @@ impl Adapter for MysqlFamily {
             return Err(Failure::new(
                 Exit::Restore,
                 format!("there is no dump at {}", from.display()),
-            ));
+            )
+            .hint("`sloop backups list` shows the backups that are there"));
         }
 
         let dump = std::fs::File::open(from).map_err(|error| {

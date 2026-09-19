@@ -95,15 +95,7 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
     })?;
 
     let chosen = choose(&root, name, from, context.consent.forced())?;
-    let manifest = chosen.manifest.clone().ok_or_else(|| {
-        Failure::new(
-            Exit::Usage,
-            format!(
-                "{} has no manifest to restore from",
-                chosen.directory.display()
-            ),
-        )
-    })?;
+    let manifest = manifest_of(&chosen)?;
 
     crate::say!(
         "{} {}",
@@ -232,6 +224,27 @@ fn same_engine(manifest: &Manifest, record: &Database, name: &str) -> Outcome<()
     .hint("R29 is where restoring across engines gets decided; today it is refused"))
 }
 
+/// What the chosen backup says about itself, or why it cannot say anything.
+///
+/// **A directory with no manifest is a run that did not finish**, so nothing recorded the
+/// engine, the row counts or the checksum — and a restore from one would be putting back
+/// something nothing has ever checked.
+fn manifest_of(chosen: &Stored) -> Outcome<Manifest> {
+    chosen.manifest.clone().ok_or_else(|| {
+        Failure::new(
+            Exit::Usage,
+            format!(
+                "{} has no manifest to restore from",
+                chosen.directory.display()
+            ),
+        )
+        .hint(
+            "a backup with no manifest is one whose run did not finish — `sloop backups \
+             list` marks the ones that did",
+        )
+    })
+}
+
 /// Which backup this run is putting back.
 ///
 /// Take this database's lock, from whichever store its registry lives in.
@@ -246,6 +259,7 @@ fn locked(
             Exit::Usage,
             format!("there is no {} store to lock against", scope.label()),
         )
+        .hint("`sloop init` starts a registry in this directory; `--global` uses the global one")
     })?;
     crate::lock::take(&store, name, doing)
 }
@@ -293,7 +307,10 @@ fn choose(root: &Path, label: &str, from: Option<&str>, forced: bool) -> Outcome
             .find(|stored| stored.is_complete())
             .or_else(|| mine.first())
             .cloned()
-            .ok_or_else(|| Failure::usage(format!("nothing has been backed up under {label}")))?,
+            .ok_or_else(|| {
+                Failure::usage(format!("nothing has been backed up under {label}"))
+                    .hint(format!("take the first one: `sloop backup {label}`"))
+            })?,
     };
 
     match &chosen.state {

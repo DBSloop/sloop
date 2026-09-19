@@ -139,6 +139,10 @@ fn build_one(
         return Err(Failure::new(
             Exit::Usage,
             "there is not a single table in this database to read",
+        )
+        .hint(
+            "check which database this name points at with `sloop db list` — a role that \
+             cannot see a schema sees no tables in it either",
         ));
     }
     let keys = adapter.foreign_keys(target)?;
@@ -492,10 +496,10 @@ fn which_database(context: &Context<'_>, asked: &Asking<'_>) -> Outcome<(Scope, 
         })
         .collect();
     let Some(chosen) = choose("Which database?", &rows)? else {
-        return Err(Failure::new(
-            Exit::Usage,
-            "nothing was chosen, so nothing was read",
-        ));
+        return Err(
+            Failure::new(Exit::Usage, "nothing was chosen, so nothing was read")
+                .hint("name it instead of picking it: `sloop query <name>`"),
+        );
     };
     Ok(known.into_iter().nth(chosen).expect("it was on the list"))
 }
@@ -621,6 +625,7 @@ fn backed_out(error: &inquire::InquireError) -> Outcome<()> {
         other => Err(Failure::new(
             Exit::Usage,
             format!("the question could not be asked: {other}"),
-        )),
+        )
+        .hint("give the statement instead: `sloop query <name> --sql \"select ...\"`")),
     }
 }

@@ -615,7 +615,8 @@ pub fn swap_in(writing: &Path, latest: &Path) -> Outcome<()> {
         return Err(Failure::new(
             Exit::Dump,
             format!("{} has nowhere to be swapped into", writing.display()),
-        ));
+        )
+        .report_a_bug());
     };
     let displaced = label_dir.join(DISPLACED);
 

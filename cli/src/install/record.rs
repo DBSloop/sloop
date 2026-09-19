@@ -173,6 +173,7 @@ pub fn password_for(global: &Path, installed: &Installed) -> Outcome<Secret> {
                     installed.describe()
                 ),
             )
+            .hint("`sloop server list` shows the servers sloop installed on this machine")
         })?;
 
     Ok(crate::secret::resolve(

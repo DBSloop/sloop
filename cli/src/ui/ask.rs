@@ -531,7 +531,8 @@ fn navigate<T>(error: &inquire::InquireError) -> Outcome<Answer<T>> {
         other => Err(Failure::new(
             Exit::Failure,
             format!("the menu could not draw itself: {other}"),
-        )),
+        )
+        .hint("run the command directly instead — `sloop --help` lists every one of them")),
     }
 }
 

@@ -133,6 +133,7 @@ fn locked(context: &Context<'_>, scope: Scope, name: &str) -> Outcome<crate::loc
             Exit::Usage,
             format!("there is no {} store to lock against", scope.label()),
         )
+        .hint("`sloop init` starts a registry in this directory; `--global` uses the global one")
     })?;
     crate::lock::take(&store, name, "backup")
 }
@@ -597,6 +598,10 @@ fn write_everything(
         return Err(Failure::new(
             Exit::Dump,
             format!("the dump wrote nothing to {}", file.display()),
+        )
+        .hint(
+            "an empty database still dumps to something, so this is the role being allowed \
+             to see none of it — `sloop doctor` reports what it may do",
         ));
     }
 

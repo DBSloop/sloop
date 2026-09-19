@@ -224,6 +224,7 @@ pub fn remember_database(
             "{} is not there to write into",
             path(global).display()
         ))
+        .hint("`sloop setup` writes it; it is gone or was never made")
     })?;
 
     raw.version = VERSION;

@@ -98,6 +98,9 @@ fn one(
             Failure::usage(format!(
                 "{label} is attached to the service but is not in the global registry"
             ))
+            .hint(format!(
+                "register it again, or stop watching it: `sloop service detach {label}`"
+            ))
         })?
         .clone();
 

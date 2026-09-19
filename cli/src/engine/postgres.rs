@@ -128,6 +128,7 @@ impl Postgres {
                     said.trim()
                 ),
             )
+            .hint("`sloop doctor` reports which client tools sloop found and where")
         })
     }
 
@@ -568,6 +569,7 @@ impl Adapter for Postgres {
                     target.describe()
                 ),
             )
+            .hint("check it answers at all: `sloop db test <name>`")
         })?;
 
         let number: u32 = row
@@ -580,6 +582,10 @@ impl Adapter for Postgres {
                         "{} gave a version this sloop cannot read",
                         target.describe()
                     ),
+                )
+                .hint(
+                    "sloop speaks to PostgreSQL; a pooler in front of one can answer for it \
+                     in a shape sloop does not know",
                 )
             })?;
 
@@ -618,6 +624,10 @@ impl Adapter for Postgres {
                             Failure::new(
                                 Exit::Mismatch,
                                 format!("could not read a row count for {table}"),
+                            )
+                            .hint(
+                                "verification counts every row on both sides; `VERIFY=fast` \
+                                 skips the count and reports the planner's estimate instead",
                             )
                         })?;
                 Ok(TableCount { table, rows })
@@ -736,7 +746,8 @@ impl Adapter for Postgres {
             return Err(Failure::new(
                 Exit::Restore,
                 format!("there is no dump at {}", from.display()),
-            ));
+            )
+            .hint("`sloop backups list` shows the backups that are there"));
         }
 
         let output = self
@@ -1749,6 +1760,7 @@ fn from_stderr(tool: &Path, said: &str, otherwise: Exit, target: &Target<'_>) ->
             target.describe()
         ),
     )
+    .hint(crate::engine::advice_for(exit))
 }
 
 /// Does this read like the server was unreachable rather than unhappy?

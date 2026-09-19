@@ -164,6 +164,24 @@ pub fn adapter_for(engine: Engine) -> Box<dyn Adapter> {
     }
 }
 
+/// What to do about a client tool that failed, by the kind of failure it was.
+///
+/// **The tool's own complaint is the message; this is the line under it.** `pg_dump` and
+/// `mysqldump` say what went wrong in their own words and never what to do next, so a run
+/// that ends in *FATAL: password authentication failed* leaves somebody with a sentence and
+/// no move. Both adapters end up here, because both have exactly two things worth saying:
+/// a connection that did not open is checked one way, and everything else is a question
+/// about what the role is allowed to do.
+#[must_use]
+pub fn advice_for(exit: Exit) -> &'static str {
+    if matches!(exit, Exit::Connect) {
+        "check the host, port, user and password sloop was given: `sloop db list` shows \
+         them and `sloop db test <name>` tries them"
+    } else {
+        "`sloop doctor` reports which client tools are present and what this role may do"
+    }
+}
+
 /// How a connection reads in a message: no password in it, and the same string a server's
 /// own log would show.
 #[must_use]
@@ -718,6 +736,10 @@ pub trait Adapter {
             return Err(Failure::new(
                 Exit::Dump,
                 format!("the dump wrote nothing to {}", to.display()),
+            )
+            .hint(
+                "an empty database still dumps to something, so this is the role being \
+                 allowed to see none of it — `sloop doctor` reports what it may do",
             ));
         }
 

@@ -180,14 +180,17 @@ pub fn run(program: &str, arguments: &[&str], doing: &str) -> Outcome<Output> {
         || said.to_lowercase().contains("operation not permitted");
 
     let mut failure = Failure::new(Exit::Failure, format!("{doing} failed: {said}"));
-    if denied {
-        failure = failure.hint(if cfg!(windows) {
+    failure = failure.hint(if denied {
+        if cfg!(windows) {
             "starting something at boot is a machine-wide change. Run this from a terminal \
              opened with 'Run as administrator'."
         } else {
             "starting something at boot is a machine-wide change. Run this again with sudo."
-        });
-    }
+        }
+    } else {
+        "the line above is what this machine's service manager said. `sloop service status` \
+         reports what sloop can see of it"
+    });
     Err(failure)
 }
 

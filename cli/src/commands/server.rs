@@ -537,10 +537,10 @@ fn ask_a_number(what: &str, how_many: usize) -> Outcome<usize> {
         let line = read_a_line()?;
         let typed = line.trim();
         if typed.is_empty() {
-            return Err(Failure::new(
-                Exit::Usage,
-                "nothing was chosen, so nothing was installed",
-            ));
+            return Err(
+                Failure::new(Exit::Usage, "nothing was chosen, so nothing was installed")
+                    .hint("type the number beside the one you want, or Ctrl-C to leave"),
+            );
         }
 
         match typed.parse::<usize>() {

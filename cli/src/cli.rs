@@ -134,13 +134,13 @@ pub enum Command {
         offline: bool,
     },
 
-    /// Register and manage database connections.
+    /// Tell sloop about a database, and change or forget what it knows.
     Db {
         #[command(subcommand)]
         command: DbCommand,
     },
 
-    /// Back up a registered database.
+    /// Dump a database, check every row arrived, and file the copy with a manifest.
     #[command(after_long_help = BACKUP_NOTES)]
     Backup {
         /// Which registered database. Left out when `--all` is given.
@@ -159,13 +159,13 @@ pub enum Command {
         replace: bool,
     },
 
-    /// Inspect and prune stored backups.
+    /// See what has been copied and when, and delete what is past a retention limit.
     Backups {
         #[command(subcommand)]
         command: BackupsCommand,
     },
 
-    /// Restore a stored backup into a registered database.
+    /// Put a stored copy back into a database, replacing what is in it now.
     #[command(after_long_help = RESTORE_NOTES)]
     Restore {
         /// Which registered database to restore into.
@@ -440,7 +440,7 @@ pub enum ServiceCommand {
         interval: u64,
     },
 
-    /// Take it off this machine.
+    /// Stop the background service and take it off this machine, keeping what it recorded.
     ///
     /// Stops it, removes the unit or the service entry, and removes the key file it reads
     /// its credentials with. Nothing sloop has recorded is deleted — attachments and history
@@ -466,10 +466,10 @@ pub enum ServiceCommand {
         name: String,
     },
 
-    /// Start it now.
+    /// Start the background service now, rather than waiting for the next boot.
     Start,
 
-    /// Stop it now. It still starts again at the next boot.
+    /// Stop the background service now. It still starts again at the next boot.
     Stop,
 
     /// Back this database up on a schedule, with no cron line anywhere.
@@ -625,7 +625,7 @@ pub enum DbCommand {
         name: Option<String>,
     },
 
-    /// Change a registered database's details.
+    /// Change where a registered database is, who connects to it, or how.
     Edit {
         /// Which one.
         name: String,
@@ -1475,22 +1475,120 @@ mod tests {
         );
     }
 
-    #[test]
-    fn every_command_says_what_it_does() {
-        fn walk(command: &clap::Command) {
+    /// Every command, as `sloop db drop` rather than `drop`.
+    fn every_command() -> Vec<(String, clap::Command)> {
+        fn walk(under: &str, command: &clap::Command, into: &mut Vec<(String, clap::Command)>) {
             for sub in command.get_subcommands() {
                 if sub.get_name() == "help" {
                     continue;
                 }
-                assert!(
-                    sub.get_about().is_some(),
-                    "`{}` has no description",
-                    sub.get_name()
-                );
-                walk(sub);
+                let path = format!("{under} {}", sub.get_name());
+                walk(&path, sub, into);
+                into.push((path.trim().to_owned(), sub.clone()));
             }
         }
 
-        walk(&Cli::command());
+        let mut found = Vec::new();
+        walk("", &Cli::command(), &mut found);
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        found
+    }
+
+    /// **`R28`, held in place.** Every command says what it does, in one line, in words that
+    /// add something its own name does not.
+    ///
+    /// The last of those is the one worth a number: a summary is measured on the words in it
+    /// that are *not* the command's own name, because "Start it now" under `service start`
+    /// tells a newcomer nothing they did not already have. Five is the line — enough that a
+    /// summary has to name what is acted on, loose enough that `Drop a database on the
+    /// server. Asks for its name, and keeps nothing` is not shouted at for beginning with the
+    /// only verb that is honest.
+    #[test]
+    fn every_command_says_what_it_does() {
+        let mut thin = Vec::new();
+        for (path, command) in every_command() {
+            let Some(about) = command.get_about().map(ToString::to_string) else {
+                thin.push(format!("`sloop {path}` has no summary at all"));
+                continue;
+            };
+
+            assert!(
+                !about.contains('\n'),
+                "`sloop {path}`: a summary is one line — the second paragraph belongs in \
+                 `long_about`"
+            );
+            assert!(
+                about.chars().count() <= 96,
+                "`sloop {path}`: {} characters is past what `--help` can lay out",
+                about.chars().count()
+            );
+            assert!(
+                about.starts_with(|first: char| first.is_uppercase() || first == '`'),
+                "`sloop {path}`: a summary starts with a capital, as clap's own do"
+            );
+            assert!(
+                !about.ends_with('.'),
+                "`sloop {path}`: a summary carries no full stop at the end, as clap's own do"
+            );
+
+            let its_own: Vec<&str> = path.split(' ').collect();
+            let said: Vec<&str> = about
+                .split_whitespace()
+                .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric()))
+                .filter(|word| !word.is_empty())
+                .filter(|word| !its_own.iter().any(|name| name.eq_ignore_ascii_case(word)))
+                .collect();
+            if said.len() < 5 {
+                thin.push(format!(
+                    "`sloop {path}` — {about:?} says {} word{} its name does not",
+                    said.len(),
+                    if said.len() == 1 { "" } else { "s" }
+                ));
+            }
+        }
+
+        assert!(
+            thin.is_empty(),
+            "{} command{} restate their own name instead of saying what they do:\n\n  {}\n",
+            thin.len(),
+            if thin.len() == 1 { "" } else { "s" },
+            thin.join("\n  ")
+        );
+    }
+
+    /// The same, for the things typed after a command.
+    ///
+    /// **A flag with no help is a flag nobody finds**, and clap prints the name either way —
+    /// so an undocumented one looks deliberate rather than forgotten.
+    #[test]
+    fn every_flag_and_argument_says_what_it_does() {
+        let mut silent = Vec::new();
+        for (path, command) in every_command()
+            .into_iter()
+            .chain([(String::new(), Cli::command())])
+        {
+            for argument in command.get_arguments() {
+                if argument.is_hide_set() {
+                    continue;
+                }
+                let named = argument.get_id().as_str();
+                match argument.get_help().map(ToString::to_string) {
+                    None => silent.push(format!("`sloop {path}`: --{named} says nothing")),
+                    Some(help) if help.contains('\n') => silent.push(format!(
+                        "`sloop {path}`: --{named} runs past one line — the rest belongs in \
+                         its long help"
+                    )),
+                    Some(_) => {}
+                }
+            }
+        }
+
+        assert!(
+            silent.is_empty(),
+            "{} argument{} undocumented:\n\n  {}\n",
+            silent.len(),
+            if silent.len() == 1 { " is" } else { "s are" },
+            silent.join("\n  ")
+        );
     }
 }

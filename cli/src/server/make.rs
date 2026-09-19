@@ -114,10 +114,10 @@ pub(super) fn with_binaries(global: &Path, bin: std::path::PathBuf, port: u16) -
 /// would be a second chance to leave a cluster on `trust`, which is the one mistake here
 /// that nobody would notice until somebody else did.
 pub(crate) fn raise(server: Server) -> Outcome<Ready> {
-    let data = server
-        .data
-        .clone()
-        .ok_or_else(|| Failure::usage("this server names no data directory to create"))?;
+    let data = server.data.clone().ok_or_else(|| {
+        Failure::usage("this server names no data directory to create")
+            .hint("a server sloop installed has one — `sloop server list` says which")
+    })?;
 
     // An existing cluster with no record beside it: `server.toml` was deleted, or a previous
     // Setup stopped between `initdb` and writing it. Nothing here can recover its password,
@@ -152,6 +152,10 @@ pub(crate) fn raise(server: Server) -> Outcome<Ready> {
                 "{} would not accept the password sloop just set",
                 server.url("postgres")
             ),
+        )
+        .hint(
+            "something is answering on that port that is not the cluster sloop just started \
+             — `sloop server list` shows the port each one uses",
         ));
     };
     crate::say!(
@@ -262,10 +266,10 @@ fn initdb(server: &Server, data: &Path) -> Outcome<()> {
 
 /// Start it, on loopback and on sloop's own port.
 fn start(server: &Server) -> Outcome<()> {
-    let data = server
-        .data
-        .as_ref()
-        .ok_or_else(|| Failure::usage("this server is not one sloop started"))?;
+    let data = server.data.as_ref().ok_or_else(|| {
+        Failure::usage("this server is not one sloop started")
+            .hint("`sloop server list` shows the ones it did, and how to reach each")
+    })?;
 
     let status = Command::new(server.program("pg_ctl"))
         .arg("-D")
@@ -412,7 +416,8 @@ fn require_a_password_from_now_on(server: &Server, data: &Path) -> Outcome<()> {
         return Err(Failure::new(
             Exit::Connect,
             format!("could not reload the cluster at {}", data.display()),
-        ));
+        )
+        .hint(last_words(&data.join("server.log"))));
     }
 
     Ok(())
@@ -497,10 +502,9 @@ fn psql(
         .map_err(|error| ran_nothing("psql", &error.to_string()))?;
 
     {
-        let mut pipe = child
-            .stdin
-            .take()
-            .ok_or_else(|| Failure::usage("psql's standard input could not be opened"))?;
+        let mut pipe = child.stdin.take().ok_or_else(|| {
+            Failure::usage("psql's standard input could not be opened").report_a_bug()
+        })?;
         pipe.write_all(sql.as_bytes())
             .map_err(|error| Failure::usage(format!("could not write to psql: {error}")))?;
         // Dropped here so psql sees end of file and runs, rather than waiting for more.
@@ -580,6 +584,9 @@ pub fn literal(password: &Secret) -> Outcome<String> {
         return Err(Failure::new(
             Exit::Failure,
             "the password came back empty, and a role that can log in is not given one",
+        )
+        .hint(
+            "whatever supplied it printed nothing — check `--superuser-password-command`,              or type the password instead",
         ));
     }
 

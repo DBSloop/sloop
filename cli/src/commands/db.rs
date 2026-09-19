@@ -1090,6 +1090,9 @@ pub fn rename(context: &mut Context<'_>, from: &str, to: &str) -> Outcome<Exit> 
         return Err(Failure::usage(format!(
             "{to} is already registered in the {} registry",
             scope.label()
+        ))
+        .hint(format!(
+            "pick a name nothing else uses, or make room first: `sloop db remove {to}`"
         )));
     }
 
@@ -2048,9 +2051,12 @@ fn store(
     match route {
         Route::Keyring => crate::secret::os_keyring::set(key, secret),
         Route::EncryptedFile => {
-            let vault = registries
-                .vault_in(scope)
-                .ok_or_else(|| Failure::usage("there is nowhere to put the encrypted password"))?;
+            let vault = registries.vault_in(scope).ok_or_else(|| {
+                Failure::usage("there is nowhere to put the encrypted password").hint(
+                    "the encrypted-file route needs a registry to keep the file in — \
+                         `sloop init` starts one here, or use `--global`",
+                )
+            })?;
             crate::secret::sealed::put(&vault, key, secret)
         }
         // Nothing to store: the route is the answer.
@@ -2063,7 +2069,10 @@ fn forget(route: &Route, key: &str, registries: &Registries, scope: Scope) -> Ou
         Route::Keyring => crate::secret::os_keyring::delete(key),
         Route::EncryptedFile => {
             let vault = registries.vault_in(scope).ok_or_else(|| {
-                Failure::usage("there is nowhere to look for the encrypted password")
+                Failure::usage("there is nowhere to look for the encrypted password").hint(
+                    "the encrypted-file route keeps the file in a registry — `sloop init` \
+                     starts one here, or use `--global`",
+                )
             })?;
             crate::secret::sealed::forget(&vault, key)
         }
@@ -2252,6 +2261,7 @@ pub fn drop(context: &mut Context<'_>, name: &str) -> Outcome<Exit> {
             "there is no {} store to lock against",
             scope.label()
         ))
+        .hint("`sloop init` starts a registry in this directory; `--global` uses the global one")
     })?;
     let _held = crate::lock::take(&store, name, "db drop")?;
 

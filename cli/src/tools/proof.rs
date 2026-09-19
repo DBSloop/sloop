@@ -271,7 +271,7 @@ impl Keyring {
     fn beside(archive: &Path, gpg: &Path, keys: &[Key]) -> Outcome<Self> {
         let working_in = archive
             .parent()
-            .ok_or_else(|| Failure::usage("the archive is not in a directory"))?
+            .ok_or_else(|| Failure::usage("the archive is not in a directory").report_a_bug())?
             .to_path_buf();
         // **Short, and that is a macOS constraint rather than a preference.** A unix socket
         // path is capped at about 104 bytes there, and `gpg` puts its agent's socket inside
@@ -348,7 +348,7 @@ impl Keyring {
         let name = |path: &Path| {
             path.file_name()
                 .map(|named| named.to_string_lossy().into_owned())
-                .ok_or_else(|| Failure::usage("that is not a file name"))
+                .ok_or_else(|| Failure::usage("that is not a file name").report_a_bug())
         };
 
         self.run(gpg, &["--verify", &name(signature)?, &name(archive)?])

@@ -307,10 +307,9 @@ impl Registries {
     /// so each needs its own — and opening a whole new store for each would resolve sloop's own
     /// password once per backup for no reason.
     pub fn reopened(&self) -> Outcome<Self> {
-        let store = self
-            .store
-            .as_ref()
-            .ok_or_else(|| Failure::usage("these registries were opened without a database"))?;
+        let store = self.store.as_ref().ok_or_else(|| {
+            Failure::usage("these registries were opened without a database").report_a_bug()
+        })?;
 
         Self::onto_shared(
             std::rc::Rc::clone(store),
@@ -346,7 +345,7 @@ impl Registries {
         };
 
         let global = store::Which::of(Scope::Global, None)
-            .ok_or_else(|| Failure::usage("there is always a global store"))?;
+            .ok_or_else(|| Failure::usage("there is always a global store").report_a_bug())?;
 
         Ok(Self {
             project,
@@ -511,16 +510,17 @@ impl Registries {
         change: impl FnOnce(&mut Registry) -> Outcome<T>,
     ) -> Outcome<T> {
         let side = match scope {
-            Scope::Project => self
-                .project
-                .as_mut()
-                .ok_or_else(|| Failure::usage("there is no project registry here"))?,
+            Scope::Project => self.project.as_mut().ok_or_else(|| {
+                Failure::usage("there is no project registry here")
+                    .hint("`sloop init` starts one here; `--global` uses the global registry")
+            })?,
             Scope::Global => &mut self.global,
         };
 
         let outcome = change(&mut side.registry)?;
         let store = self.store.as_ref().ok_or_else(|| {
             Failure::usage("these registries were opened without a database to write back to")
+                .report_a_bug()
         })?;
         store.write(&side.which, &side.registry)?;
         Ok(outcome)
@@ -535,16 +535,17 @@ impl Registries {
     /// same transaction as the write.
     pub fn rename(&mut self, scope: Scope, from: &str, to: &str) -> Outcome<()> {
         let side = match scope {
-            Scope::Project => self
-                .project
-                .as_mut()
-                .ok_or_else(|| Failure::usage("there is no project registry here"))?,
+            Scope::Project => self.project.as_mut().ok_or_else(|| {
+                Failure::usage("there is no project registry here")
+                    .hint("`sloop init` starts one here; `--global` uses the global registry")
+            })?,
             Scope::Global => &mut self.global,
         };
 
         side.registry.rename(from, to.to_owned())?;
         let store = self.store.as_ref().ok_or_else(|| {
             Failure::usage("these registries were opened without a database to write back to")
+                .report_a_bug()
         })?;
         store.rename(&side.which, from, to, &side.registry)
     }

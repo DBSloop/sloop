@@ -431,14 +431,14 @@ impl Round {
                     "there is no sloop store at {} to read the attachment list from",
                     self.store.display()
                 ),
-            ));
+            )
+            .hint("`sloop setup` makes the database sloop keeps its own state in"));
         }
 
         let registries = Registries::open(Resolution::global_only(), &self.store)?;
-        let store = registries
-            .store()
-            .cloned()
-            .ok_or_else(|| Failure::usage("the registry was opened without a database"))?;
+        let store = registries.store().cloned().ok_or_else(|| {
+            Failure::usage("the registry was opened without a database").report_a_bug()
+        })?;
 
         let watching = round(&store)?;
 

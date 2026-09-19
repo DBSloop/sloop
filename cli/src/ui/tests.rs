@@ -425,6 +425,74 @@ fn every_leaf_names_a_command_that_could_be_pasted() {
     }
 }
 
+/// **`R28`, on the surface a newcomer actually meets.** The clap summaries answer to
+/// `cli::tests::every_command_says_what_it_does`; this is the same rule for the menu.
+///
+/// The blurb is the lead line of the flow screen — the sentence somebody reads while typing
+/// the name of a database they are about to destroy — so it carries the whole weight of
+/// saying what is about to happen. It is measured on the words in it that the title did not
+/// already have, for the reason the clap test gives: *"Delete one from the server"* followed
+/// by *"deletes one from the server"* is a screen that said one thing twice.
+#[test]
+fn every_leaf_says_what_it_does_in_words_its_title_did_not() {
+    let screen = Screen::Home { cursor: 0 };
+    let mut thin = Vec::new();
+
+    for index in 0..commands_on_the_home_screen() {
+        let super::Flow::To(Screen::Doing { leaf, .. }) =
+            screen.chose(&shell(false), &Bench::default(), index)
+        else {
+            panic!("home item {index} does not open a command");
+        };
+
+        let words = |text: &str| -> Vec<String> {
+            text.split_whitespace()
+                .map(|word| {
+                    word.trim_matches(|c: char| !c.is_alphanumeric())
+                        .to_lowercase()
+                })
+                .filter(|word| !word.is_empty())
+                .collect()
+        };
+
+        let title = words(leaf.title);
+        let said: Vec<String> = words(leaf.blurb)
+            .into_iter()
+            .filter(|word| !title.contains(word))
+            .collect();
+
+        if said.len() < 5 {
+            thin.push(format!(
+                "{:?} — {:?} adds {} word{} to its own title",
+                leaf.title,
+                leaf.blurb,
+                said.len(),
+                if said.len() == 1 { "" } else { "s" }
+            ));
+        }
+
+        assert!(
+            leaf.blurb
+                .starts_with(|first: char| first.is_lowercase() || first == '`'),
+            "{:?}: a blurb continues the title rather than opening a sentence of its own",
+            leaf.title
+        );
+        assert!(
+            !leaf.run_it.is_empty(),
+            "{:?} has no sentence for the last screen",
+            leaf.title
+        );
+    }
+
+    assert!(
+        thin.is_empty(),
+        "{} menu item{} restate their titles instead of saying what they do:\n\n  {}\n",
+        thin.len(),
+        if thin.len() == 1 { "" } else { "s" },
+        thin.join("\n  ")
+    );
+}
+
 /// **The one flow this task owns.** Picking `Init` types a directory, makes the registry,
 /// and leaves something to print once the terminal has been handed back.
 #[test]

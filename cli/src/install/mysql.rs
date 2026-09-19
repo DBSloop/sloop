@@ -420,10 +420,9 @@ fn query(installed: &Installed, password: Option<&Secret>, sql: &str) -> Outcome
         .map_err(|error| ran_nothing(&display(&program), &error.to_string()))?;
 
     {
-        let mut pipe = child
-            .stdin
-            .take()
-            .ok_or_else(|| Failure::usage("the client's standard input could not be opened"))?;
+        let mut pipe = child.stdin.take().ok_or_else(|| {
+            Failure::usage("the client's standard input could not be opened").report_a_bug()
+        })?;
         pipe.write_all(sql.as_bytes())
             .map_err(|error| Failure::usage(format!("could not write to the client: {error}")))?;
         // Dropped here so the client sees end of file and runs, rather than waiting for more.
@@ -464,7 +463,8 @@ fn literal(password: &Secret) -> Outcome<String> {
         return Err(Failure::new(
             Exit::Failure,
             "the generated password is not the alphabet sloop generates",
-        ));
+        )
+        .report_a_bug());
     }
 
     Ok(format!("'{}'", password.expose()))

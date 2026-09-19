@@ -297,6 +297,7 @@ fn into_a_registered_database(
             "there is no {} store to lock against",
             into_scope.label()
         ))
+        .hint("`sloop init` starts a registry in this directory; `--global` uses the global one")
     })?;
     let _held = crate::lock::take(&store, destination, "mirror")?;
 

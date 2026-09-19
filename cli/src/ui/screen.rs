@@ -470,7 +470,7 @@ const HOME: &[Shelf] = &[
             },
             Leaf {
                 title: "Delete one from the server",
-                blurb: "the database itself, gone. A safety copy is taken first",
+                blurb: "the database itself, gone for good. `sloop backup` first if you want a copy",
                 command: "sloop db drop <name>",
                 job: Job::DbDrop,
                 under: "Databases",
@@ -1038,7 +1038,8 @@ pub enum Kept {
 fn start_project(shell: &Shell, given: &str) -> Outcome<Initialised> {
     let given = given.trim();
     if given.is_empty() {
-        return Err(Failure::usage("a project needs a directory to go in"));
+        return Err(Failure::usage("a project needs a directory to go in")
+            .hint("type a path — `.` is the directory sloop was started in"));
     }
 
     let target = crate::registry::normalize(&shell.cwd.join(given));
@@ -1046,7 +1047,8 @@ fn start_project(shell: &Shell, given: &str) -> Outcome<Initialised> {
         return Err(Failure::usage(format!(
             "{} is not a directory that exists",
             target.display()
-        )));
+        ))
+        .hint("make it first, then type it again — sloop starts a registry, not a directory"));
     }
 
     crate::commands::init::create(&target, &shell.global, &shell.home)

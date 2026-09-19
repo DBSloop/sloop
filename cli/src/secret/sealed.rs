@@ -309,7 +309,9 @@ fn seal(plaintext: &[u8], passphrase: &Zeroizing<String>) -> Outcome<Vec<u8>> {
                 aad: &header,
             },
         )
-        .map_err(|_| Failure::new(Exit::Failure, "could not encrypt the password file"))?;
+        .map_err(|_| {
+            Failure::new(Exit::Failure, "could not encrypt the password file").report_a_bug()
+        })?;
 
     let mut out = header;
     out.extend_from_slice(&ciphertext);
@@ -434,6 +436,10 @@ fn entries(plaintext: &[u8]) -> Outcome<Vec<(String, Secret)>> {
             Exit::Usage,
             "the encrypted password file decrypted but did not make sense",
         )
+        .hint(
+            "the passphrase was right and the contents were not — restore the file from a \
+             copy, or register the password again with `sloop db edit <name>`",
+        )
     };
 
     let mut at = 0usize;
@@ -531,18 +537,20 @@ fn passphrase(confirm: bool) -> Outcome<Zeroizing<String>> {
             )
         })?);
         if first.as_str() != again.as_str() {
-            return Err(Failure::new(
-                Exit::Usage,
-                "the two passphrases were different",
-            ));
+            return Err(
+                Failure::new(Exit::Usage, "the two passphrases were different")
+                    .hint("run it again and type the same one twice"),
+            );
         }
     }
 
     if first.is_empty() {
-        return Err(Failure::new(
-            Exit::Usage,
-            "an empty passphrase encrypts nothing",
-        ));
+        return Err(
+            Failure::new(Exit::Usage, "an empty passphrase encrypts nothing").hint(
+                "this is the passphrase that opens the encrypted password file; \
+             `SLOOP_PASSPHRASE` supplies it to a run with nobody to ask",
+            ),
+        );
     }
 
     Ok(first)

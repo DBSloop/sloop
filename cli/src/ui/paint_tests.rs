@@ -155,7 +155,7 @@ fn a_menu_item_fits_the_terminal_it_is_drawn_in() {
     for columns in [40usize, 60, 80, 120] {
         let drawn = plain(&option(
             "Delete one from the server",
-            "the database itself, gone. A safety copy is taken first",
+            "the database itself, gone for good. `sloop backup` first if you want a copy",
             26,
             Some(columns),
         ));

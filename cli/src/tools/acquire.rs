@@ -177,7 +177,10 @@ pub fn ensure(engine: Engine, global: &Path) -> Outcome<Inventory> {
 #[cfg(test)]
 pub fn install_for_tests(engine: Engine, into: &Path) -> Outcome<()> {
     plan_for(engine)
-        .ok_or_else(|| Failure::new(Exit::Usage, "nothing to install on this platform"))?
+        .ok_or_else(|| {
+            Failure::new(Exit::Usage, "nothing to install on this platform")
+                .hint("install the engine's client tools with this platform's package manager")
+        })?
         .carry_out(into)
 }
 
@@ -628,10 +631,13 @@ pub fn download(url: &str, to: &Path) -> Outcome<()> {
         let _ = std::fs::remove_file(to);
     }
 
-    Err(Failure::new(
-        Exit::Usage,
-        format!("could not download {url}: {last}"),
-    ))
+    Err(
+        Failure::new(Exit::Usage, format!("could not download {url}: {last}")).hint(
+            "sloop has no network code of its own — it asks this machine's own downloader, so a \
+         proxy or a firewall that blocks it blocks this. Installing the client tools by hand \
+         works just as well; `sloop doctor` says where it looks for them",
+        ),
+    )
 }
 
 /// The size and then the hash, in that order.
@@ -838,7 +844,8 @@ fn unpack(archive: &Path, into: &Path, strip: &str, members: &[&str]) -> Outcome
         return Err(Failure::new(
             Exit::Usage,
             format!("could not unpack {}", archive.display()),
-        ));
+        )
+        .hint("the download may be truncated — delete it and run this again"));
     }
 
     Ok(())

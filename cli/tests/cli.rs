@@ -19,45 +19,72 @@ use support::Sandbox;
 /// in here and the test below is what stops it shipping as a silent no-op.
 const STUBS: &[&[&str]] = &[];
 
-/// Commands with a body. They move here one task at a time.
+/// Every path in the tree, asked of the binary rather than kept in a list here.
 ///
-/// Only their `--help` is exercised from this list: several of them take a required
-/// argument, and half of those want a live server. What they actually do is checked in
-/// `tests/db.rs` and against a real cluster in `engine::cluster_tests`.
-const IMPLEMENTED: &[&[&str]] = &[
-    &["init"],
-    &["doctor"],
-    &["reset"],
-    &["uninstall"],
-    &["db", "add"],
-    &["db", "create"],
-    &["db", "list"],
-    &["db", "test"],
-    &["db", "edit"],
-    &["db", "rename"],
-    &["db", "remove"],
-    &["db", "drop"],
-    &["backup"],
-    &["backups", "list"],
-    &["backups", "prune"],
-    &["restore"],
-    &["mirror"],
-    &["sync"],
-    &["key", "export"],
-    &["key", "import"],
-];
+/// **It used to be three hand-written lists, and by `R27a` they were four commands short.**
+/// `query`, `setup`, `server` and `service` had all shipped without anybody adding them, so
+/// the test that says *the whole surface documents itself* was quietly saying it about
+/// two-thirds of the surface. A list of the commands, kept beside the commands, is a list
+/// that goes stale — so this walks `--help` the way a user would, and a command that ships
+/// is a command this covers on the same day.
+fn every_command(sandbox: &Sandbox) -> Vec<Vec<String>> {
+    fn walk(sandbox: &Sandbox, path: &[String], into: &mut Vec<Vec<String>>) {
+        let mut args: Vec<&str> = path.iter().map(String::as_str).collect();
+        args.push("--help");
+        let run = sandbox.sloop(&args);
+        run.expect_code(0);
 
-/// The commands that only hold other commands.
-const GROUPS: &[&[&str]] = &[&["db"], &["backups"], &["key"]];
+        for name in subcommands_in(&run.stdout()) {
+            let mut under = path.to_vec();
+            under.push(name);
+            walk(sandbox, &under, into);
+            into.push(under);
+        }
+    }
 
-/// Every path in the tree.
-fn every_command() -> Vec<&'static [&'static str]> {
-    STUBS
-        .iter()
-        .chain(IMPLEMENTED)
-        .chain(GROUPS)
-        .copied()
-        .collect()
+    let mut found = Vec::new();
+    walk(sandbox, &[], &mut found);
+    found.sort();
+    assert!(
+        found.len() > 30,
+        "the walk found {} commands, which is fewer than sloop has — did `--help` change \
+         shape?",
+        found.len()
+    );
+    found
+}
+
+/// The names under `Commands:` in one `--help`, ignoring the wrapped continuation lines
+/// clap indents further and the `help` command it adds itself.
+fn subcommands_in(help: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut inside = false;
+    for line in help.lines() {
+        if line.starts_with("Commands:") {
+            inside = true;
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        if line.trim().is_empty() {
+            break;
+        }
+        let Some(rest) = line.strip_prefix("  ") else {
+            break;
+        };
+        // A wrapped description is indented past the column the names sit in.
+        if rest.starts_with(' ') {
+            continue;
+        }
+        let Some((name, _)) = rest.split_once("  ") else {
+            continue;
+        };
+        if name != "help" {
+            names.push(name.to_owned());
+        }
+    }
+    names
 }
 
 #[test]
@@ -88,13 +115,45 @@ fn help_goes_to_stdout_and_exits_zero() {
 #[test]
 fn the_whole_surface_documents_itself() {
     let sandbox = Sandbox::new("surface");
-    for path in every_command() {
+    for path in every_command(&sandbox) {
         for flag in ["-h", "--help"] {
-            let args: Vec<&str> = path.iter().copied().chain([flag]).collect();
+            let mut args: Vec<&str> = path.iter().map(String::as_str).collect();
+            args.push(flag);
             let run = sandbox.sloop(&args);
             run.expect_code(0);
             assert!(!run.stdout().is_empty(), "{path:?} {flag} printed nothing");
         }
+    }
+}
+
+/// **`R28`.** Every command reachable from `--help` says what it does in the summary its
+/// parent lists it by — the same rule `cli::tests::every_command_says_what_it_does` holds
+/// the clap tree to, checked here against what the binary actually prints.
+#[test]
+fn every_command_in_the_help_says_what_it_does() {
+    let sandbox = Sandbox::new("surface-summaries");
+    for path in every_command(&sandbox) {
+        let parent: Vec<&str> = path[..path.len() - 1].iter().map(String::as_str).collect();
+        let mut args = parent.clone();
+        args.push("--help");
+        let run = sandbox.sloop(&args);
+        let help = run.stdout();
+
+        let name = path.last().expect("a path has a last element");
+        let summary = help
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("  ")?;
+                let (found, said) = rest.split_once("  ")?;
+                (found == name).then(|| said.trim().to_owned())
+            })
+            .unwrap_or_else(|| panic!("`sloop {}` is listed with no summary", path.join(" ")));
+
+        assert!(
+            !summary.is_empty(),
+            "`sloop {}` is listed with an empty summary",
+            path.join(" ")
+        );
     }
 }
 
@@ -167,11 +226,24 @@ fn an_unknown_command_is_a_usage_error() {
     );
 }
 
+/// A command that only holds other commands, run on its own. Derived like the rest, so a
+/// group added later is covered without anybody remembering to add it here.
 #[test]
 fn a_group_with_no_command_under_it_is_a_usage_error() {
     let sandbox = Sandbox::new("group");
-    for group in GROUPS {
-        sandbox.sloop(group).expect_code(2);
+    let all = every_command(&sandbox);
+    let groups: Vec<&Vec<String>> = all
+        .iter()
+        .filter(|path| {
+            all.iter()
+                .any(|other| other.len() > path.len() && other.starts_with(path))
+        })
+        .collect();
+
+    assert!(!groups.is_empty(), "no group commands were found to check");
+    for group in groups {
+        let args: Vec<&str> = group.iter().map(String::as_str).collect();
+        sandbox.sloop(&args).expect_code(2);
     }
 }
 

@@ -343,7 +343,7 @@ pub(super) fn migrate_through(
     // one — and it is recorded below like any other migration rather than being special.
     let ledger = migrations
         .first()
-        .ok_or_else(|| Failure::usage("there is no migration to run"))?;
+        .ok_or_else(|| Failure::usage("there is no migration to run").report_a_bug())?;
     if !ledger_exists(server, &as_who, password)? {
         make::script(server, &as_who, Some(password), ledger.sql)
             .map_err(|failure| failure.hint("sloop's own database could not be given a ledger"))?;
@@ -474,12 +474,14 @@ fn recorded(server: &Server, as_who: &As<'_>, password: &Secret) -> Outcome<Vec<
                     Exit::Failure,
                     format!("the migration ledger holds a row sloop cannot read: {line}"),
                 )
+                .report_a_bug()
             })?;
             let version: i64 = version.parse().map_err(|_| {
                 Failure::new(
                     Exit::Failure,
                     format!("the migration ledger holds {version} where a number belongs"),
                 )
+                .report_a_bug()
             })?;
             Ok((version, checksum.to_owned()))
         })

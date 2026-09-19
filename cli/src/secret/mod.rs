@@ -326,7 +326,8 @@ pub fn keep_somewhere(
                 "a password sloop generated cannot live in {} — that route fetches a secret \
                  something else keeps",
                 other.describe()
-            ))),
+            ))
+            .report_a_bug()),
         };
 
         match kept {
@@ -336,7 +337,10 @@ pub fn keep_somewhere(
     }
 
     Err(first.unwrap_or_else(|| {
-        Failure::usage("this machine has nowhere to keep a password sloop generated")
+        Failure::usage("this machine has nowhere to keep a password sloop generated").hint(
+            "the OS keyring is the first route and an encrypted file the second — on a \
+             headless Linux box, `sloop init` gives the file somewhere to live",
+        )
     }))
 }
 

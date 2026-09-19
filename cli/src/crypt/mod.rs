@@ -198,8 +198,12 @@ pub fn keep_somewhere(private: &PrivateKey, vault: &secret::sealed::Vault<'_>) -
         }
     }
 
-    Err(first
-        .unwrap_or_else(|| Failure::usage("there is nowhere on this machine to keep a backup key")))
+    Err(first.unwrap_or_else(|| {
+        Failure::usage("there is nowhere on this machine to keep a backup key").hint(
+            "the private key goes in the OS keyring, or in the registry's encrypted \
+                 file when there is no keyring — `sloop init` gives that file somewhere to live",
+        )
+    }))
 }
 
 /// The two storage routes, in the order this machine should be asked about them.
@@ -254,8 +258,8 @@ fn write_sealed<F>(path: &Path, recipient: &PublicKey, fill: F) -> Outcome<()>
 where
     F: FnOnce(&mut dyn Write) -> Outcome<()>,
 {
-    let failed = |what: &str, why: &dyn std::fmt::Display| {
-        Failure::new(Exit::Dump, format!("{what} {}: {why}", path.display()))
+    let failed = |what: &str, error: &dyn std::fmt::Display| {
+        Failure::new(Exit::Dump, format!("{what} {}: {error}", path.display()))
     };
 
     let handle = std::fs::File::create(path).map_err(|error| failed("could not create", &error))?;

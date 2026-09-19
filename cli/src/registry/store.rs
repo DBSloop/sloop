@@ -226,9 +226,7 @@ impl Store {
 
         for row in raw.databases {
             let engine = Engine::parse(&row.engine)?;
-            let port = u16::try_from(row.port).map_err(|_| {
-                Failure::usage(format!("{} is registered on port {}", row.label, row.port))
-            })?;
+            let port = port_of(&row.label, row.port, "registered on")?;
             // Parsed here, where the row is read, so a route somebody put in by hand is a
             // complaint about the registry rather than a surprise in the middle of a dump.
             // The same place the file version parsed it.
@@ -238,12 +236,7 @@ impl Store {
             let reach = match row.ssh {
                 None => Reach::Direct,
                 Some(ssh) => {
-                    let ssh_port = u16::try_from(ssh.port).map_err(|_| {
-                        Failure::usage(format!(
-                            "{} is reached over SSH on port {}",
-                            row.label, ssh.port
-                        ))
-                    })?;
+                    let ssh_port = port_of(&row.label, ssh.port, "reached over SSH on")?;
                     Reach::Over(Box::new(Through {
                         server: Server {
                             host: ssh.host,
@@ -661,6 +654,19 @@ impl Store {
     }
 }
 
+/// A port as PostgreSQL stored it, back as a port.
+///
+/// **A column wide enough to hold a number a port cannot be**, so the narrowing is a real
+/// question rather than a formality: `bigint` is what comes back, and a row edited by
+/// hand can hold 70000 in it. Both the direct port and the SSH one come through here, so the
+/// complaint reads the same either way and names the command that fixes it.
+fn port_of(label: &str, stored: i64, how: &str) -> Outcome<u16> {
+    u16::try_from(stored).map_err(|_| {
+        Failure::usage(format!("{label} is {how} port {stored}"))
+            .hint(format!("a port is 1 to 65535: `sloop db edit {label}`"))
+    })
+}
+
 /// A string as an SQL literal, or a refusal.
 ///
 /// **Doubling the quote is the whole of it** while `standard_conforming_strings` is on, which
@@ -672,7 +678,8 @@ pub fn literal(text: &str) -> Outcome<String> {
     if text.contains('\0') {
         return Err(Failure::usage(
             "a registry value contains a zero byte, which PostgreSQL cannot store",
-        ));
+        )
+        .hint("take it out of whatever was typed — `sloop db edit <name>` shows every field"));
     }
     Ok(format!("'{}'", text.replace('\'', "''")))
 }
@@ -695,7 +702,8 @@ fn from_hex(hex: &str) -> Outcome<Vec<u8>> {
         return Err(Failure::new(
             Exit::Failure,
             "the sealed vault came back as an odd number of hex digits",
-        ));
+        )
+        .report_a_bug());
     }
 
     (0..hex.len())
@@ -706,6 +714,7 @@ fn from_hex(hex: &str) -> Outcome<Vec<u8>> {
                     Exit::Failure,
                     "the sealed vault came back as something not hex",
                 )
+                .report_a_bug()
             })
         })
         .collect()

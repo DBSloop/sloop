@@ -45,6 +45,7 @@ impl Context<'_> {
         let scope = self.scope();
         self.registries.vault_in(scope).ok_or_else(|| {
             crate::failure::Failure::usage("there is no registry in that scope to keep a key in")
+                .hint("`sloop init` starts a registry here; `--global` uses the global one")
         })
     }
 
