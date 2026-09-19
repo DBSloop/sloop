@@ -6,6 +6,19 @@
   words, and forty words is not something a search engine or a model can learn
   anything from. Every section is real HTML prose in document order; the 3D sits
   behind it and is aria-hidden.
+
+  A4a, 2026-09-19 — the second pass. A4 sold a backup and restore tool, and was
+  right when it shipped. The CLI then grew a menu covering every command, a
+  background service that replaces cron on three platforms, scheduled backups
+  with retention, per-database activity, a no-SQL reader, its own PostgreSQL and
+  SSH. The page now says what the tool is rather than what it was.
+
+  What did NOT change, because it is settled and not this entry's to reinterpret:
+  the mark and its water, the token layer, dark-by-default with three theme
+  options, terminal blocks as real HTML text — and the motion. The hero's three
+  windows float over the three.js stack and nothing below the hero moves at all
+  beyond arriving once on scroll. See "The 3D is the hero's, and nowhere else's"
+  in docs/OWNER-DECISIONS.md.
 -->
 <div class="bg-bg text-text">
   <!-- ═══ Hero ════════════════════════════════════════════════════════════ -->
@@ -37,22 +50,46 @@
         what makes the depth read when the page moves.
 
         The windows are real HTML terminals, not pictures of terminals — the
-        commands in them are selectable, and a crawler reads them as text.
+        commands in them are selectable, and a crawler reads them as text. Each
+        one is wide enough for its own longest line, because a window whose
+        text runs off the edge is a window nobody can read.
+
+        Four of them, at four depths, carrying what this page has to establish
+        before anything else: the menu covers every command, a schedule is one
+        line with no cron under it, the service comes back at boot, and the
+        machine is checked before any of it is trusted.
+
+        **The stones sit a hundred and sixty pixels further back**, so no
+        window can fall behind them. A card is rotated about its own centre
+        after being lifted, which swings one of its edges *backwards* — at
+        `translateZ(30px)` and nineteen degrees, the far corner of a 268px card
+        is behind the plane the canvas is drawn on, and the stack paints over
+        it. Pushing the canvas back fixes every card at once rather than one
+        `depthLift` at a time. The element is grown by 5.3% to cancel the
+        perspective shrink, so the canvas still renders at its own resolution
+        instead of being scaled up and going soft.
 
         On a phone the stage comes first and short, so the 3D is seen without
-        pushing the headline under the fold, and the two outer windows step
-        aside: three overlapping cards in 390px is a mess, not depth.
+        pushing the headline under the fold, and every window steps aside: one
+        300px card in 350px of stage buries the stones, which is not depth.
       -->
-      <div class="order-first h-[230px] sm:h-[300px] lg:order-last lg:h-[520px]" aria-hidden="true">
+      <div class="order-first h-[280px] sm:h-[340px] lg:order-last lg:h-[600px]" aria-hidden="true">
         <div class="relative h-full w-full [perspective:1500px] [transform-style:preserve-3d]">
+          <!-- The inset goes on a wrapper, not on `app-stones` itself. Its
+               `:host` is `width: 100%; height: 100%`, and an explicit width
+               beats a `right` offset — so putting the inset on the component
+               moved the canvas left by 16% and never grew it, which is why the
+               mark sat off-centre on a phone and small everywhere. -->
           @defer (on idle) {
-            <app-stones class="absolute inset-0" />
+            <div class="absolute [inset:-19%] [transform:translateZ(-160px)]">
+              <app-stones class="block h-full w-full" />
+            </div>
           } @placeholder {
             <div class="h-full w-full"></div>
           }
 
           <div
-            class="absolute -left-10 top-0 hidden w-[272px] opacity-[0.92] lg:block"
+            class="absolute -left-10 -top-6 hidden w-[224px] opacity-[0.92] lg:block"
             appDepth="-150"
             depthTurn="20"
             depthTilt="-6"
@@ -63,11 +100,26 @@
             depthSpin="4.5"
             depthPhase="0"
           >
-            <app-terminal caption="register it once" [lines]="registerSnippet" />
+            <app-terminal caption="the whole menu" [lines]="menuSnippet" compact />
           </div>
 
           <div
-            class="absolute -right-8 bottom-[6%] w-[260px] sm:w-[300px]"
+            class="absolute -right-10 -top-10 hidden w-[248px] opacity-[0.9] lg:block"
+            appDepth="-128"
+            depthTurn="-14"
+            depthTilt="-7"
+            depthLift="52"
+            depthAngle="-13"
+            depthPitch="8"
+            depthFloat="10"
+            depthSpin="4"
+            depthPhase="5.6"
+          >
+            <app-terminal caption="check it first" [lines]="doctorSnippet" compact />
+          </div>
+
+          <div
+            class="absolute -bottom-4 -right-6 hidden w-[348px] md:block 2xl:-right-16"
             appDepth="115"
             depthTurn="-18"
             depthTilt="7"
@@ -78,11 +130,15 @@
             depthSpin="5"
             depthPhase="2.1"
           >
-            <app-terminal caption="nightly" [lines]="nightlySnippet" />
+            <app-terminal
+              caption="no cron line, no scheduled task"
+              [lines]="scheduleSnippet"
+              compact
+            />
           </div>
 
           <div
-            class="absolute -bottom-6 -left-4 hidden w-[284px] opacity-[0.86] lg:block"
+            class="absolute -bottom-10 -left-4 hidden w-[256px] opacity-[0.86] 2xl:block"
             appDepth="-95"
             depthTurn="15"
             depthTilt="-8"
@@ -93,7 +149,7 @@
             depthSpin="3.8"
             depthPhase="4.3"
           >
-            <app-terminal caption="before you trust it" [lines]="doctorSnippet" />
+            <app-terminal caption="running at boot" [lines]="serviceSnippet" compact />
           </div>
         </div>
       </div>
@@ -103,14 +159,26 @@
           Supported today — PostgreSQL · MySQL · MariaDB
         </p>
 
-        <h1 class="mt-5 max-w-[17ch] text-5xl font-semibold sm:text-6xl" [appReveal]="60">
+        <!--
+          Two tones, one sentence. The four verbs are what somebody searches
+          for and they are left exactly as A4 set them; the second line is the
+          half of the tool that did not exist when they were written.
+        -->
+        <h1 class="mt-5 max-w-[15ch] text-5xl font-semibold sm:text-6xl" [appReveal]="60">
           Back up. Restore. Mirror. Sync.
+          <span class="block text-muted">Then let it run itself.</span>
         </h1>
 
         <p class="mt-6 max-w-measure text-lg text-muted" [appReveal]="120">
           <strong class="font-semibold text-text">sloop</strong> registers a database once — a name,
-          a host, a role — and then runs every operation against that name, from a menu or from a
-          flag, on Windows, Linux and macOS. One binary, no daemon, no account.
+          a host, a role — and then backs it up, restores it, mirrors it, syncs it and reads it, on
+          Windows, Linux and macOS. Drive it from a menu that covers every command, or from a flag a
+          scheduler can run. Install it as a background service and it keeps its own schedule, so
+          there is no cron line to write and no Task Scheduler entry to forget.
+        </p>
+
+        <p class="mt-4 max-w-measure text-base text-faint" [appReveal]="150">
+          One binary. No agent to deploy, no server to run, no account to make.
         </p>
 
         <!-- The guarantee, above the fold, in the words it is given everywhere
@@ -163,13 +231,96 @@
     </div>
   </section>
 
-  <!-- ═══ The guarantee ═══════════════════════════════════════════════════ -->
-  <section class="border-b border-line" id="guarantee">
+  <!-- ═══ The band ════════════════════════════════════════════════════════
+       Eight things, as the eight commands that do them, so everything this
+       page has to establish is inside the first scroll. A hairline plate
+       rather than eight cards: `gap-px` over `bg-line` draws every divider
+       from one rule, and 8 divides exactly by 4, by 2 and by 1, so no row is
+       ever left ragged.
+
+       No icons. On a page about a command-line tool the commands are the
+       iconography, and eight invented glyphs would be eight more things to
+       look at rather than one more thing to understand.
+  -->
+  <section class="border-t border-line" id="what-it-does" aria-labelledby="what-it-does-heading">
+    <div class="mx-auto max-w-[84rem] px-5 py-14 sm:px-8 sm:py-16 lg:px-12">
+      <h2 id="what-it-does-heading" class="sr-only">What sloop does</h2>
+      <div
+        class="grid gap-px overflow-hidden rounded-2xl border border-line bg-line sm:grid-cols-2 lg:grid-cols-4"
+        appReveal
+      >
+        @for (capability of capabilities; track capability.command) {
+          <div class="bg-surface p-5 sm:p-6">
+            <p class="font-mono text-xs text-accent">{{ capability.command }}</p>
+            <p class="mt-3 text-base font-semibold">{{ capability.title }}</p>
+            <p class="mt-2 text-sm text-muted">{{ capability.line }}</p>
+          </div>
+        }
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ The first run ═══════════════════════════════════════════════
+       The one block on the page that runs itself: three commands typed and
+       played the first time it is scrolled to, which is the whole product in
+       about nine seconds.
+
+       It is not in the hero, at the owner's instruction, and it is the only
+       moving thing below it — an arrival, like every other section, that
+       happens to keep going for a few seconds after it arrives.
+
+       **Full width, because sloop's own lines are.** `db add` answers in a
+       hundred and fourteen characters, which is a thousand pixels of
+       monospace; in a half-width column the one block somebody is watching
+       would be the one block they had to drag sideways.
+
+       **Nothing is a video and nothing is a picture.** Every character is in
+       the DOM at first paint; the run decides when each becomes visible, and
+       `prefers-reduced-motion` or a browser with no IntersectionObserver gets
+       the finished transcript with no caret. See `Terminal`'s `play`.
+  -->
+  <section class="border-t border-line" id="first-run" aria-labelledby="first-run-heading">
+    <div class="mx-auto max-w-[84rem] px-5 pb-16 sm:px-8 sm:pb-20 lg:px-12 lg:pb-24">
+      <div class="grid gap-6 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:items-end lg:gap-14">
+        <div class="min-w-0" appReveal>
+          <p
+            class="flex items-center gap-3 font-mono text-xs uppercase tracking-[0.14em] text-accent"
+          >
+            <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>From nothing
+          </p>
+          <h2 id="first-run-heading" class="mt-3 max-w-[14ch] text-2xl font-semibold sm:text-3xl">
+            Three commands, and it is running itself.
+          </h2>
+        </div>
+
+        <div class="min-w-0" [appReveal]="60">
+          <p class="max-w-measure text-base text-muted">
+            Register it, back it up, put it on a schedule. There is no fourth step: the service
+            takes every backup from then on, applies the retention policy, and prunes what falls
+            outside it.
+          </p>
+          <p class="mt-3 max-w-measure text-sm text-faint">
+            Real output, in real text. Select it, copy it, search it — it is the same HTML a crawler
+            reads, whether or not you watched it arrive.
+          </p>
+        </div>
+      </div>
+
+      <div class="mt-9" [appReveal]="120">
+        <app-terminal caption="a machine that had never seen sloop" [lines]="firstRun" play />
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 01 · The guarantee ══════════════════════════════════════════════ -->
+  <section class="border-y border-line" id="guarantee">
     <div
-      class="mx-auto grid max-w-[84rem] gap-10 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-[minmax(0,1fr)_minmax(0,32rem)] lg:gap-14 lg:px-12 lg:py-28"
+      class="mx-auto grid max-w-[84rem] gap-10 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-[minmax(0,1fr)_minmax(0,34rem)] lg:gap-14 lg:px-12 lg:py-28"
     >
       <div class="min-w-0" appReveal>
-        <p class="font-mono text-xs text-accent">01</p>
+        <p class="flex items-center gap-3 font-mono text-xs text-accent">
+          <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>01
+        </p>
         <h2 class="mt-3 max-w-[16ch] text-3xl font-semibold sm:text-4xl">
           Not a policy. A property of the build.
         </h2>
@@ -178,159 +329,546 @@
           client anywhere in the dependency graph — no
           <code class="font-mono text-sm text-text">reqwest</code>, no
           <code class="font-mono text-sm text-text">hyper</code>, no
-          <code class="font-mono text-sm text-text">ureq</code> — so there is nothing in the binary
-          that knows how to open a socket to the internet. Continuous integration fails the build if
-          one ever appears.
+          <code class="font-mono text-sm text-text">ureq</code> — and no SSH client either, because
+          an embedded one could open a socket to anywhere at all. Continuous integration fails the
+          build if either ever appears, across normal, build and development edges, for every
+          target.
         </p>
         <p class="mt-4 max-w-measure text-base text-muted">
-          The one job that genuinely needs the network — fetching a client tool that Windows does
-          not ship with — shells out to the system's own
-          <code class="font-mono text-sm text-text">curl</code>
-          after you say yes. The claim survives inspection because it is checkable, and this is how
-          you check it in thirty seconds.
+          The two jobs that genuinely need the network shell out to programs your machine already
+          has: <code class="font-mono text-sm text-text">curl</code> to fetch a client tool Windows
+          does not ship with, and your own <code class="font-mono text-sm text-text">ssh</code> to
+          reach a database whose port is closed. Both only after you say yes.
+          <strong class="font-semibold text-text">The background service never opens a port</strong>
+          — not for status, not for metrics, not for a local socket bound to loopback.
+        </p>
+        <p class="mt-4 max-w-measure text-base text-muted">
+          There is no version check and no <em class="italic">a new release is available</em>. That
+          would need HTTP, and it is not worth the claim. Here is how you check the claim yourself,
+          in thirty seconds.
         </p>
       </div>
 
       <div class="min-w-0" [appReveal]="120">
-        <div>
-          <app-terminal caption="verifying the claim" [lines]="guaranteeProof" />
-        </div>
+        <app-terminal caption="verifying the claim" [lines]="guaranteeProof" />
         <p class="mt-4 max-w-measure text-sm text-faint">
           Nothing is written to a log that could not be pasted into a public issue. No password
-          reaches a config file, a dump filename, or <code class="font-mono text-xs">ps</code>.
+          reaches a config file, a dump filename, or <code class="font-mono text-xs">ps</code>
+          output — not even for a moment.
         </p>
+
+        <dl class="mt-8 grid gap-px overflow-hidden rounded-xl border border-line bg-line">
+          <div class="bg-surface px-5 py-4">
+            <dt class="text-sm font-semibold">Nothing is bundled that would need fetching</dt>
+            <dd class="mt-1 text-sm text-muted">
+              <code class="font-mono text-xs text-text">mysqldump</code> is GPL v2 and bundling
+              three platforms would put about 150 MB in every release, so client tools are acquired
+              once, on demand, after you agree — and never at all without a terminal to ask at.
+            </dd>
+          </div>
+          <div class="bg-surface px-5 py-4">
+            <dt class="text-sm font-semibold">
+              The claim is checked by the build, not by a promise
+            </dt>
+            <dd class="mt-1 text-sm text-muted">
+              <code class="font-mono text-xs text-text">ci/no-http-client.sh</code> reads the graph
+              with <code class="font-mono text-xs text-text">--target all</code>, so a dependency
+              hiding behind a <code class="font-mono text-xs text-text">cfg(windows)</code> is
+              caught too.
+            </dd>
+          </div>
+        </dl>
       </div>
     </div>
   </section>
 
-  <!-- ═══ The four operations ═════════════════════════════════════════════ -->
-  <section class="border-b border-line" id="operations">
-    <div class="mx-auto max-w-[84rem] px-5 py-16 sm:px-8 sm:py-20 lg:px-12 lg:py-28">
-      <div appReveal>
-        <p class="font-mono text-xs text-accent">02</p>
-        <h2 class="mt-3 max-w-[20ch] text-3xl font-semibold sm:text-4xl">
-          Four verbs, and one of them deletes things.
-        </h2>
-        <p class="mt-6 max-w-measure text-base text-muted">
-          <code class="font-mono text-sm text-text">mirror</code> and
-          <code class="font-mono text-sm text-text">sync</code> are different commands with
-          different engines, and the difference is worth reading before you run either.
-          <strong class="font-semibold text-text">mirror</strong> leaves the destination identical
-          to the source, so anything the source does not have is gone.
-          <strong class="font-semibold text-text">sync</strong> merges, and keeps what the
-          destination already had.
-        </p>
-      </div>
-
-      <ul class="mt-12 grid gap-4 sm:grid-cols-2">
-        <li
-          class="rounded-xl border border-line bg-surface p-6 transition-[transform,border-color,box-shadow] duration-3 ease-out hover:-translate-y-1 hover:border-line-strong hover:shadow-2 sm:p-7"
-          [appReveal]="0"
-        >
-          <p class="font-mono text-sm font-semibold text-accent">sloop backup</p>
-          <p class="mt-3 text-lg font-semibold">Dump it, and write down what you dumped.</p>
-          <p class="mt-3 max-w-measure text-sm text-muted">
-            Every backup lands in its own UTC-stamped directory with a manifest beside it: engine
-            version, size, SHA-256, duration, per-table row counts, and both timestamps with the
-            offset. <code class="font-mono text-sm text-text">backup --all</code> runs to the end
-            and then tells you which databases failed, rather than stopping at the first one.
-          </p>
-        </li>
-        <li
-          class="rounded-xl border border-line bg-surface p-6 transition-[transform,border-color,box-shadow] duration-3 ease-out hover:-translate-y-1 hover:border-line-strong hover:shadow-2 sm:p-7"
-          [appReveal]="70"
-        >
-          <p class="font-mono text-sm font-semibold text-accent">sloop restore</p>
-          <p class="mt-3 text-lg font-semibold">Put it back, having said which one out loud.</p>
-          <p class="mt-3 max-w-measure text-sm text-muted">
-            Restoring over a database means typing its name, not clicking yes. The destructive half
-            of this tool is typed, every time, and there is no flag that turns that into a keypress.
-          </p>
-        </li>
-        <li
-          class="rounded-xl border border-line bg-surface p-6 transition-[transform,border-color,box-shadow] duration-3 ease-out hover:-translate-y-1 hover:border-line-strong hover:shadow-2 sm:p-7"
-          [appReveal]="140"
-        >
-          <p class="font-mono text-sm font-semibold text-accent">sloop mirror</p>
-          <p class="mt-3 text-lg font-semibold">
-            An exact copy. The destination ends up identical.
-          </p>
-          <p class="mt-3 max-w-measure text-sm text-muted">
-            Dump and restore. Anything in the destination that is not in the source is gone
-            afterwards &mdash; that is what <em class="italic">exact</em> means, and it is the whole
-            difference from <code class="font-mono text-sm text-text">sync</code>. The source is
-            only ever read; no statement written against it changes anything, not even
-            <code class="font-mono text-sm text-text">ANALYZE</code>.
-          </p>
-        </li>
-        <li
-          class="rounded-xl border border-line bg-surface p-6 transition-[transform,border-color,box-shadow] duration-3 ease-out hover:-translate-y-1 hover:border-line-strong hover:shadow-2 sm:p-7"
-          [appReveal]="210"
-        >
-          <p class="font-mono text-sm font-semibold text-accent">sloop sync</p>
-          <p class="mt-3 text-lg font-semibold">A merge. Destination-only rows are kept.</p>
-          <p class="mt-3 max-w-measure text-sm text-muted">
-            Rows added, existing rows replaced, and anything the destination had that the source
-            does not is left alone. <code class="font-mono text-sm text-text">COPY</code> into temp
-            tables, then upsert in foreign-key order. It needs a primary key on every table, resets
-            sequences and identity columns afterwards, tells you which source-deleted rows will
-            linger, and refuses outright on circular foreign keys.
-          </p>
-        </li>
-      </ul>
-    </div>
-  </section>
-
-  <!-- ═══ Register once ═══════════════════════════════════════════════════ -->
-  <section class="border-b border-line" id="registry">
+  <!-- ═══ 02 · Two surfaces ═══════════════════════════════════════════════
+       Terminal first on this one. The menu is the thing being described, and
+       putting it on the left inverts the rhythm of the section above it.
+  -->
+  <section class="border-b border-line" id="surfaces">
     <div
-      class="mx-auto grid max-w-[84rem] gap-10 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-[minmax(0,30rem)_minmax(0,1fr)] lg:gap-14 lg:px-12 lg:py-28"
+      class="mx-auto grid max-w-[84rem] gap-10 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-[minmax(0,1fr)_minmax(0,30rem)] lg:gap-14 lg:px-12 lg:py-28"
     >
-      <div class="min-w-0" appReveal>
-        <p class="font-mono text-xs text-accent">03</p>
-        <h2 class="mt-3 max-w-[16ch] text-3xl font-semibold sm:text-4xl">
-          Register it once. Then just use the name.
+      <div class="min-w-0 lg:order-last" appReveal>
+        <p class="flex items-center gap-3 font-mono text-xs text-accent">
+          <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>02
+        </p>
+        <h2 class="mt-3 max-w-[18ch] text-3xl font-semibold sm:text-4xl">
+          A menu anyone can drive. A flag a scheduler can run.
         </h2>
         <p class="mt-6 max-w-measure text-base text-muted">
-          A registry lives in your project, the way
-          <code class="font-mono text-sm text-text">.git</code> does —
-          <code class="font-mono text-sm text-text">sloop</code> walks up from wherever you are
-          standing and uses the nearest one. There is a global registry too, for the databases that
-          are not a project's. A name that exists in both resolves to the project's;
-          <code class="font-mono text-sm text-text">--global</code> forces the other, and
-          <code class="font-mono text-sm text-text">global:name</code> says so outright.
+          <code class="font-mono text-sm text-text">sloop</code> on its own opens an interactive
+          menu, and <strong class="font-semibold text-text">every command is on it</strong> — thirty
+          of them, under seven headings, each one a flow that asks for what it needs. It
+          reimplements nothing: a screen collects exactly what a flag carries and then calls the
+          same function the flag calls, so the two surfaces cannot drift apart.
         </p>
         <p class="mt-4 max-w-measure text-base text-muted">
-          Verification is exact rather than estimated: every row is counted on both sides. The
-          planner's estimate has been seen reporting double the true number, so it is available as a
-          deliberate fast path and is always labelled an estimate — never presented as proof.
+          It runs in the alternate screen buffer rather than clearing yours, so nothing lands in
+          scrollback and quitting gives you back exactly the terminal you had.
+          <code class="font-mono text-sm text-text">← Back</code> is on every menu and
+          <code class="font-mono text-sm text-text">Esc</code> leaves any prompt. A machine that has
+          not been set up opens on Setup and nothing else.
+        </p>
+        <p class="mt-4 max-w-measure text-base text-muted">
+          And every interactive run ends by printing the flag form of what it just did — after
+          leaving the alternate screen, so the line survives in the scrollback you keep. A session
+          you worked out by hand becomes a line you can schedule.
+        </p>
+
+        <div class="mt-7 max-w-measure" [appReveal]="120">
+          <app-terminal caption="after the run, in your scrollback" [lines]="equivalentSnippet" />
+        </div>
+      </div>
+
+      <div class="min-w-0 lg:order-first" [appReveal]="60">
+        <app-terminal caption="the home screen" [lines]="homeScreen" />
+        <p class="mt-4 max-w-measure text-sm text-faint">
+          Every item says what it does rather than repeating its own name, and carries the command
+          that does the same thing — so the menu teaches the flags rather than hiding them. The rows
+          marked <code class="font-mono text-xs">…</code> are the rest of each heading, left out
+          here and not out of the screen.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 03 · Register once ══════════════════════════════════════════════
+       Two columns of reading, then the listing across the full width. `db
+       list` prints a padded three-column row and a real one is about ninety
+       characters; in a half-width block it scrolls, and a transcript somebody
+       has to drag sideways is a transcript they do not read.
+  -->
+  <section class="border-b border-line" id="registry">
+    <div class="mx-auto max-w-[84rem] px-5 py-16 sm:px-8 sm:py-20 lg:px-12 lg:py-28">
+      <div class="grid gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,28rem)] lg:gap-14">
+        <div class="min-w-0" appReveal>
+          <p class="flex items-center gap-3 font-mono text-xs text-accent">
+            <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>03
+          </p>
+          <h2 class="mt-3 max-w-[16ch] text-3xl font-semibold sm:text-4xl">
+            Register it once. Then just use the name.
+          </h2>
+          <p class="mt-6 max-w-measure text-base text-muted">
+            Give sloop a URL or four fields, and from then on every command takes the name.
+            <code class="font-mono text-sm text-text">sloop db create</code> goes one step further
+            and makes the database <em class="italic">and</em> the role that owns it on the server,
+            with the grants that make it actually usable, then registers the result.
+            <code class="font-mono text-sm text-text">db remove</code> forgets a record and never
+            touches a server; <code class="font-mono text-sm text-text">db drop</code> destroys the
+            database and makes you type its name.
+          </p>
+          <p class="mt-4 max-w-measure text-base text-muted">
+            A registry lives in your project, the way
+            <code class="font-mono text-sm text-text">.git</code> does — sloop walks up from
+            wherever you are standing and uses the nearest one, stopping short of your home
+            directory. There is a global registry too. A name in both resolves to the project's;
+            <code class="font-mono text-sm text-text">--global</code> forces the other, and
+            <code class="font-mono text-sm text-text">global:shop</code> says so for one command.
+          </p>
+          <p class="mt-4 max-w-measure text-base text-muted">
+            <strong class="font-semibold text-text">The registry is a database, not a file.</strong>
+            sloop keeps its own state — your registrations, the service's readings, the schedules —
+            in a PostgreSQL 18 of its own, under
+            <code class="font-mono text-sm text-text">~/.sloop</code> on all three platforms,
+            needing no administrator to set up.
+            <code class="font-mono text-sm text-text">sloop server connection</code> prints how to
+            open it in <code class="font-mono text-sm text-text">psql</code> or a GUI yourself.
+          </p>
+        </div>
+
+        <div class="min-w-0" [appReveal]="120">
+          <p class="font-mono text-xs uppercase tracking-[0.14em] text-faint">
+            Which registry a bare name means
+          </p>
+          <ol class="mt-4 grid gap-px overflow-hidden rounded-xl border border-line bg-line">
+            @for (rule of resolution; track rule.flag) {
+              <li class="flex items-baseline gap-3 bg-surface px-5 py-3">
+                <span class="w-4 shrink-0 font-mono text-xs text-faint">{{ $index + 1 }}</span>
+                <span class="min-w-0">
+                  <code class="font-mono text-sm text-accent">{{ rule.flag }}</code>
+                  <span class="ml-2 text-sm text-muted">{{ rule.means }}</span>
+                </span>
+              </li>
+            }
+          </ol>
+          <p class="mt-4 max-w-measure text-sm text-faint">
+            The first one that applies wins, and every command says which registry it used and why —
+            being told <em class="italic">the global registry</em> when you never asked for it reads
+            like a bug until something explains it.
+          </p>
+        </div>
+      </div>
+
+      <div class="mt-12" [appReveal]="60">
+        <app-terminal caption="a route, never a value" [lines]="registrySnippet" />
+        <p class="mt-4 max-w-measure text-sm text-faint">
+          A registration records <em class="italic">where</em> a password comes from and never what
+          it is — which is what makes putting one there by accident impossible rather than
+          discouraged. The last line is a database whose port is closed to everything outside its
+          own server, reached through your own <code class="font-mono text-xs">ssh</code>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 04 · Backups ════════════════════════════════════════════════════ -->
+  <section class="border-b border-line" id="backups">
+    <div class="mx-auto max-w-[84rem] px-5 py-16 sm:px-8 sm:py-20 lg:px-12 lg:py-28">
+      <div appReveal>
+        <p class="flex items-center gap-3 font-mono text-xs text-accent">
+          <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>04
+        </p>
+        <h2 class="mt-3 max-w-[18ch] text-3xl font-semibold sm:text-4xl">
+          Every backup proves that it landed.
+        </h2>
+        <p class="mt-6 max-w-measure text-base text-muted">
+          A backup lands in its own UTC-stamped directory with a manifest beside it: engine version,
+          size, SHA-256, duration, per-table row counts, and both timestamps with the offset.
+          <code class="font-mono text-sm text-text">--replace</code> keeps one copy at a fixed path
+          a script can name instead.
+          <code class="font-mono text-sm text-text">backup --all</code> runs to the end and then
+          tells you which databases failed, rather than stopping at the first one.
+        </p>
+      </div>
+
+      <div class="mt-12 grid gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,36rem)] lg:gap-14">
+        <div class="min-w-0" [appReveal]="60">
+          <h3 class="text-xl font-semibold">Verification is exact, not estimated.</h3>
+          <p class="mt-4 max-w-measure text-base text-muted">
+            Every row is counted on both sides, per table, in one statement. The planner's estimate
+            has been observed reporting <strong class="font-semibold text-text">double</strong> the
+            true count, so it is available deliberately as
+            <code class="font-mono text-sm text-text">SLOOP_VERIFY=fast</code>, is always labelled
+            an estimate, and is never presented as proof.
+          </p>
+          <p class="mt-4 max-w-measure text-base text-muted">
+            A live source moves while a dump runs, and sloop says
+            <em class="italic">drift</em> in those words rather than calling it a failure. A table
+            that did not arrive at all <em class="italic">is</em> a failure, and the run exits
+            <code class="font-mono text-sm text-text">6</code> — finished, but the numbers disagree.
+          </p>
+
+          <dl class="mt-8 grid gap-px overflow-hidden rounded-xl border border-line bg-line">
+            <div class="bg-surface px-5 py-4">
+              <dt class="text-sm font-semibold">Retention is a policy, not a cron job</dt>
+              <dd class="mt-1 text-sm text-muted">
+                <code class="font-mono text-xs text-text">backups prune --keep 7</code> or
+                <code class="font-mono text-xs text-text">--older-than 30d</code>, and it shows you
+                what it is about to delete before it deletes anything.
+              </dd>
+            </div>
+            <div class="bg-surface px-5 py-4">
+              <dt class="text-sm font-semibold">One lock per database</dt>
+              <dd class="mt-1 text-sm text-muted">
+                An overrunning backup cannot race the next scheduled run. The second one exits
+                <code class="font-mono text-xs text-text">7</code> and takes nothing.
+              </dd>
+            </div>
+            <div class="bg-surface px-5 py-4">
+              <dt class="text-sm font-semibold">UTC in paths, local time everywhere you look</dt>
+              <dd class="mt-1 text-sm text-muted">
+                Directories are named
+                <code class="font-mono text-xs text-text">20260919T031500Z</code> so they sort and
+                survive a clock change. The manifest records both, plus the offset.
+              </dd>
+            </div>
+          </dl>
+        </div>
+
+        <div class="min-w-0" [appReveal]="140">
+          <app-terminal caption="a backup, then a copy proved row by row" [lines]="backupOutput" />
+          <p class="mt-4 max-w-measure text-sm text-faint">
+            <code class="font-mono text-xs">audit_log</code> gained rows between the two counts,
+            which is a live database behaving normally — so it is named as drift and the run still
+            succeeds. A table reading <code class="font-mono text-xs">—</code> on the destination
+            would not be.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 05 · The service ════════════════════════════════════════════════
+       The centrepiece, and the one section with a tint of its own: this is
+       the half of the tool the previous landing page had no word for.
+  -->
+  <section class="relative overflow-hidden border-b border-line bg-surface/50" id="service">
+    <!-- The hero's bloom again, at the other corner. The one section that is
+         allowed to look lit, because it is the one the page is built around. -->
+    <div
+      aria-hidden="true"
+      class="pointer-events-none absolute inset-0 [background:radial-gradient(64%_58%_at_14%_0%,rgb(var(--ch-brand)/0.11),transparent_72%)]"
+    ></div>
+    <div class="relative mx-auto max-w-[84rem] px-5 py-16 sm:px-8 sm:py-20 lg:px-12 lg:py-28">
+      <div appReveal>
+        <p class="flex items-center gap-3 font-mono text-xs text-accent">
+          <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>05
+        </p>
+        <h2 class="mt-3 max-w-[20ch] text-3xl font-semibold sm:text-4xl">
+          No crontab line. No Task Scheduler entry. No systemd timer.
+        </h2>
+        <p class="mt-6 max-w-measure text-base text-muted">
+          sloop registers itself with your machine's own service manager — a systemd unit on Linux,
+          a launchd daemon on macOS, a real Windows service registered with the Service Control
+          Manager — and does the work with nobody logged in. It takes the backup, applies the
+          retention policy, and prunes what falls outside it, running
+          <strong class="font-semibold text-text"
+            >the same commands you would have typed yourself</strong
+          >.
+        </p>
+      </div>
+
+      <!-- One reveal for the whole plate, not one per cell. The hairlines are
+           `gap-px` over `bg-line`, so cells arriving one at a time leave the
+           plate showing as a solid slab of border colour for half a second. -->
+      <ol
+        class="mt-12 grid gap-px overflow-hidden rounded-2xl border border-line bg-line sm:grid-cols-3"
+        appReveal
+      >
+        @for (step of steps; track step.step) {
+          <li class="bg-surface p-6 sm:p-7">
+            <p class="font-mono text-xs text-faint">{{ step.step }}</p>
+            <p class="mt-3 text-lg font-semibold">{{ step.title }}</p>
+            <!-- `whitespace-pre-wrap`, because a shell continuation is the only
+                 honest way to break a command across two lines. Left to itself
+                 the browser wraps after a hyphen and turns `--keep 7` into
+                 `--` and `keep 7`, which reads as a typo. -->
+            <p class="mt-3 whitespace-pre-wrap break-words font-mono text-xs text-accent">
+              {{ step.command }}
+            </p>
+            <p class="mt-3 text-sm text-muted">{{ step.line }}</p>
+          </li>
+        }
+      </ol>
+
+      <div class="mt-12 grid gap-10 lg:grid-cols-[minmax(0,40rem)_minmax(0,1fr)] lg:gap-14">
+        <div class="min-w-0" [appReveal]="60">
+          <app-terminal caption="what they have been doing" [lines]="activityOutput" />
+        </div>
+
+        <div class="min-w-0" [appReveal]="140">
+          <h3 class="text-xl font-semibold">And it tells you what it cannot measure.</h3>
+          <p class="mt-4 max-w-measure text-base text-muted">
+            An attached database is sampled every minute, rolled up by the hour, and kept in UTC —
+            so a day, a week, a month and a year are all a sum over a range, with no rollup tables
+            to keep in step and nothing to backfill. Rows in, rows out and size are what the
+            engine's own counters say. <code class="font-mono text-sm text-text">Moved</code> is
+            real bytes, because sloop read or wrote them itself during a dump or a restore.
+          </p>
+          <p class="mt-4 max-w-measure text-base text-muted">
+            <strong class="font-semibold text-text"
+              >Bytes on the wire are not available per database on any of these three
+              engines</strong
+            >, so sloop says that in those words rather than drawing a number it cannot stand
+            behind. A period with no readings in it is shown as having none, never as a zero — an
+            idle database and an unwatched one are different facts.
+          </p>
+          <p class="mt-4 max-w-measure text-base text-muted">
+            A missed run — a laptop asleep at 03:00 — is caught up
+            <em class="italic">once</em> and labelled late, not a hundred and sixty-eight times. A
+            collision with a backup you started by hand exits
+            <code class="font-mono text-sm text-text">7</code> and stands aside, because the backup
+            somebody is already taking is the backup.
+            <code class="font-mono text-sm text-text">sloop service status</code> says when each
+            database last ran and when it runs next, so a schedule that has quietly stopped is
+            visible without waiting for the backup nobody took.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 06 · Copying ════════════════════════════════════════════════════
+       Two panels sharing one hairline seam, because the whole point of this
+       section is that these are two halves of one decision and people pick
+       the wrong one.
+  -->
+  <section class="border-b border-line" id="copying">
+    <div class="mx-auto max-w-[84rem] px-5 py-16 sm:px-8 sm:py-20 lg:px-12 lg:py-28">
+      <div appReveal>
+        <p class="flex items-center gap-3 font-mono text-xs text-accent">
+          <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>06
+        </p>
+        <h2 class="mt-3 max-w-[20ch] text-3xl font-semibold sm:text-4xl">
+          <code class="font-mono text-[0.92em] text-accent">mirror</code> and
+          <code class="font-mono text-[0.92em] text-accent">sync</code> are different commands.
+        </h2>
+        <p class="mt-6 max-w-measure text-base text-muted">
+          They are the two people confuse, so here is the difference before anything else. Both are
+          same-engine only: PostgreSQL into MySQL is refused rather than attempted, because the type
+          systems do not map cleanly and a silent corruption is worse than a refusal. And
+          <strong class="font-semibold text-text">the source of a copy is only ever read</strong> —
+          no statement written against it changes anything, not even
+          <code class="font-mono text-sm text-text">ANALYZE</code>.
+        </p>
+      </div>
+
+      <div
+        class="relative mt-12 grid gap-px overflow-hidden rounded-2xl border border-line bg-line lg:grid-cols-2"
+        [appReveal]="60"
+      >
+        <!-- On the seam, because the seam is the argument: one plate, split
+             once, and the two halves are not interchangeable. It sits out at
+             two columns and is hidden at one, where the panels are stacked
+             and a marker between them would read as a bullet. -->
+        <span
+          aria-hidden="true"
+          class="absolute left-1/2 top-1/2 z-10 hidden h-9 w-9 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-line bg-bg font-mono text-sm text-faint lg:grid"
+          >≠</span
+        >
+
+        <div class="bg-surface p-6 sm:p-8">
+          <p class="font-mono text-sm font-semibold text-accent">sloop mirror shop --to staging</p>
+          <p class="mt-4 text-xl font-semibold">An exact copy.</p>
+          <p class="mt-3 max-w-measure text-sm text-muted">
+            The destination ends up identical to the source. Anything that existed only there is
+            <strong class="font-semibold text-text">gone</strong> afterwards — that is what
+            <em class="italic">exact</em> means, and it is the whole difference from the other one.
+            Dump and restore, streamed straight through, so no file is left behind;
+            <code class="font-mono text-xs text-text">--safe</code> keeps a temporary dump only
+            until verification passes.
+          </p>
+          <ul class="mt-4 space-y-2 text-sm text-muted">
+            <li class="flex gap-2.5">
+              <span class="mt-2 h-1 w-1 shrink-0 rounded-full bg-accent" aria-hidden="true"></span>
+              <span
+                >The destination's whole shape is replaced — its indexes and constraints come from
+                the source.</span
+              >
+            </li>
+            <li class="flex gap-2.5">
+              <span class="mt-2 h-1 w-1 shrink-0 rounded-full bg-accent" aria-hidden="true"></span>
+              <span
+                >The destination database itself, its owner and its credentials are never
+                touched.</span
+              >
+            </li>
+            <li class="flex gap-2.5">
+              <span class="mt-2 h-1 w-1 shrink-0 rounded-full bg-bad" aria-hidden="true"></span>
+              <span
+                >Copying a database onto <strong class="font-semibold text-text">itself</strong> is
+                refused — host, port and database are compared together.</span
+              >
+            </li>
+          </ul>
+        </div>
+
+        <div class="bg-surface p-6 sm:p-8">
+          <p class="font-mono text-sm font-semibold text-accent">sloop sync shop --to warehouse</p>
+          <p class="mt-4 text-xl font-semibold">A merge.</p>
+          <p class="mt-3 max-w-measure text-sm text-muted">
+            Rows are added, rows already there are replaced, and rows only the destination had are
+            <strong class="font-semibold text-text">kept</strong>.
+            <code class="font-mono text-xs text-text">COPY</code> into temporary tables, then upsert
+            in foreign-key order from a topological sort.
+          </p>
+          <ul class="mt-4 space-y-2 text-sm text-muted">
+            <li class="flex gap-2.5">
+              <span class="mt-2 h-1 w-1 shrink-0 rounded-full bg-accent" aria-hidden="true"></span>
+              <span>A table with no primary key is skipped, and named. It is not guessed at.</span>
+            </li>
+            <li class="flex gap-2.5">
+              <span class="mt-2 h-1 w-1 shrink-0 rounded-full bg-accent" aria-hidden="true"></span>
+              <span
+                >Sequences and identity columns are reset afterwards, so the next insert
+                lands.</span
+              >
+            </li>
+            <li class="flex gap-2.5">
+              <span class="mt-2 h-1 w-1 shrink-0 rounded-full bg-accent" aria-hidden="true"></span>
+              <span
+                >Rows deleted in the source will linger in the destination, and you are told
+                which.</span
+              >
+            </li>
+            <li class="flex gap-2.5">
+              <span class="mt-2 h-1 w-1 shrink-0 rounded-full bg-bad" aria-hidden="true"></span>
+              <span
+                >A circular foreign key is <strong class="font-semibold text-text">refused</strong>,
+                with the tables in the cycle named.</span
+              >
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <p class="mt-6 max-w-measure text-sm text-faint" [appReveal]="140">
+        Either one can make its destination first —
+        <code class="font-mono text-xs">--create</code> builds the database and the role that owns
+        it, then copies into it. Either can be scoped to some tables with a repeatable
+        <code class="font-mono text-xs">--table</code>, and
+        <code class="font-mono text-xs">--with-references</code> pulls in the tables those point at
+        rather than refusing a child named without its parents.
+      </p>
+    </div>
+  </section>
+
+  <!-- ═══ 07 · Reading ════════════════════════════════════════════════════ -->
+  <section class="border-b border-line" id="reading">
+    <div
+      class="mx-auto grid max-w-[84rem] gap-10 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-[minmax(0,1fr)_minmax(0,36rem)] lg:gap-14 lg:px-12 lg:py-28"
+    >
+      <div class="min-w-0" appReveal>
+        <p class="flex items-center gap-3 font-mono text-xs text-accent">
+          <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>07
+        </p>
+        <h2 class="mt-3 max-w-[16ch] text-3xl font-semibold sm:text-4xl">
+          Read a database without writing SQL.
+        </h2>
+        <p class="mt-6 max-w-measure text-base text-muted">
+          Pick a table, tick the columns, choose the test — everything comes off a list and the only
+          thing you type is the value you are looking for. Joins are offered from the foreign keys a
+          table actually has, in both directions, because a key that answers
+          <em class="italic">who placed this order</em> from one side answers
+          <em class="italic">and their orders</em> from the other. Results open in a grid you can
+          scroll, two hundred rows at a time.
+        </p>
+        <p class="mt-4 max-w-measure text-base text-muted">
+          <strong class="font-semibold text-text"
+            >Read-only is the server's guarantee, not a list of forbidden words.</strong
+          >
+          Everything it runs — including a statement you hand it with
+          <code class="font-mono text-sm text-text">--sql</code> — runs inside a transaction the
+          engine has been told is read-only. An
+          <code class="font-mono text-sm text-text">UPDATE</code> comes back
+          <code class="font-mono text-sm text-text"
+            >cannot execute UPDATE in a read-only transaction</code
+          >, and so does a data-modifying CTE that begins with the word
+          <code class="font-mono text-sm text-text">WITH</code> — which is the case any keyword
+          blacklist misses.
         </p>
       </div>
 
       <div class="min-w-0" [appReveal]="120">
-        <div>
-          <app-terminal caption="a backup, and what it says it did" [lines]="backupOutput" />
-        </div>
+        <app-terminal caption="the flag form, for a script" [lines]="querySnippet" />
         <p class="mt-4 max-w-measure text-sm text-faint">
-          Directory names are UTC so they sort correctly and survive daylight saving. Every line a
-          person reads is in local time, with the offset, and the manifest records both.
+          Building a query is a screen of questions, so with no terminal to ask at it exits
+          <code class="font-mono text-xs">2</code> naming
+          <code class="font-mono text-xs">--sql</code> — which is the rule every command in this
+          tool follows.
         </p>
       </div>
     </div>
   </section>
 
-  <!-- ═══ Credentials ═════════════════════════════════════════════════════ -->
+  <!-- ═══ 08 · Secrets ════════════════════════════════════════════════════ -->
   <section class="border-b border-line" id="credentials">
     <div class="mx-auto max-w-[84rem] px-5 py-16 sm:px-8 sm:py-20 lg:px-12 lg:py-28">
       <div appReveal>
-        <p class="font-mono text-xs text-accent">04</p>
+        <p class="flex items-center gap-3 font-mono text-xs text-accent">
+          <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>08
+        </p>
         <h2 class="mt-3 max-w-[18ch] text-3xl font-semibold sm:text-4xl">
           Four ways to hold a password. None of them is a file.
         </h2>
         <p class="mt-6 max-w-measure text-base text-muted">
           No plaintext password is written anywhere — not to a config file, not to a log, not into a
-          dump's filename, and not into <code class="font-mono text-sm text-text">ps</code>
-          output. Which route you get depends on the machine you are on.
+          dump's filename, and not into <code class="font-mono text-sm text-text">ps</code> output.
+          Nothing is ever passed in <code class="font-mono text-sm text-text">argv</code>; a secret
+          reaches a child process down a pipe or through that one child's environment, never wider.
+          Which route you get depends on the machine you are on.
         </p>
       </div>
 
@@ -363,8 +901,8 @@
             <p class="font-mono text-xs uppercase tracking-[0.14em] text-faint">Automation</p>
             <p class="mt-2 text-base font-semibold">An environment variable</p>
             <p class="mt-2 text-sm text-muted">
-              <code class="font-mono text-xs text-text">&#36;&#123;DB_PASSWORD&#125;</code> is
-              interpolated at read time, so the registry holds the name and never the value.
+              <code class="font-mono text-xs text-text">&#36;&#123;DB_PASSWORD&#125;</code> is read
+              at run time, so the registry holds the name and never the value.
             </p>
           </li>
           <li
@@ -386,7 +924,7 @@
           <p class="mt-3 text-lg font-semibold">The asymmetry is the point.</p>
           <p class="mt-3 max-w-measure text-sm text-muted">
             Backups are encrypted to an <code class="font-mono text-xs text-text">age</code> public
-            key that sits in the config, so a scheduled backup at three in the morning needs no
+            key that sits in the registry, so a scheduled backup at three in the morning needs no
             secret to unlock. The private key lives in the keyring, and only a restore ever asks for
             it.
           </p>
@@ -397,18 +935,50 @@
           </p>
         </div>
       </div>
+
+      <div
+        class="mt-10 rounded-xl border border-line bg-surface p-6 sm:p-7 lg:mt-12"
+        [appReveal]="60"
+      >
+        <p class="font-mono text-xs uppercase tracking-[0.14em] text-faint">Over SSH</p>
+        <p class="mt-3 text-lg font-semibold">
+          sloop runs your <code class="font-mono text-[0.92em] text-accent">ssh</code>, rather than
+          shipping one.
+        </p>
+        <div class="mt-3 grid gap-4 text-sm text-muted lg:grid-cols-2 lg:gap-10">
+          <p class="max-w-measure">
+            A database with no public address, or with its port closed to everything outside its own
+            server, is reached through a local port forward sloop opens with the
+            <code class="font-mono text-xs text-text">ssh</code> already on your machine. Your
+            <code class="font-mono text-xs text-text">~/.ssh/config</code>, your
+            <code class="font-mono text-xs text-text">ProxyJump</code> through a bastion, your
+            agent, your hardware key and your
+            <code class="font-mono text-xs text-text">known_hosts</code> all work, because none of
+            them has been reimplemented.
+          </p>
+          <p class="max-w-measure">
+            One authentication per session, not one per command: ten operations in one menu session
+            ask once, and every forward closes when the session ends. And it is the same reason the
+            downloads shell out to <code class="font-mono text-xs text-text">curl</code> — an
+            embedded SSH client could open a socket to anywhere, and the promise at the top of this
+            page would stop being true while the check that guards it still passed.
+          </p>
+        </div>
+      </div>
     </div>
   </section>
 
-  <!-- ═══ Automation ══════════════════════════════════════════════════════ -->
+  <!-- ═══ 09 · Automation ═════════════════════════════════════════════════ -->
   <section class="border-b border-line" id="automation">
     <div
       class="mx-auto grid max-w-[84rem] gap-10 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-[minmax(0,1fr)_minmax(0,30rem)] lg:gap-14 lg:px-12 lg:py-28"
     >
       <div class="min-w-0" appReveal>
-        <p class="font-mono text-xs text-accent">05</p>
+        <p class="flex items-center gap-3 font-mono text-xs text-accent">
+          <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>09
+        </p>
         <h2 class="mt-3 max-w-[18ch] text-3xl font-semibold sm:text-4xl">
-          Written to be run by a scheduler at 3am.
+          Built to be run by something that is not a person.
         </h2>
         <p class="mt-6 max-w-measure text-base text-muted">
           It never asks a question it cannot ask. When standard input is not a terminal and
@@ -417,9 +987,25 @@
           could have.
         </p>
         <p class="mt-4 max-w-measure text-base text-muted">
-          One lockfile per database, so an overrunning backup cannot race the next scheduled run.
-          Every interactive session ends by printing the flag equivalent of what you just did, so a
-          thing you worked out by hand becomes a line you can paste into a crontab.
+          <code class="font-mono text-sm text-text">--yes</code>,
+          <code class="font-mono text-sm text-text">--force</code> and
+          <code class="font-mono text-sm text-text">--confirm</code> are three different things and
+          none stands in for another. <code class="font-mono text-sm text-text">--yes</code> answers
+          questions. <code class="font-mono text-sm text-text">--force</code> overrides a refusal
+          and answers none. <code class="font-mono text-sm text-text">--confirm shop</code> is the
+          only way to run a destructive command with no terminal, and it has to match exactly — so a
+          scheduled line names what it destroys and cannot be repointed at something else by editing
+          one flag.
+        </p>
+        <p class="mt-4 max-w-measure text-base text-muted">
+          <code class="font-mono text-sm text-text">--json</code> prints one document as the whole
+          of standard output, so it parses.
+          <code class="font-mono text-sm text-text">--dry-run</code>
+          is a real rehearsal: every command does all the reading and all the checking, then stops
+          at the point where it would write.
+          <code class="font-mono text-sm text-text">--log-file</code> writes what the run printed
+          with anything that reads like a credential taken out, so a sloop log can be pasted into a
+          public issue.
         </p>
       </div>
 
@@ -427,10 +1013,17 @@
         <p class="font-mono text-xs uppercase tracking-[0.14em] text-faint">
           Exit codes, frozen at 1.0
         </p>
+        <!-- The number carries the colour the CLI would have printed the run
+             in: green finished, amber finished-but, red did not. It is the
+             one place on this page where a colour is information rather than
+             decoration, so it comes from --ch-ok/warn/bad and not the accent. -->
         <dl class="mt-4 divide-y divide-line rounded-xl border border-line bg-surface">
           @for (exit of exitCodes; track exit.code) {
-            <div class="flex items-baseline gap-4 px-5 py-3">
-              <dt class="w-5 shrink-0 font-mono text-sm font-semibold text-accent">
+            <div class="flex items-center gap-4 px-5 py-2.5">
+              <dt
+                class="grid h-7 w-7 shrink-0 place-items-center rounded-md border font-mono text-sm font-semibold"
+                [class]="toneClass[exit.tone]"
+              >
                 {{ exit.code }}
               </dt>
               <dd class="text-sm text-muted">{{ exit.meaning }}</dd>
@@ -439,46 +1032,66 @@
         </dl>
         <p class="mt-4 max-w-measure text-sm text-faint">
           Adding one is fine. Changing one is a breaking release — something is parsing these.
+          <code class="font-mono text-xs">6</code> is the one worth wiring up: finished, but not
+          verified, is neither success nor a crash.
         </p>
       </div>
     </div>
   </section>
 
-  <!-- ═══ Roadmap ═════════════════════════════════════════════════════════ -->
+  <!-- ═══ 10 · Roadmap ════════════════════════════════════════════════════ -->
   <section class="border-b border-line" id="roadmap">
     <div class="mx-auto max-w-[84rem] px-5 py-16 sm:px-8 sm:py-20 lg:px-12 lg:py-28">
       <div appReveal>
-        <p class="font-mono text-xs text-accent">06</p>
+        <p class="flex items-center gap-3 font-mono text-xs text-accent">
+          <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>10
+        </p>
         <h2 class="mt-3 max-w-[16ch] text-3xl font-semibold sm:text-4xl">Planned</h2>
         <p class="mt-6 max-w-measure text-base text-muted">
-          Three things that are not built. They are here so you know where this is going, with no
+          Four things that are not built. They are here so you know where this is going, with no
           date attached to any of them.
         </p>
       </div>
 
-      <ul class="mt-12 grid gap-4 sm:grid-cols-3">
+      <ul class="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <li class="rounded-xl border border-dashed border-line p-6" [appReveal]="0">
           <p class="font-mono text-xs uppercase tracking-[0.14em] text-faint">Planned</p>
-          <p class="mt-3 text-lg font-semibold text-muted">Running queries</p>
+          <p class="mt-3 text-lg font-semibold text-muted">Writing and saving queries</p>
           <p class="mt-2 text-sm text-faint">
-            A registered connection you can ask a question, without a second tool for it.
+            Beyond the read-only builder that <code class="font-mono text-xs">sloop query</code> is
+            today.
           </p>
         </li>
         <li class="rounded-xl border border-dashed border-line p-6" [appReveal]="70">
           <p class="font-mono text-xs uppercase tracking-[0.14em] text-faint">Planned</p>
           <p class="mt-3 text-lg font-semibold text-muted">Schema changes</p>
           <p class="mt-2 text-sm text-faint">
-            DDL against a registered database, with the same typed confirmation as a drop.
+            Creating and altering tables from sloop, with the same typed confirmation as a drop.
           </p>
         </li>
         <li class="rounded-xl border border-dashed border-line p-6" [appReveal]="140">
           <p class="font-mono text-xs uppercase tracking-[0.14em] text-faint">Planned</p>
-          <p class="mt-3 text-lg font-semibold text-muted">Editing rows</p>
+          <p class="mt-3 text-lg font-semibold text-muted">Editing rows in place</p>
           <p class="mt-2 text-sm text-faint">
-            Finding and changing a row in place, for the times a dump is far too big a hammer.
+            Finding and changing a row, for the times a dump is far too big a hammer.
+          </p>
+        </li>
+        <li class="rounded-xl border border-dashed border-line p-6" [appReveal]="210">
+          <p class="font-mono text-xs uppercase tracking-[0.14em] text-faint">Planned</p>
+          <p class="mt-3 text-lg font-semibold text-muted">A local interface</p>
+          <p class="mt-2 text-sm text-faint">
+            One that reads sloop's own PostgreSQL the way the CLI does. It would not be served by
+            the service — that would need a port, and there is not going to be one.
           </p>
         </li>
       </ul>
+
+      <p class="mt-8 max-w-measure text-sm text-faint" [appReveal]="140">
+        <strong class="font-semibold text-muted">Cross-engine copying is not on this list.</strong>
+        PostgreSQL to MySQL has been worked through against real servers of both and is on hold:
+        copying is same-engine, the other direction is refused rather than attempted, and nothing
+        here promises otherwise.
+      </p>
     </div>
   </section>
 
@@ -492,13 +1105,16 @@
         </div>
         <p class="mt-4 max-w-measure text-sm text-muted">
           A database operations CLI. PostgreSQL, MySQL and MariaDB are the engines it speaks today;
-          more will follow. MIT or Apache-2.0.
+          more will follow. Windows, Linux and macOS, on x86-64 and aarch64. MIT or Apache-2.0.
         </p>
       </div>
 
       <nav class="flex flex-wrap items-center gap-x-6 gap-y-3 text-sm" aria-label="Footer">
         <a routerLink="/docs" class="text-muted transition-colors duration-2 hover:text-text"
           >Docs</a
+        >
+        <a href="#service" class="text-muted transition-colors duration-2 hover:text-text"
+          >The service</a
         >
         <a href="#roadmap" class="text-muted transition-colors duration-2 hover:text-text"
           >Roadmap</a

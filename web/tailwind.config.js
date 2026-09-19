@@ -45,6 +45,10 @@ module.exports = {
 
         scrim: channel('scrim'),
 
+        'light-close': channel('light-close'),
+        'light-min': channel('light-min'),
+        'light-zoom': channel('light-zoom'),
+
         'term-bg': channel('term-bg'),
         'term-line': channel('term-line'),
         'term-text': channel('term-text'),
@@ -107,6 +111,21 @@ module.exports = {
         out: 'var(--ease-out)',
         'in-out': 'var(--ease-in-out)',
         spring: 'var(--ease-spring)',
+      },
+
+      // The one animation on the site, and it is a cursor rather than an
+      // effect: `steps(1)` so it snaps on and off the way a terminal's does
+      // instead of breathing. It is only ever mounted while a block is being
+      // played, and a block only plays when `prefers-reduced-motion` is not
+      // set — so the kill switch in tokens.css never has to reach it.
+      keyframes: {
+        blink: {
+          '0%, 48%': { opacity: '1' },
+          '49%, 100%': { opacity: '0' },
+        },
+      },
+      animation: {
+        blink: 'blink 1.06s steps(1) infinite',
       },
     },
   },

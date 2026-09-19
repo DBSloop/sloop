@@ -88,6 +88,14 @@
   --ch-brand: 217 119 87;
   --ch-brand-ink: 32 20 14; /* 5.8:1 on the brand fill, in either theme */
 
+  /* The three lights on a window's title bar, at the values macOS actually
+     uses. They are a quotation, so they are not re-tinted per theme and they
+     are not the palette's own ok/warn/bad - those three carry meaning inside
+     the terminal and these three are chrome. */
+  --ch-light-close: 255 95 87;
+  --ch-light-min: 254 188 46;
+  --ch-light-zoom: 40 200 64;
+
   /* A terminal is dark. Keeping these out of the theme switch is the point:
      a CLI block on the light site still looks like a terminal rather than a
      grey box, and the orange inside it is the orange the real CLI prints. */
