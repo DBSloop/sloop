@@ -26,7 +26,7 @@ use crate::service::mechanism::{Mechanism, State};
 use crate::service::schedule;
 use crate::service::unit::Definition;
 use crate::service::watch::{self, Attached, Attachment};
-use crate::service::{credentials, daemon, key, manage};
+use crate::service::{credentials, daemon, elevation, key, manage};
 use crate::style;
 
 /// Run one of them.
@@ -82,16 +82,35 @@ pub fn run(locations: &Locations, command: &ServiceCommand) -> Outcome<Exit> {
             no_start,
             user,
             interval,
-        } => install(locations, mechanism, *no_start, user.as_deref(), *interval),
-        ServiceCommand::Uninstall => Ok(uninstall(locations, mechanism)),
+        } => {
+            // **Asked before anything is done, not discovered halfway through.** Installing
+            // writes a key file under `%ProgramData%` or `/etc` and copies credentials into
+            // it *before* it reaches the service manager, so an un-elevated run used to
+            // print two lines about installing and then fail on a path nobody typed —
+            // having already made a directory that was not there, holding a key file it
+            // could no longer read back.
+            elevation::require(mechanism)?;
+            install(locations, mechanism, *no_start, user.as_deref(), *interval)
+        }
+        ServiceCommand::Uninstall => {
+            // **After the state, not before it.** Asking somebody to find an administrator
+            // and then telling them there was nothing to remove is two wasted trips. What
+            // is installed is readable by anyone; changing it is not.
+            if manage::state(mechanism).installed() {
+                elevation::require(mechanism)?;
+            }
+            Ok(uninstall(locations, mechanism))
+        }
         ServiceCommand::Start => {
             already(mechanism, true)?;
+            elevation::require(mechanism)?;
             manage::start(mechanism)?;
             crate::say!("{} {}", style::heading("Started."), settle(mechanism));
             Ok(Exit::Success)
         }
         ServiceCommand::Stop => {
             already(mechanism, true)?;
+            elevation::require(mechanism)?;
             manage::stop(mechanism)?;
             crate::say!(
                 "{} {}",

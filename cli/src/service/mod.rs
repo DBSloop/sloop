@@ -32,6 +32,7 @@
 pub mod activity;
 pub mod credentials;
 pub mod daemon;
+pub mod elevation;
 pub mod key;
 pub mod manage;
 pub mod mechanism;
