@@ -3,6 +3,7 @@ import { Routes } from '@angular/router';
 
 import { Docs } from './docs';
 import { DOCS_PAGES } from './nav';
+import { GettingStarted } from './getting-started/getting-started';
 import { Install } from './install/install';
 import { Overview } from './overview/overview';
 import { Pending } from './pending';
@@ -16,6 +17,7 @@ import { Pending } from './pending';
  */
 const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   install: Install,
+  'getting-started': GettingStarted,
 };
 
 /**

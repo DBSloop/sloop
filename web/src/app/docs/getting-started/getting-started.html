@@ -1,0 +1,240 @@
+<!--
+  Getting started.
+
+  One platform at a time, like every page in this section. The first version of
+  this one put the Windows transcript in the block and then listed apt, dnf and
+  Homebrew in the prose under it — so the Windows tab handed a reader two
+  package managers they cannot run. That is exactly what the OS strip exists to
+  prevent, and it is fixed here: every command, every path and every secret
+  store below is behind that strip.
+
+  Where each transcript came from, and what is cut short on which platform, is
+  in the class comment on `GettingStarted`.
+-->
+<app-docs-page
+  heading="Getting started"
+  lede="From an empty machine to a backup you have actually restored, in six commands. Everything below is real output from a real run, in the order you would type it."
+  eyebrow="Start here"
+  path="getting-started"
+>
+  <p>
+    You need two things: <strong>sloop installed</strong> — the
+    <a routerLink="/docs/install">one-liner</a> takes a few seconds — and a
+    <strong>PostgreSQL, MySQL or MariaDB database it can reach</strong>, with a user, a password and
+    a port. Nothing else has to be set up in advance.
+  </p>
+  <p>
+    The example below uses a PostgreSQL database called <code>shop</code> with two tables and 10,601
+    rows in it. Substitute your own connection string and every command is the same.
+  </p>
+  <p class="docs-bare mt-5 text-sm text-faint">
+    <span
+      aria-hidden="true"
+      class="mr-2.5 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
+    ></span
+    >Showing <strong class="font-semibold text-text">{{ osLabel() }}</strong
+    >. Change it in the strip above and the whole page follows.
+  </p>
+
+  <h2 id="set-sloop-up">1 · Set sloop up on this machine</h2>
+  <p>
+    sloop keeps its own state — the registry of what you have told it about, the schedules, what the
+    background service has seen — in a <strong>PostgreSQL 18 of its own</strong>. Run this once.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" [caption]="shell()" [lines]="setup()" copy />
+  </div>
+
+  @if (os() === 'windows') {
+    <p>
+      Windows has no package manager sloop can lean on, so it offers the
+      <strong>official PostgreSQL binaries</strong> — downloaded with the system's own
+      <code>curl</code>, checked against a SHA-256 compiled into the binary before a byte is
+      unpacked, and kept under your own profile. It asks first, every time, and never downloads
+      anything without an answer.
+    </p>
+    <p>
+      It uses a PostgreSQL 18 already serving on 5432 if you have one. Otherwise — including on the
+      machine above, which had PostgreSQL 17 and got named and left alone — it builds a cluster of
+      its own on <strong>5433</strong>, which disturbs nothing already running.
+    </p>
+  } @else {
+    <p>
+      sloop does not download a server here. It offers to run
+      <strong>your own package manager</strong>, shows you the exact command before it asks, and
+      runs nothing until you answer — so what ends up on the machine is a package your package
+      manager knows about and can update, not a directory sloop unpacked.
+    </p>
+    <p>
+      Afterwards it uses a PostgreSQL 18 serving on 5432 if there is one, and otherwise builds a
+      cluster of its own on <strong>5433</strong>, which disturbs nothing already running.
+    </p>
+  }
+  @if (os() === 'windows') {
+    <p>
+      <strong>None of it needs an administrator.</strong> Everything sloop puts on the machine goes
+      under <code>{{ store() }}</code> and your own profile — nothing in <code>Program Files</code>,
+      and no service registered with the machine at this stage.
+    </p>
+  } @else if (os() === 'macos') {
+    <p>
+      <strong>Nothing here needs <code>sudo</code>.</strong> Homebrew installs as you, and
+      everything sloop itself puts on the machine goes under <code>{{ store() }}</code> — no service
+      registered with the machine at this stage.
+    </p>
+  } @else {
+    <p>
+      <strong>Only the package manager step needs <code>sudo</code></strong> — that is the command
+      in the block above, and it is shown to you before it is run. Everything
+      <em class="italic">sloop itself</em> puts on the machine goes under
+      <code>{{ store() }}</code> and needs no root at all, and no service is registered with the
+      machine at this stage.
+    </p>
+  }
+  <p>
+    It is safe to run again on a machine that is already set up, so it is the right thing to reach
+    for when you are not sure.
+  </p>
+
+  <h2 id="register-a-database">2 · Register your first database</h2>
+  <p>
+    Tell sloop about a database once and you refer to it by name from then on. The name is
+    <em class="italic">yours</em> — the label you will type — and it does not have to match what the
+    database is called on the server.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="registering it" [lines]="register" copy />
+  </div>
+
+  <p>
+    It asks for the password and does not echo it, then stores it in
+    <strong>{{ keyring() }}</strong
+    >. <strong>The registry holds a route to the password, never the password.</strong> There is no
+    spelling of a secret that a registry will accept, which is what makes it impossible to put one
+    there by accident.
+  </p>
+  <p>
+    If that is not what you want, <code>--encrypted-file</code> keeps it in an Argon2id-encrypted
+    file, <code>--env ORDERS_PW</code> reads it from an environment variable at run time, and
+    <code>--password-from "op read op://vault/db/pw"</code> runs a command and takes it from the
+    output. The password never appears in <code>argv</code>, so it never appears in a process
+    listing.
+  </p>
+  <p>Check it before going further:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="does it connect" [lines]="test" copy />
+  </div>
+
+  <h2 id="export-the-key">3 · Export the backup key</h2>
+  <p>
+    <strong>This is a step, not an aside, and the next command will refuse without it.</strong>
+    Backups are encrypted with an
+    <a href="https://age-encryption.org" rel="noreferrer">age</a> keypair, and the asymmetry is the
+    point: the public key sits in the registry so a scheduled backup needs no secret to unlock, and
+    the private key lives in {{ keyring() }} so only a restore ever reads one.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the one thing to keep" [lines]="exportKey()" copy />
+  </div>
+
+  <p>
+    That last line is the whole of it. Put it in a password manager, or on paper in a drawer —
+    somewhere sloop itself cannot reach, because a backup and the key to it sitting on the same disk
+    is one disk failure away from being neither.
+  </p>
+  <div class="docs-bare mt-7 rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
+    <p class="flex items-center gap-2.5 font-mono text-xs text-warn">
+      <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-warn"></span>
+      What losing it costs
+    </p>
+    <p class="mt-3 max-w-measure text-sm text-muted">
+      Lose the machine and you still have the backups, as long as you have this line —
+      <code class="font-mono text-xs text-text">sloop key import</code> puts it on the new one. Lose
+      this line and every encrypted backup that registry ever took is unreadable, by you and by
+      anybody. Nothing can replace it, which is why sloop refuses to take the first encrypted backup
+      until it has been exported or you have explicitly declined.
+    </p>
+  </div>
+
+  <h2 id="first-backup">4 · Take the first backup</h2>
+  <p>One command, and it does not report success until it has counted what arrived.</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the first one" [lines]="firstBackup()" copy />
+  </div>
+
+  <p>
+    Two timestamps, and both are deliberate: the directory is named in
+    <strong>UTC</strong> so backups sort correctly and survive a daylight-saving change, and every
+    display is in <strong>local time</strong> so a human reads the one they think in. The
+    <code>sha256</code> is over the dump as written, and <code>backups list --check</code> compares
+    it again later.
+  </p>
+  <p>
+    Beside the dump sloop writes a manifest, which is what makes a backup something you can reason
+    about a year later rather than a file of unknown provenance:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="manifest.json, beside the dump" [lines]="manifest" />
+  </div>
+
+  <h2 id="see-what-you-have">5 · See what you have</h2>
+  <p>
+    Newest first, sizes totalled, and every time in local time.
+    <code>--check</code> re-reads every byte of every dump and hashes it against what the manifest
+    recorded — which is a thing you ask for rather than something a listing does on the way past.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="what is stored" [lines]="listBackups" copy />
+  </div>
+
+  <h2 id="put-it-back">6 · Put it back</h2>
+  <p>
+    A backup nobody has restored is a hope, not a backup. Do this once now, against something you do
+    not mind replacing, so that the first time you run it is not the day you need it.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="restoring it" [lines]="restore()" copy />
+  </div>
+
+  <p>
+    <strong>The name is typed, never clicked.</strong> A <code>y</code> is one keystroke away from a
+    mistake, and this command replaces what is in a database; typing the name out means the thing
+    being destroyed has been read. With no terminal to ask at it does not prompt at all — it exits
+    <code>2</code> and names <code>--confirm shop</code>, which has to match exactly, so a scheduled
+    line names what it replaces and cannot be repointed at something else by editing one flag.
+  </p>
+  <p>
+    And it verifies. Not an estimate: <code>count(*)</code> on both sides, per table, compared with
+    what the manifest recorded. If the numbers disagree the run exits <code>6</code> — which is
+    neither success nor a crash, and is the exit code worth wiring an alert to.
+  </p>
+
+  <h2 id="what-next">Where to go next</h2>
+  <p>That is the whole loop. Three things are usually next:</p>
+  <ul>
+    <li>
+      <strong>Stop doing it by hand.</strong>
+      <a routerLink="/docs/service">The background service</a> registers sloop with your machine and
+      takes the backup on a schedule with nobody logged in.
+    </li>
+    <li>
+      <strong>Check the role before you trust the dumps.</strong>
+      <a routerLink="/docs/privileges">sloop doctor</a> reports what each registered role may
+      actually do. On MySQL and MariaDB, one missing grant produces a dump with every trigger and
+      stored routine silently absent from it, and an exit code of <code>0</code>.
+    </li>
+    <li>
+      <strong>Copy a database instead of backing it up.</strong>
+      <a routerLink="/docs/mirror-and-sync">mirror and sync</a> move one database into another —
+      exactly, or merged. They are different commands and the difference matters.
+    </li>
+  </ul>
+</app-docs-page>

@@ -81,6 +81,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         path: 'getting-started',
         documentTitle: 'Getting started — your first verified PostgreSQL backup',
         title: 'Getting started',
+        written: true,
         blurb: 'From an empty machine to a verified backup you can restore, in six commands.',
         covers: [
           'sloop setup: finding or installing the PostgreSQL that sloop keeps its own state in.',
