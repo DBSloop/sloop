@@ -1,0 +1,438 @@
+<!--
+  Automation.
+
+  The page for somebody wiring sloop into something that is not a person. It
+  leads with sloop's own service, because that is the answer for most people
+  now, and only then offers cron, a systemd timer and Task Scheduler behind the
+  OS strip for anyone who wants their existing scheduler to drive it.
+
+  Every transcript is a real run, including all six failures. The class comment
+  on `Automation` names how they were made and the two substitutions.
+-->
+<app-docs-page
+  heading="Automation"
+  lede="Running sloop from something that is not a person — and the rule that makes it safe to: with no terminal to ask at, it never asks."
+  eyebrow="Reference"
+  path="automation"
+>
+  <p>
+    An unattended run has nobody to answer a question, nobody to read a warning, and nobody to
+    notice that it stopped. So the design starts from the worst thing that can happen —
+    <strong>a scheduled run hanging on a prompt nobody will ever see</strong> — and works
+    backwards from there.
+  </p>
+
+  <div class="docs-bare mt-7 rounded-xl border border-accent/25 bg-accent-soft p-5 sm:p-6">
+    <p class="flex items-center gap-2.5 font-mono text-xs text-accent">
+      <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-accent"></span>
+      The rule everything else follows from
+    </p>
+    <p class="mt-3 max-w-measure text-base text-text">
+      When standard input is not a terminal, <strong>sloop never prompts.</strong> A command that
+      needs an answer exits <code class="font-mono text-sm">2</code> and names the exact flag that
+      would have given it.
+    </p>
+  </div>
+
+  <h2 id="the-service">Start with sloop's own service</h2>
+  <p>
+    Before writing a cron line, know that you probably do not need one.
+    <a routerLink="/docs/service">sloop registers itself with your machine's own service manager</a>
+    — systemd, launchd or the Service Control Manager — and takes the backups itself, with nobody
+    logged in.
+  </p>
+  <p>
+    <code>sloop service install</code> runs once and needs an administrator. After that, two
+    commands per database and there is no scheduler to configure at all:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="two commands, and it is scheduled" [lines]="scheduling" copy />
+  </div>
+
+  <p>
+    It does the work with the same <code>backup</code> and <code>backups prune</code> you would have
+    typed, with <code>--yes</code> and never <code>--force</code>, and it prunes only after a backup
+    that worked. <strong>A missed run is caught up once and labelled late</strong> rather than a
+    hundred and sixty-eight times, and a collision with a manual run exits
+    <code>7</code> and stands aside.
+  </p>
+  <p>And it reports itself in the same JSON every other command speaks:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="what a monitor reads" [lines]="status" copy />
+  </div>
+
+  <h2 id="never-asks">A scheduled run never stops to ask</h2>
+  <p>
+    The best illustration of the rule is a refusal that happens a day early. Scheduling a backup for
+    a registry that has no encryption key yet would mean a first run at three in the morning that
+    makes a key, needs to say something important about it, and finds nobody there. So it is refused
+    now, while there is somebody to read it:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="refused a day before it would have hung" [lines]="refusedEarly" />
+  </div>
+
+  <p>
+    That is the shape of the whole contract. Not <em>fail at the awkward moment</em>, and never
+    <em>quietly guess</em> — <strong>refuse at the moment somebody is watching</strong>, and name
+    the thing that fixes it.
+  </p>
+
+  <h3>Saying yes, three different ways</h3>
+  <p>
+    The same run of <code>restore</code>, four times, with nothing attached to standard input. The
+    first three are the argument:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="-y and --force are not --confirm" [lines]="confirming" />
+  </div>
+
+  <p>
+    <code>-y</code> did not do it. <code>--force</code> did not do it. Only the database's own name,
+    typed out, did — and a typo in it stops the run <strong>before anything is contacted</strong>.
+  </p>
+
+  <div class="docs-bare mt-7 grid gap-4 sm:grid-cols-3">
+    @for (saying of sayings; track saying.flag) {
+      <div class="flex flex-col rounded-xl border border-line bg-surface p-5">
+        <p class="font-mono text-sm text-accent">{{ saying.flag }}</p>
+        <p class="mt-2.5 flex-1 text-sm text-muted">{{ saying.does }}</p>
+        <ul class="mt-4 space-y-1.5 border-t border-line pt-4">
+          @for (ability of saying.can; track ability.label) {
+            <li class="flex items-start gap-2">
+              @if (ability.yes) {
+                <svg
+                  class="mt-0.5 h-3.5 w-3.5 shrink-0 text-ok"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path d="M3 8.5 6.2 11.7 13 4.9" />
+                </svg>
+                <span class="text-xs text-text">{{ ability.label }}</span>
+              } @else {
+                <svg
+                  class="mt-0.5 h-3.5 w-3.5 shrink-0 text-faint"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path d="M4 8h8" />
+                </svg>
+                <span class="text-xs text-faint">{{ ability.label }}</span>
+              }
+            </li>
+          }
+        </ul>
+      </div>
+    }
+  </div>
+
+  <p>
+    <strong>None of the three stands in for another</strong>, and that is what makes a scheduled
+    line safe to read: a cron entry carrying <code>--confirm orders</code> says out loud which
+    database it will replace, and cannot be repointed at a different one by editing a single flag.
+  </p>
+
+  <h2 id="exit-codes">The nine exit codes</h2>
+  <p>
+    Frozen at 1.0. Adding one is a feature; changing what one means is a breaking release, and a
+    test in the source asserts every number and says so. Whatever calls sloop reads these and
+    nothing else.
+  </p>
+
+  <div class="docs-bare mt-7 overflow-hidden rounded-xl border border-line">
+    @for (code of codes; track code.code) {
+      <div
+        class="flex gap-4 border-b border-line bg-surface p-5 last:border-b-0 sm:gap-5 sm:p-6"
+        [class]="code.lead ? 'ring-1 ring-inset ring-accent/30' : ''"
+      >
+        <span
+          class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg font-mono text-base font-semibold"
+          [class]="
+            code.tone === 'ok'
+              ? 'bg-ok/10 text-ok'
+              : code.tone === 'warn'
+                ? 'bg-warn/10 text-warn'
+                : 'bg-bad/10 text-bad'
+          "
+          >{{ code.code }}</span
+        >
+        <div class="min-w-0">
+          <p class="text-sm font-semibold text-text">{{ code.meaning }}</p>
+          <p class="mt-1.5 text-sm text-muted">{{ code.scheduler }}</p>
+          @if (code.lead) {
+            <p class="mt-3 font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-accent">
+              The one worth wiring up
+            </p>
+          }
+        </div>
+      </div>
+    }
+  </div>
+
+  <p>
+    <strong><code>6</code> is why a bare success check is not enough.</strong> The dump finished,
+    the file is on disk, the checksum is good — and the row counts on the two sides do not agree.
+    Something that only tests for zero files that away as a success and tells you nothing;
+    something that treats everything non-zero as a crash wakes somebody up for it at the same
+    volume as a dead server. It is neither, and it has its own number so it can be treated as
+    neither.
+  </p>
+  <p>Which makes the calling side about six lines:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" [caption]="osLabel()" [lines]="branching()" copy />
+  </div>
+
+  <p>
+    <code>7</code> is the other one worth a branch, in the opposite direction:
+    <strong>it means this run did not start</strong>, because an earlier one was still going. That
+    is the lock working, not a failure, and alerting on a single one is how a team learns to ignore
+    the alert.
+  </p>
+
+  <h2 id="the-lock">One lockfile per database</h2>
+  <p>
+    An overrunning backup must not race the next scheduled one. Every run takes a lock named for the
+    database it is working on, and a second run that finds it held says who holds it and stops:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 7" [lines]="locked()" />
+  </div>
+
+  <p>
+    The lock names the command, the process and the moment it started, so a stale one — a machine
+    that lost power mid-dump — is identifiable rather than mysterious. It is per database, not per
+    machine: a long backup of one database never blocks another.
+  </p>
+
+  <h2 id="output">Output a script can read</h2>
+  <p>
+    Four flags, and they compose. Every command takes all of them, not a chosen few.
+  </p>
+
+  <h3><code>--json</code></h3>
+  <p>
+    One document, and it is <strong>the whole of standard output</strong>, so it parses without
+    filtering anything out of it first. Anything the run wants to say about itself goes to standard
+    error instead.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="one document, and it parses" [lines]="json()" copy />
+  </div>
+
+  <p>A failure is the same document with the other half filled in — never a half-written one:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the same shape, failing" [lines]="jsonError" />
+  </div>
+
+  <p>
+    <code>ok</code> and <code>exit</code> are on every document sloop prints, successful or not, so
+    a script can branch on the body as well as on the process's own code.
+  </p>
+
+  <h3><code>--quiet</code> and <code>--log-file</code></h3>
+  <p>
+    The pairing worth knowing: <strong>silent on the terminal, complete in the file.</strong>
+    <code>--quiet</code> silences the running commentary and never a failure, so a job that says
+    nothing is a job that worked — and the file still has all of it if you want to look.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="nothing, then everything" [lines]="quietLog()" copy />
+  </div>
+
+  <p>
+    A sloop log is written to be pasted into a public issue: no colour, and anything that reads like
+    a credential taken out on the way.
+    <a routerLink="/docs/security" fragment="logs">Security</a> shows a token going in and coming
+    out redacted.
+  </p>
+
+  <h3><code>--dry-run</code></h3>
+  <p>
+    A real rehearsal rather than a guess. Every command that would write does all the reading and
+    all the checking first, then stops at the point where it would write — so it resolves the name,
+    opens the connection, counts the rows, and then does not.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="everything but the writing" [lines]="dryRun()" copy />
+  </div>
+
+  <h2 id="all">--all never stops at the first failure</h2>
+  <p>
+    The whole point of backing up everything on a schedule is that one unreachable database must not
+    cost you the other nine. <code>backup --all</code> carries on to the end and then says exactly
+    which ones failed:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="one dead port, two good backups" [lines]="all()" />
+  </div>
+
+  <p>
+    The process still exits non-zero, so a scheduler still knows something went wrong. What it does
+    <em>not</em> do is throw away the work it had already done. In JSON, the same run separates what
+    was taken from what was not:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="taken, and not taken" [lines]="allJson" />
+  </div>
+
+  <h2 id="passwords">Passwords with nobody logged in</h2>
+  <p>
+    Here is the thing that catches people on the first night, and it is not sloop's doing:
+    <strong>the OS keyring is a per-session store.</strong> A cron job has no session keyring, a
+    headless Linux box has no Secret Service running, and a Windows task that runs as
+    <code>LocalSystem</code> has no vault of yours to read. sloop's default route is the right one
+    at a desk and the wrong one at three in the morning.
+  </p>
+  <p>It says so, rather than failing obscurely:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the keyring, unavailable" [lines]="noKeyring" />
+  </div>
+
+  <p>
+    <a routerLink="/docs/databases" fragment="where-the-password-lives">Two of the four routes</a>
+    are built for exactly this, and neither needs a session:
+  </p>
+
+  <ul>
+    <li>
+      <code>--env SLOOP_DB_PW</code> — read from an environment variable at the moment it is needed.
+      Right for CI, where the variable comes from a secret store already.
+    </li>
+    <li>
+      <code>--password-from "op read op://vault/db/password"</code> — run something and read the
+      password off its output, through a pipe. Right for a team password manager, and for a machine
+      where the secret should not sit in the environment of every child process.
+    </li>
+  </ul>
+
+  <p>
+    A missing variable is the failure you will actually meet, and it is a <code>2</code> with the
+    variable's name in it:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the first morning" [lines]="envMissing" />
+  </div>
+
+  <p>
+    Which route each record takes is in the listing, so it is never a guess — and
+    <strong>a registry holds the route and never the password</strong>, so there is nothing there to
+    print:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="routes, not values" [lines]="listing" />
+  </div>
+
+  <p>
+    For a machine with no keyring at all, the fourth route is the encrypted file:
+    <code>--encrypted-file</code>, opened with <code>SLOOP_PASSPHRASE</code>, or with
+    <code>SLOOP_PASSPHRASE_FILE</code> pointing at a file only the service account can read. The
+    second is what sloop's own units use, because a systemd unit is world-readable —
+    <code>systemctl cat sloop</code> prints it to anybody with a shell — so what goes in the
+    definition is a path, and the secret is behind it.
+  </p>
+
+  <h2 id="your-scheduler">Driving it from {{ scheduler() }}</h2>
+  <p>
+    If you already have a scheduler and would rather keep it, sloop is an ordinary command. Nothing
+    below needs <code>sloop service install</code>; these are alternatives to it, not additions.
+  </p>
+
+  @if (os() === 'windows') {
+    <p>
+      Two steps, and the first one is the important one: put the command in a
+      <code>.cmd</code> file. <code>schtasks</code> takes the whole command as one quoted argument,
+      so a path with a space in it needs quotes inside quotes — which is where this goes wrong for
+      everybody. A batch file has none of that, and you can run it by hand once before trusting it
+      to three in the morning.
+    </p>
+
+    <div class="mt-7">
+      <app-terminal class="block" caption="the one line it runs" [lines]="batch" />
+    </div>
+
+    <div class="mt-7">
+      <app-terminal class="block" caption="Command Prompt" [lines]="schtasks" copy />
+    </div>
+
+    <p>
+      <code>/rp</code> prompts for your password and stores it, which is what lets the task run with
+      you logged out. <strong>Do not rely on the keyring here</strong> — give the record the
+      <code>--env</code> or <code>--password-from</code> route above and the question does not
+      arise.
+    </p>
+  } @else {
+    <div class="mt-7">
+      <app-terminal class="block" caption="crontab" [lines]="cron()" />
+    </div>
+
+    <p>
+      <code>-q</code> so a working night is a silent night, and <code>--log-file</code> so there is
+      still a record of it. cron mails you whatever the command printed, which with
+      <code>--quiet</code> is nothing at all unless something failed — and then it is the failure
+      and its hint, which is exactly the mail worth getting.
+    </p>
+
+    @if (os() === 'linux') {
+      <p>
+        A systemd timer instead, if you would rather have one. Two files, and
+        <code>Persistent=true</code> is the line that makes a machine which was off at three run the
+        backup when it comes back:
+      </p>
+
+      <div class="mt-7">
+        <app-terminal class="block" caption="the unit" [lines]="unit" />
+      </div>
+
+      <div class="mt-7">
+        <app-terminal class="block" caption="the timer" [lines]="timer" />
+      </div>
+
+      <p>
+        <code>Environment=SLOOP_PASSPHRASE_FILE=…</code> rather than the passphrase itself: the unit
+        is world-readable, the file it points at is not.
+      </p>
+    } @else {
+      <p>
+        launchd will do the same job with a <code>.plist</code> in
+        <code>~/Library/LaunchAgents</code>, but a user agent only runs while you are logged in,
+        which is usually not what a backup wants.
+        <a routerLink="/docs/service">sloop's own service</a> installs a
+        <em>daemon</em> in <code>/Library/LaunchDaemons</code> instead, and that one runs with
+        nobody logged in — which is the reason to prefer it here.
+      </p>
+    }
+  }
+
+  <p>
+    Whichever drives it, the last thing worth doing is the smallest:
+    <a routerLink="/docs/privileges"><code>sloop doctor</code></a> exits <code>8</code> when a role
+    is short of a privilege that will make its dumps quietly incomplete. Run it on the same schedule
+    and you find that out on a Tuesday, rather than during a restore.
+  </p>
+</app-docs-page>

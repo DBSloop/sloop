@@ -2,6 +2,7 @@ import { Type } from '@angular/core';
 import { Routes } from '@angular/router';
 
 import { Activity } from './activity/activity';
+import { Automation } from './automation/automation';
 import { BackupKey } from './backup-key/backup-key';
 import { Backups } from './backups/backups';
 import { Commands } from './commands/commands';
@@ -42,6 +43,7 @@ const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   ssh: Ssh,
   security: Security,
   privileges: Privileges,
+  automation: Automation,
 };
 
 /**

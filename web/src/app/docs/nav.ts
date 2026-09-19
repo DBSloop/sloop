@@ -346,6 +346,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         path: 'automation',
         documentTitle: 'Automate database backups — exit codes, JSON, dry runs',
         title: 'Automation',
+        written: true,
         blurb:
           'Running sloop from something that is not a person: exit codes, non-interactive flags, and output a script can read.',
         covers: [
