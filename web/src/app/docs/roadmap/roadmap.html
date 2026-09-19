@@ -1,0 +1,119 @@
+<!--
+  Roadmap.
+
+  The one page on this site with no captured run on it, and that is the point:
+  it documents four things that do not exist, and a terminal block showing
+  unbuilt software would be the most dishonest thing here. What each card does
+  carry is a `today` line — the thing that does exist in its place — and that is
+  the sentence on the card that had to be checked rather than written.
+
+  The bar for this entry is that nothing on it reads as a promise. So: no dates,
+  no "coming soon", no ordering that implies one is nearer than another, and a
+  section saying plainly what is not on the list at all.
+-->
+<app-docs-page
+  heading="Roadmap"
+  lede="What sloop intends to grow into — with no dates on it, and nothing here that should be read as a commitment."
+  eyebrow="Reference"
+  path="roadmap"
+>
+  <div class="docs-bare mt-2 rounded-xl border border-line bg-surface p-5 sm:p-6">
+    <p class="flex items-center gap-2.5 font-mono text-xs text-faint">
+      <span aria-hidden="true" class="h-px w-6 bg-line-strong"></span>
+      What planned means here
+    </p>
+    <p class="mt-3 max-w-measure text-base text-text">
+      <strong class="font-semibold">Intent, not a commitment.</strong> Everything below is
+      unbuilt. There are no dates, no order of arrival, and no guarantee that any particular one
+      of them ships. If you are choosing a tool, choose it on
+      <a routerLink="/docs" class="text-accent underline decoration-accent/35 underline-offset-[3px] transition-colors duration-2 hover:decoration-accent">what it does today</a>.
+    </p>
+  </div>
+
+  <h2 id="planned">Planned</h2>
+  <p>
+    Four things, and each one is paired with what sloop does in its place today — because the
+    useful question about an unbuilt feature is usually <em>what do I do until then</em>.
+  </p>
+
+  <div class="docs-bare mt-7 space-y-4">
+    @for (item of planned; track item.title) {
+      <div class="overflow-hidden rounded-xl border border-line bg-surface">
+        <div class="p-5 sm:p-6">
+          <p class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">Planned</p>
+          <h3 class="mt-2 text-lg font-semibold text-text">{{ item.title }}</h3>
+          <p class="mt-2 max-w-measure text-sm text-muted">{{ item.what }}</p>
+        </div>
+        <div class="border-t border-line bg-surface-2 p-5 sm:px-6">
+          <p class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-accent">Today</p>
+          <p class="mt-2 max-w-measure text-sm text-text">{{ item.today }}</p>
+          <p class="mt-3">
+            <a
+              [routerLink]="item.link.to"
+              class="font-mono text-xs text-accent underline decoration-accent/35 underline-offset-[3px] transition-colors duration-2 hover:decoration-accent"
+              >{{ item.link.label }} →</a
+            >
+          </p>
+        </div>
+      </div>
+    }
+  </div>
+
+  <h2 id="not-on-it">Not on it</h2>
+  <p>
+    A list of what is planned is only half of an honest one. Here is the thing people ask for most
+    that is deliberately absent:
+  </p>
+
+  @for (item of notPlanned; track item.title) {
+    <div class="docs-bare mt-7 rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
+      <p class="flex items-center gap-2.5 font-mono text-xs text-warn">
+        <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-warn"></span>
+        {{ item.title }}
+      </p>
+      @for (line of item.why; track $index) {
+        <p class="mt-3 max-w-measure text-sm" [class]="$first ? 'text-text' : 'text-muted'">
+          {{ line }}
+        </p>
+      }
+      <p class="mt-5 border-l-2 border-line-strong pl-4 font-mono text-xs leading-relaxed text-muted">
+        {{ refusal }}
+      </p>
+      <p class="mt-3 text-sm text-muted">
+        <a routerLink="/docs/mirror-and-sync" class="text-accent underline decoration-accent/35 underline-offset-[3px] transition-colors duration-2 hover:decoration-accent">Mirror and sync</a> shows that refusal happening, and
+        says what to do instead.
+      </p>
+    </div>
+  }
+
+  <h2 id="fixed">What is not going to change</h2>
+  <p>
+    The other thing a roadmap should say. These are not on a list because they are not going
+    anywhere, and anything above has to arrive without breaking them:
+  </p>
+
+  <dl class="docs-bare mt-7 space-y-px overflow-hidden rounded-xl border border-line">
+    @for (item of fixed; track item.title) {
+      <div class="bg-surface p-5 sm:p-6">
+        <dt class="text-sm font-semibold text-text">{{ item.title }}</dt>
+        <dd class="mt-2 max-w-measure text-sm text-muted">{{ item.detail }}</dd>
+      </div>
+    }
+  </dl>
+
+  <p>
+    <a routerLink="/docs/security">Security</a> has the first of those as something you can check
+    in thirty seconds rather than take on trust, and
+    <a routerLink="/docs/automation" fragment="exit-codes">Automation</a> has the second as the
+    nine numbers a scheduler reads.
+  </p>
+
+  <h2 id="asking">Asking for something</h2>
+  <p>
+    sloop is built from a list its owner keeps, informed by people who run these databases every
+    day. If something you need is missing, the
+    <a href="https://github.com/DBSloop/sloop" rel="noreferrer">repository</a> is where to say so —
+    and a description of the problem is worth more than a description of the feature, because the
+    refusals on this page exist where the obvious feature was the wrong answer to a real problem.
+  </p>
+</app-docs-page>

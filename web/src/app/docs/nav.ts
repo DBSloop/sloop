@@ -363,6 +363,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         path: 'roadmap',
         documentTitle: 'sloop roadmap — planned queries, DDL and row editing',
         title: 'Roadmap',
+        written: true,
         blurb: 'What is planned. No dates, and nothing that reads as a promise.',
         covers: [
           'Writing and saving queries, beyond the read-only builder sloop query has today.',
