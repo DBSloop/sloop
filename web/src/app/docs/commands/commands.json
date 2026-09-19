@@ -720,6 +720,76 @@
           "value": null,
           "spec": "-h, --help",
           "text": "Print help (see more with '--help')"
+        },
+        {
+          "short": null,
+          "long": "--ssh-host",
+          "value": "HOST",
+          "spec": "--ssh-host <HOST>",
+          "text": "Reach this database through an SSH server, because its own port is not open"
+        },
+        {
+          "short": null,
+          "long": "--ssh-port",
+          "value": "PORT",
+          "spec": "--ssh-port <PORT>",
+          "text": "The SSH server's port. 22 when left out. Not the database's port"
+        },
+        {
+          "short": null,
+          "long": "--ssh-user",
+          "value": "USER",
+          "spec": "--ssh-user <USER>",
+          "text": "Who to be on the SSH server. ~/.ssh/config, then your own username, when left out"
+        },
+        {
+          "short": null,
+          "long": "--ssh-identity",
+          "value": "PATH",
+          "spec": "--ssh-identity <PATH>",
+          "text": "A particular private key, as `ssh -i` takes it"
+        },
+        {
+          "short": null,
+          "long": "--no-ssh",
+          "value": null,
+          "spec": "--no-ssh",
+          "text": "Stop going through an SSH server. The connection becomes a direct one"
+        },
+        {
+          "short": null,
+          "long": "--ssh-keyring",
+          "value": null,
+          "spec": "--ssh-keyring",
+          "text": "Keep the key's passphrase in the OS keyring"
+        },
+        {
+          "short": null,
+          "long": "--ssh-encrypted-file",
+          "value": null,
+          "spec": "--ssh-encrypted-file",
+          "text": "Keep it in the Argon2id-encrypted store, for a machine with no keyring"
+        },
+        {
+          "short": null,
+          "long": "--ssh-env",
+          "value": "VARIABLE",
+          "spec": "--ssh-env <VARIABLE>",
+          "text": "Read it from this environment variable at run time, for automation"
+        },
+        {
+          "short": null,
+          "long": "--ssh-passphrase-from",
+          "value": "COMMAND",
+          "spec": "--ssh-passphrase-from <COMMAND>",
+          "text": "Run this and read the passphrase from its output, for a team password manager"
+        },
+        {
+          "short": null,
+          "long": "--ssh-passphrase-stdin",
+          "value": null,
+          "spec": "--ssh-passphrase-stdin",
+          "text": "Take the passphrase from standard input instead of asking for it"
         }
       ],
       "children": [],
@@ -807,6 +877,76 @@
           "value": null,
           "spec": "--test",
           "text": "Connect before saving, and refuse to save if it does not work"
+        },
+        {
+          "short": null,
+          "long": "--ssh-host",
+          "value": "HOST",
+          "spec": "--ssh-host <HOST>",
+          "text": "Reach this database through an SSH server, because its own port is not open"
+        },
+        {
+          "short": null,
+          "long": "--ssh-port",
+          "value": "PORT",
+          "spec": "--ssh-port <PORT>",
+          "text": "The SSH server's port. 22 when left out. Not the database's port"
+        },
+        {
+          "short": null,
+          "long": "--ssh-user",
+          "value": "USER",
+          "spec": "--ssh-user <USER>",
+          "text": "Who to be on the SSH server. ~/.ssh/config, then your own username, when left out"
+        },
+        {
+          "short": null,
+          "long": "--ssh-identity",
+          "value": "PATH",
+          "spec": "--ssh-identity <PATH>",
+          "text": "A particular private key, as `ssh -i` takes it"
+        },
+        {
+          "short": null,
+          "long": "--no-ssh",
+          "value": null,
+          "spec": "--no-ssh",
+          "text": "Stop going through an SSH server. The connection becomes a direct one"
+        },
+        {
+          "short": null,
+          "long": "--ssh-keyring",
+          "value": null,
+          "spec": "--ssh-keyring",
+          "text": "Keep the key's passphrase in the OS keyring"
+        },
+        {
+          "short": null,
+          "long": "--ssh-encrypted-file",
+          "value": null,
+          "spec": "--ssh-encrypted-file",
+          "text": "Keep it in the Argon2id-encrypted store, for a machine with no keyring"
+        },
+        {
+          "short": null,
+          "long": "--ssh-env",
+          "value": "VARIABLE",
+          "spec": "--ssh-env <VARIABLE>",
+          "text": "Read it from this environment variable at run time, for automation"
+        },
+        {
+          "short": null,
+          "long": "--ssh-passphrase-from",
+          "value": "COMMAND",
+          "spec": "--ssh-passphrase-from <COMMAND>",
+          "text": "Run this and read the passphrase from its output, for a team password manager"
+        },
+        {
+          "short": null,
+          "long": "--ssh-passphrase-stdin",
+          "value": null,
+          "spec": "--ssh-passphrase-stdin",
+          "text": "Take the passphrase from standard input instead of asking for it"
         }
       ]
     },
@@ -1449,6 +1589,76 @@
           "value": null,
           "spec": "-h, --help",
           "text": "Print help (see more with '--help')"
+        },
+        {
+          "short": null,
+          "long": "--ssh-host",
+          "value": "HOST",
+          "spec": "--ssh-host <HOST>",
+          "text": "Reach this database through an SSH server, because its own port is not open"
+        },
+        {
+          "short": null,
+          "long": "--ssh-port",
+          "value": "PORT",
+          "spec": "--ssh-port <PORT>",
+          "text": "The SSH server's port. 22 when left out. Not the database's port"
+        },
+        {
+          "short": null,
+          "long": "--ssh-user",
+          "value": "USER",
+          "spec": "--ssh-user <USER>",
+          "text": "Who to be on the SSH server. ~/.ssh/config, then your own username, when left out"
+        },
+        {
+          "short": null,
+          "long": "--ssh-identity",
+          "value": "PATH",
+          "spec": "--ssh-identity <PATH>",
+          "text": "A particular private key, as `ssh -i` takes it"
+        },
+        {
+          "short": null,
+          "long": "--no-ssh",
+          "value": null,
+          "spec": "--no-ssh",
+          "text": "Stop going through an SSH server. The connection becomes a direct one"
+        },
+        {
+          "short": null,
+          "long": "--ssh-keyring",
+          "value": null,
+          "spec": "--ssh-keyring",
+          "text": "Keep the key's passphrase in the OS keyring"
+        },
+        {
+          "short": null,
+          "long": "--ssh-encrypted-file",
+          "value": null,
+          "spec": "--ssh-encrypted-file",
+          "text": "Keep it in the Argon2id-encrypted store, for a machine with no keyring"
+        },
+        {
+          "short": null,
+          "long": "--ssh-env",
+          "value": "VARIABLE",
+          "spec": "--ssh-env <VARIABLE>",
+          "text": "Read it from this environment variable at run time, for automation"
+        },
+        {
+          "short": null,
+          "long": "--ssh-passphrase-from",
+          "value": "COMMAND",
+          "spec": "--ssh-passphrase-from <COMMAND>",
+          "text": "Run this and read the passphrase from its output, for a team password manager"
+        },
+        {
+          "short": null,
+          "long": "--ssh-passphrase-stdin",
+          "value": null,
+          "spec": "--ssh-passphrase-stdin",
+          "text": "Take the passphrase from standard input instead of asking for it"
         }
       ],
       "children": [],
@@ -1536,6 +1746,76 @@
           "value": null,
           "spec": "--test",
           "text": "Connect before saving, and refuse to save if it does not work"
+        },
+        {
+          "short": null,
+          "long": "--ssh-host",
+          "value": "HOST",
+          "spec": "--ssh-host <HOST>",
+          "text": "Reach this database through an SSH server, because its own port is not open"
+        },
+        {
+          "short": null,
+          "long": "--ssh-port",
+          "value": "PORT",
+          "spec": "--ssh-port <PORT>",
+          "text": "The SSH server's port. 22 when left out. Not the database's port"
+        },
+        {
+          "short": null,
+          "long": "--ssh-user",
+          "value": "USER",
+          "spec": "--ssh-user <USER>",
+          "text": "Who to be on the SSH server. ~/.ssh/config, then your own username, when left out"
+        },
+        {
+          "short": null,
+          "long": "--ssh-identity",
+          "value": "PATH",
+          "spec": "--ssh-identity <PATH>",
+          "text": "A particular private key, as `ssh -i` takes it"
+        },
+        {
+          "short": null,
+          "long": "--no-ssh",
+          "value": null,
+          "spec": "--no-ssh",
+          "text": "Stop going through an SSH server. The connection becomes a direct one"
+        },
+        {
+          "short": null,
+          "long": "--ssh-keyring",
+          "value": null,
+          "spec": "--ssh-keyring",
+          "text": "Keep the key's passphrase in the OS keyring"
+        },
+        {
+          "short": null,
+          "long": "--ssh-encrypted-file",
+          "value": null,
+          "spec": "--ssh-encrypted-file",
+          "text": "Keep it in the Argon2id-encrypted store, for a machine with no keyring"
+        },
+        {
+          "short": null,
+          "long": "--ssh-env",
+          "value": "VARIABLE",
+          "spec": "--ssh-env <VARIABLE>",
+          "text": "Read it from this environment variable at run time, for automation"
+        },
+        {
+          "short": null,
+          "long": "--ssh-passphrase-from",
+          "value": "COMMAND",
+          "spec": "--ssh-passphrase-from <COMMAND>",
+          "text": "Run this and read the passphrase from its output, for a team password manager"
+        },
+        {
+          "short": null,
+          "long": "--ssh-passphrase-stdin",
+          "value": null,
+          "spec": "--ssh-passphrase-stdin",
+          "text": "Take the passphrase from standard input instead of asking for it"
         }
       ]
     },
@@ -2637,6 +2917,69 @@
           "value": null,
           "spec": "-h, --help",
           "text": "Print help (see more with '--help')"
+        },
+        {
+          "short": null,
+          "long": "--host",
+          "value": "HOST",
+          "spec": "--host <HOST>",
+          "text": "The server to make it on. The source's own server when left out"
+        },
+        {
+          "short": null,
+          "long": "--port",
+          "value": "PORT",
+          "spec": "--port <PORT>",
+          "text": "Its port. The source's port when the host is the source's, the engine's default otherwise"
+        },
+        {
+          "short": null,
+          "long": "--superuser",
+          "value": "USER",
+          "spec": "--superuser <USER>",
+          "text": "The account to create it with — `postgres` or `root` when left out"
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-stdin",
+          "value": null,
+          "spec": "--superuser-password-stdin",
+          "text": "Read that account's password from standard input"
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-command",
+          "value": "COMMAND",
+          "spec": "--superuser-password-command <COMMAND>",
+          "text": "Run this and read that account's password from its output"
+        },
+        {
+          "short": null,
+          "long": "--database",
+          "value": "NAME",
+          "spec": "--database <NAME>",
+          "text": "The new database's own name on the server. Asked for when left out"
+        },
+        {
+          "short": null,
+          "long": "--role",
+          "value": "USER",
+          "spec": "--role <USER>",
+          "text": "The user to create and hand it to. Asked for when left out"
+        },
+        {
+          "short": null,
+          "long": "--role-password-stdin",
+          "value": null,
+          "spec": "--role-password-stdin",
+          "text": "Read the new user's password from standard input instead of generating one"
+        },
+        {
+          "short": null,
+          "long": "--role-password-command",
+          "value": "COMMAND",
+          "spec": "--role-password-command <COMMAND>",
+          "text": "Run this and read the new user's password from its output"
         }
       ],
       "children": [],
@@ -2675,6 +3018,69 @@
           "value": null,
           "spec": "--safe",
           "text": "Dump to a file first, so a copy that fails can be retried"
+        },
+        {
+          "short": null,
+          "long": "--host",
+          "value": "HOST",
+          "spec": "--host <HOST>",
+          "text": "The server to make it on. The source's own server when left out"
+        },
+        {
+          "short": null,
+          "long": "--port",
+          "value": "PORT",
+          "spec": "--port <PORT>",
+          "text": "Its port. The source's port when the host is the source's, the engine's default otherwise"
+        },
+        {
+          "short": null,
+          "long": "--superuser",
+          "value": "USER",
+          "spec": "--superuser <USER>",
+          "text": "The account to create it with — `postgres` or `root` when left out"
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-stdin",
+          "value": null,
+          "spec": "--superuser-password-stdin",
+          "text": "Read that account's password from standard input"
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-command",
+          "value": "COMMAND",
+          "spec": "--superuser-password-command <COMMAND>",
+          "text": "Run this and read that account's password from its output"
+        },
+        {
+          "short": null,
+          "long": "--database",
+          "value": "NAME",
+          "spec": "--database <NAME>",
+          "text": "The new database's own name on the server. Asked for when left out"
+        },
+        {
+          "short": null,
+          "long": "--role",
+          "value": "USER",
+          "spec": "--role <USER>",
+          "text": "The user to create and hand it to. Asked for when left out"
+        },
+        {
+          "short": null,
+          "long": "--role-password-stdin",
+          "value": null,
+          "spec": "--role-password-stdin",
+          "text": "Read the new user's password from standard input instead of generating one"
+        },
+        {
+          "short": null,
+          "long": "--role-password-command",
+          "value": "COMMAND",
+          "spec": "--role-password-command <COMMAND>",
+          "text": "Run this and read the new user's password from its output"
         }
       ]
     },
@@ -2813,6 +3219,69 @@
           "value": null,
           "spec": "-h, --help",
           "text": "Print help (see more with '--help')"
+        },
+        {
+          "short": null,
+          "long": "--host",
+          "value": "HOST",
+          "spec": "--host <HOST>",
+          "text": "The server to make it on. The source's own server when left out"
+        },
+        {
+          "short": null,
+          "long": "--port",
+          "value": "PORT",
+          "spec": "--port <PORT>",
+          "text": "Its port. The source's port when the host is the source's, the engine's default otherwise"
+        },
+        {
+          "short": null,
+          "long": "--superuser",
+          "value": "USER",
+          "spec": "--superuser <USER>",
+          "text": "The account to create it with — `postgres` or `root` when left out"
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-stdin",
+          "value": null,
+          "spec": "--superuser-password-stdin",
+          "text": "Read that account's password from standard input"
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-command",
+          "value": "COMMAND",
+          "spec": "--superuser-password-command <COMMAND>",
+          "text": "Run this and read that account's password from its output"
+        },
+        {
+          "short": null,
+          "long": "--database",
+          "value": "NAME",
+          "spec": "--database <NAME>",
+          "text": "The new database's own name on the server. Asked for when left out"
+        },
+        {
+          "short": null,
+          "long": "--role",
+          "value": "USER",
+          "spec": "--role <USER>",
+          "text": "The user to create and hand it to. Asked for when left out"
+        },
+        {
+          "short": null,
+          "long": "--role-password-stdin",
+          "value": null,
+          "spec": "--role-password-stdin",
+          "text": "Read the new user's password from standard input instead of generating one"
+        },
+        {
+          "short": null,
+          "long": "--role-password-command",
+          "value": "COMMAND",
+          "spec": "--role-password-command <COMMAND>",
+          "text": "Run this and read the new user's password from its output"
         }
       ],
       "children": [],
@@ -2851,6 +3320,69 @@
           "value": null,
           "spec": "--safe",
           "text": "Dump the source to a file first, so a merge that fails can be replayed"
+        },
+        {
+          "short": null,
+          "long": "--host",
+          "value": "HOST",
+          "spec": "--host <HOST>",
+          "text": "The server to make it on. The source's own server when left out"
+        },
+        {
+          "short": null,
+          "long": "--port",
+          "value": "PORT",
+          "spec": "--port <PORT>",
+          "text": "Its port. The source's port when the host is the source's, the engine's default otherwise"
+        },
+        {
+          "short": null,
+          "long": "--superuser",
+          "value": "USER",
+          "spec": "--superuser <USER>",
+          "text": "The account to create it with — `postgres` or `root` when left out"
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-stdin",
+          "value": null,
+          "spec": "--superuser-password-stdin",
+          "text": "Read that account's password from standard input"
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-command",
+          "value": "COMMAND",
+          "spec": "--superuser-password-command <COMMAND>",
+          "text": "Run this and read that account's password from its output"
+        },
+        {
+          "short": null,
+          "long": "--database",
+          "value": "NAME",
+          "spec": "--database <NAME>",
+          "text": "The new database's own name on the server. Asked for when left out"
+        },
+        {
+          "short": null,
+          "long": "--role",
+          "value": "USER",
+          "spec": "--role <USER>",
+          "text": "The user to create and hand it to. Asked for when left out"
+        },
+        {
+          "short": null,
+          "long": "--role-password-stdin",
+          "value": null,
+          "spec": "--role-password-stdin",
+          "text": "Read the new user's password from standard input instead of generating one"
+        },
+        {
+          "short": null,
+          "long": "--role-password-command",
+          "value": "COMMAND",
+          "spec": "--role-password-command <COMMAND>",
+          "text": "Run this and read the new user's password from its output"
         }
       ]
     },

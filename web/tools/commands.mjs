@@ -204,6 +204,41 @@ function option(spec) {
   return { short, long, value: value ? value[1] : null, spec };
 }
 
+/** The sections that are never a list of flags. */
+const NOT_FLAGS = new Set(['description', 'usage', 'arguments', 'commands', 'after']);
+
+/**
+ * Every flag a command takes, including the ones under a heading of its own.
+ *
+ * **clap's `help_heading` puts flags in a section with any name at all**, and
+ * three commands here use it: *Reaching it over SSH* on `db add` and `db edit`,
+ * and *Making the destination* on `mirror` and `sync`. Reading only `Options:`
+ * dropped all of them — eleven `--ssh-*` flags absent from a reference whose
+ * whole promise is that a diff against `--help` finds nothing missing. That is
+ * what `A8` shipped, and `A17` found it while writing the SSH page.
+ *
+ * So every section that is not one of the known non-flag ones is parsed too,
+ * and kept only for the entries that actually *are* flags. That last part
+ * matters: `Examples:` is a heading as well, on `db add` and `query`, and it
+ * holds prose. Filtering on the shape rather than on a list of headings means a
+ * heading nobody anticipated is handled without anybody editing this file.
+ */
+function optionsOf(found) {
+  const out = [];
+  for (const [name, lines] of Object.entries(found)) {
+    if (NOT_FLAGS.has(name)) {
+      continue;
+    }
+    for (const entry of entries(lines)) {
+      const flag = { ...option(entry.spec), text: entry.text };
+      if (flag.long || flag.short) {
+        out.push(flag);
+      }
+    }
+  }
+  return out;
+}
+
 /** Walk the tree, asking each command what it has under it. */
 function walk(sloop, path = []) {
   const short = sections(help(sloop, path, false));
@@ -220,7 +255,7 @@ function walk(sloop, path = []) {
     description: paragraphs(long.description ?? []),
     usage: (short.usage ?? []).join(' ').trim(),
     arguments: entries(short.arguments).map((entry) => ({ name: entry.spec, text: entry.text })),
-    options: entries(short.options).map((entry) => ({ ...option(entry.spec), text: entry.text })),
+    options: optionsOf(short),
     children: children.map((entry) => entry.spec),
   };
 
