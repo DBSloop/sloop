@@ -207,7 +207,19 @@ export class DocsToc {
             this.collect();
           });
         });
-        watcher.observe(this.within(), { childList: true, subtree: true });
+        // **`characterData` too, and leaving it out was a bug the installation
+        // page could never have shown.** There the OS strip adds and removes
+        // whole headings, which is a `childList` change; on `sloop's own
+        // PostgreSQL` a heading is `Nothing here needs {{ elevation() }}` and
+        // picking Linux rewrites its text node in place. Without this the
+        // article said *sudo* while the contents rail beside it still said
+        // *an administrator* — the rail describing a page that is no longer on
+        // screen, which is the exact failure this observer exists to prevent.
+        watcher.observe(this.within(), {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        });
       }
 
       // The rail is the only variant that highlights. The inline disclosure is
