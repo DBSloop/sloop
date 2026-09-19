@@ -246,13 +246,21 @@ export class DocsToc {
    * are "in", and the reason this is measured rather than observed. An
    * IntersectionObserver reports crossings, and a section taller than the
    * viewport crosses nothing for as long as it is being read.
+   *
+   * **The line is the one the router scrolls to, read from the same place.**
+   * It was a hardcoded 140 while the shell was scrolling anchored headings to
+   * its own measured `--docs-rail` plus 24 — 158 at 1440. So a heading reached
+   * from this very list landed eighteen pixels *below* the line that decides
+   * what is current, the test failed on it, and the highlight sat on the
+   * heading above the one that had just been clicked. Two numbers for one line
+   * is the bug; there is one number now, and `docs.ts` owns it.
    */
   private mark(): void {
     const view = this.document.defaultView;
     if (!view) {
       return;
     }
-    const line = 140;
+    const line = this.railLine(view);
     let current = this.headings[0];
     for (const heading of this.headings) {
       if (heading.getBoundingClientRect().top <= line) {
@@ -264,5 +272,24 @@ export class DocsToc {
     const atEnd =
       view.innerHeight + view.scrollY >= (this.document.documentElement.scrollHeight ?? 0) - 2;
     this.active.set(atEnd ? (this.headings.at(-1)?.id ?? '') : (current?.id ?? ''));
+  }
+
+  /**
+   * Where the sticky chrome ends, from the property the shell measures into.
+   *
+   * `docs.ts` writes `--docs-rail` on its host as the navbar and toolbar
+   * resize, and adds 24 before handing it to the router's `ViewportScroller`.
+   * The same sum is used here, plus two pixels of tolerance: a heading the
+   * router has just placed sits *exactly* on the line, and sub-pixel layout
+   * would otherwise decide the comparison at random.
+   *
+   * The fallback is the same 134 `docs.ts` starts from — what the two bars
+   * measure to at 1440, so the frame before the observer has run is already
+   * right.
+   */
+  private railLine(view: Window): number {
+    const raw = view.getComputedStyle(this.within()).getPropertyValue('--docs-rail');
+    const rail = Number.parseFloat(raw);
+    return (Number.isFinite(rail) ? rail : 134) + 24 + 2;
   }
 }
