@@ -75,6 +75,11 @@ jobs:
       # exists. It exits non-zero rather than warning.
       - run: node tools/site.mjs
 
+      # The same checks again, against the bytes on disk and writing nothing.
+      # The step above generated the sitemap; this one is what would notice if
+      # it had generated the wrong one.
+      - run: node tools/site.mjs --check
+
       - name: Keep the built site for the publish job
         uses: actions/upload-artifact@v7
         with:

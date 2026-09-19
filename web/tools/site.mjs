@@ -3,7 +3,7 @@
  * Finish the built site, and refuse to hand over one that is wrong.
  *
  * `ng build` prerenders every route to `<route>/index.html`, which is most of
- * what `A22` needs. Three things it does not do, and one thing nobody should
+ * what `A22` needs. Here is the rest, and none of it is anything anybody should
  * have to remember:
  *
  * ```text
@@ -11,11 +11,15 @@
  *                     path that has no file. Angular built the page as
  *                     404/index.html; it is moved here and the directory goes,
  *                     because /404/ as a page that returns 200 is a lie.
- * install.sh          the two one-liners in the README, in `sloop --help` and
- * install.ps1         on the landing page fetch these from this origin. They
- *                     are copied from install/ and then compared byte for byte,
- *                     so a published installer can never drift from the one in
- *                     the repository.
+ * install.sh          the one-liners in the README, in `sloop --help`, on the
+ * install.ps1         landing page and on /docs/reset fetch these four from
+ * uninstall.sh        this origin. They are copied from install/, and every
+ * uninstall.ps1       dbsloop.github.io URL in the source is then checked
+ *                     against what the output actually serves.
+ * sitemap.xml         all three generated from the route list — `nav.ts` for
+ * robots.txt          the docs tree, `EXTRA_PAGES` in `seo.ts` for the rest —
+ * llms.txt            so adding a page adds it to all of them with no other
+ *                     edit. `llms.txt`'s prose is tools/llms-copy.mjs.
  * .nojekyll           GitHub Pages runs Jekyll otherwise, which silently drops
  *                     every path beginning with an underscore.
  * ```
@@ -24,24 +28,34 @@
  * that is only stated is a concern that gets forgotten at release. So this
  * fails the build rather than printing a warning, on any of:
  *
- * - a route in the docs tree that has no `index.html`
- * - an `index.html` that came out as an empty shell rather than a page
+ * - a route that has no `index.html`, or one that came out as an empty shell
  * - a page whose `<title>` or `<h1>` is not the one `nav.ts` names for it
- * - an install script missing, or differing from the one in `install/`
+ * - a page whose meta description or canonical is not the one `seo.ts` names,
+ *   or that has no JSON-LD at all
+ * - a prerendered route that nothing describes, so nothing could list it
+ * - a `listed: false` route that is in the sitemap anyway, or is missing its
+ *   `noindex`
+ * - a sitemap that does not hold exactly the routes that were built
+ * - a script missing, or a `dbsloop.github.io` URL the output does not serve
  * - `404.html` missing, or not actually the not-found page
  *
- * The third of those is the one worth having. A prerender that silently
- * produces the wrong component for a route still produces a file of the right
- * name and a plausible size; comparing the heading against the tree catches it,
- * and nothing else does.
+ * Two of those are worth the trouble on their own. **A prerender that renders
+ * the wrong component** still writes a file of the right name and a plausible
+ * size; comparing the heading against the tree is what catches it. And **a
+ * sitemap is the one file nobody ever looks at**, so it is the one most likely
+ * to be quietly wrong — which is why it is read back off disk and compared
+ * rather than simply written.
  *
  * ```sh
- * node tools/site.mjs          # finish dist/web/browser and check it
+ * node tools/site.mjs            # finish dist/web/browser, then check it
+ * node tools/site.mjs --check    # check it, writing nothing
  * ```
  */
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { LLMS_COPY } from './llms-copy.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const web = resolve(here, '..');
@@ -49,6 +63,16 @@ const repo = resolve(web, '..');
 const out = join(web, 'dist', 'web', 'browser');
 const manifest = join(web, 'dist', 'web', 'prerendered-routes.json');
 const navFile = join(web, 'src', 'app', 'docs', 'nav.ts');
+const seoFile = join(web, 'src', 'app', 'seo.ts');
+
+/** Where the site is served from. Must match `SITE.origin` in `seo.ts`. */
+const ORIGIN = 'https://dbsloop.github.io';
+
+/** Verify what was built without writing anything, so a hand edit goes red. */
+const CHECK_ONLY = process.argv.includes('--check');
+
+/** Matches `SITE.name` in `seo.ts`, and heads `llms.txt`. */
+const SITE_NAME = 'sloop';
 
 /** The two routes outside the docs tree, and the one that becomes `404.html`. */
 const OUTSIDE = ['/', '/foundation', '/404'];
@@ -81,18 +105,32 @@ function fail(...lines) {
  * here, is exactly the drift `nav.ts` exists to prevent. The shape it looks for
  * is the one the file is written in: `path`, then `documentTitle`, then
  * `title`, in that order, once per page.
+ *
+ * **`blurb` is found separately**, because `short` and `written` sit between it
+ * and `title` on some entries and not others, and a regex that tries to hold
+ * that shape is a regex that breaks the next time a field is added. Instead the
+ * first `blurb` after a page's `path` is taken to be that page's, which is what
+ * a reader of the file would assume too.
  */
 function pagesFromNav() {
   const source = readFileSync(navFile, 'utf8');
   const entry =
     /path:\s*'([^']+)',\s*\n\s*documentTitle:\s*'((?:[^'\\]|\\.)*)',\s*\n\s*title:\s*'((?:[^'\\]|\\.)*)',/g;
+  const blurbs = [
+    ...source.matchAll(/blurb:\s*\n?\s*'((?:[^'\\]|\\.)*)',/g),
+  ];
 
   const pages = [];
   for (const found of source.matchAll(entry)) {
+    const blurb = blurbs.find((one) => one.index > found.index);
+    if (!blurb) {
+      fail(`${found[1]} in nav.ts has no blurb after it`);
+    }
     pages.push({
       path: found[1],
-      documentTitle: found[2].replaceAll("\\'", "'"),
-      title: found[3].replaceAll("\\'", "'"),
+      documentTitle: unquote(found[2]),
+      title: unquote(found[3]),
+      blurb: unquote(blurb[1]),
     });
   }
 
@@ -117,6 +155,172 @@ function sources(dir) {
     }
   }
   return found;
+}
+
+/**
+ * The routes that are not in the docs tree, read out of `seo.ts`.
+ *
+ * Parsed for the same reason `nav.ts` is: the running site needs this list at
+ * runtime, so it has to be TypeScript, and keeping a second copy here is the
+ * drift the whole arrangement exists to prevent.
+ */
+function pagesFromSeo() {
+  const source = readFileSync(seoFile, 'utf8');
+  const entry =
+    /path:\s*'((?:[^'\\]|\\.)*)',\s*\n\s*name:\s*'((?:[^'\\]|\\.)*)',\s*\n\s*title:\s*'((?:[^'\\]|\\.)*)',\s*\n\s*description:\s*\n?\s*'((?:[^'\\]|\\.)*)',\s*\n\s*listed:\s*(true|false)/g;
+
+  const found = [...source.matchAll(entry)].map((one) => ({
+    path: unquote(one[1]),
+    name: unquote(one[2]),
+    title: unquote(one[3]),
+    description: unquote(one[4]),
+    listed: one[5] === 'true',
+  }));
+
+  if (found.length === 0) {
+    fail(
+      `found no pages in ${seoFile}`,
+      '  the shape this looks for is path, name, title, description, listed',
+    );
+  }
+  return found;
+}
+
+/** A single-quoted TypeScript string literal, as its text. */
+function unquote(literal) {
+  return literal.replaceAll("\\'", "'").replaceAll('\\\\', '\\');
+}
+
+/** The docs groups, in order, each with the paths that sit in it. */
+function groupsFromNav() {
+  const source = readFileSync(navFile, 'utf8');
+  const heads = [
+    ...source.matchAll(/title:\s*'((?:[^'\\]|\\.)*)',\s*\n\s*line:\s*'((?:[^'\\]|\\.)*)',/g),
+  ];
+  const entries = [...source.matchAll(/path:\s*'([^']+)',\s*\n\s*documentTitle:/g)];
+
+  return heads.map((head, at) => {
+    const from = head.index;
+    const to = at + 1 < heads.length ? heads[at + 1].index : source.length;
+    return {
+      title: unquote(head[1]),
+      line: unquote(head[2]),
+      paths: entries
+        .filter((entry) => entry.index > from && entry.index < to)
+        .map((entry) => entry[1]),
+    };
+  });
+}
+
+/** The handful of entities Angular writes into an attribute. */
+function decode(text) {
+  return text
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#39;', "'")
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&amp;', '&');
+}
+
+/** The five characters XML will not take raw. */
+function xml(text) {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+/**
+ * `sitemap.xml`.
+ *
+ * **No `lastmod`, and that is a decision rather than an omission.** The only
+ * date this build knows is the moment it ran, which would tell a crawler that
+ * all twenty pages changed every time any one of them did — and a sitemap that
+ * cries wolf on every deploy is one a crawler learns to discount. `changefreq`
+ * and `priority` are left out for the same reason: Google ignores both.
+ */
+function sitemap(listed) {
+  const urls = listed
+    .map((page) => `  <url>\n    <loc>${xml(urlOf(page))}</loc>\n  </url>`)
+    .join('\n');
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!-- Generated by web/tools/site.mjs from nav.ts and seo.ts. Do not edit. -->',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    urls,
+    '</urlset>',
+    '',
+  ].join('\n');
+}
+
+/**
+ * `robots.txt`.
+ *
+ * Everything is allowed, because everything here is documentation that exists
+ * to be found. The two unlisted routes carry `noindex` in their own head, which
+ * is the instruction that works — a `Disallow` would stop a crawler reading the
+ * page and therefore stop it seeing the `noindex` at all.
+ */
+function robots() {
+  return [
+    '# Generated by web/tools/site.mjs. Do not edit.',
+    'User-agent: *',
+    'Allow: /',
+    '',
+    `Sitemap: ${ORIGIN}/sitemap.xml`,
+    '',
+  ].join('\n');
+}
+
+/**
+ * `llms.txt`.
+ *
+ * The page list is generated from the same routes as the sitemap; the prose is
+ * `tools/llms-copy.mjs`. The shape — a `>` summary, what people get wrong, what
+ * it is, the pages, the questions, contact — is the owner's, from a worked
+ * example he supplied.
+ */
+function llms(listed) {
+  const out = [];
+  const say = (...lines) => out.push(...lines);
+
+  say(`# ${SITE_NAME}`, '', `> ${LLMS_COPY.summary}`, '');
+
+  say('## What people get wrong first', '');
+  for (const item of LLMS_COPY.gotWrong) {
+    say(`### ${item.heading}`, '', ...item.lines, '');
+  }
+
+  say('## What it is', '', ...LLMS_COPY.what, '');
+
+  say('## Pages', '');
+  const byPath = new Map(listed.map((page) => [page.path, page]));
+  for (const page of listed.filter((one) => !one.path.startsWith('/docs/'))) {
+    say(`- [${page.name}](${urlOf(page)}): ${page.description}`);
+  }
+  say('');
+  for (const group of groupsFromNav()) {
+    const inGroup = group.paths.map((path) => byPath.get(`/docs/${path}`)).filter(Boolean);
+    if (inGroup.length === 0) {
+      continue;
+    }
+    say(`### ${group.title}`, '', `${group.line}`, '');
+    for (const page of inGroup) {
+      say(`- [${page.name}](${urlOf(page)}): ${page.description}`);
+    }
+    say('');
+  }
+
+  say('## Questions', '');
+  for (const item of LLMS_COPY.questions) {
+    say(`### ${item.q}`, '', ...item.a, '');
+  }
+
+  say('## Contact', '', ...LLMS_COPY.contact, '');
+
+  return `${out.join('\n')}`;
 }
 
 /** The text of one element, or null when the document has none. */
@@ -163,6 +367,7 @@ function readNotFound() {
 // ── 1. Every route is a real page ──────────────────────────────────────────
 
 const pages = pagesFromNav();
+const extras = pagesFromSeo();
 const expected = [...OUTSIDE, '/docs', ...pages.map((page) => `/docs/${page.path}`)].sort();
 
 if (!existsSync(manifest)) {
@@ -231,8 +436,10 @@ for (const page of pages) {
 // ── 3. 404.html, where GitHub Pages looks for it ───────────────────────────
 
 const notFound = readNotFound();
-writeFileSync(join(out, '404.html'), notFound.html);
-rmSync(join(out, '404'), { recursive: true, force: true });
+if (!CHECK_ONLY) {
+  writeFileSync(join(out, '404.html'), notFound.html);
+  rmSync(join(out, '404'), { recursive: true, force: true });
+}
 
 const notFoundHeading = tagText(notFound.html, 'h1');
 if (!notFoundHeading || !/nothing at this address/i.test(notFoundHeading)) {
@@ -251,7 +458,12 @@ for (const name of SCRIPTS) {
     fail(`no ${source}`, '  a one-liner on this site fetches this file from its root');
   }
   const target = join(out, name);
-  cpSync(source, target);
+  if (!CHECK_ONLY) {
+    cpSync(source, target);
+  }
+  if (!existsSync(target)) {
+    fail(`${name} is not on the site`, `  expected ${target}`);
+  }
 
   // Cheap, and it catches the one thing that can go wrong between those two
   // lines: a copy that truncated, or a tool that helpfully rewrote the line
@@ -265,7 +477,130 @@ for (const name of SCRIPTS) {
   }
 }
 
-// ── 5. Every URL this site publishes is a URL this site serves ─────────────
+// ── 5. sitemap.xml, robots.txt and llms.txt ───────────────────────────────
+//
+// **Generated from the route list, never hand-maintained.** A sitemap somebody
+// has to remember is a sitemap that goes stale the first time a route is added.
+// The docs half comes out of `nav.ts` and the rest out of `EXTRA_PAGES` in
+// `seo.ts` — the same two files the running site reads — so adding a page adds
+// it to all three of these with no other edit.
+//
+// And then they are read back off disk and checked against that same route
+// list, which is what makes a hand-edited sitemap fail the build rather than
+// ship. `node tools/site.mjs --check` runs the checks without writing anything.
+
+// Both halves carry `name` as well as `title`: the head wants the `<title>`,
+// and a list of links wants what the page is called. `seo.ts` says why.
+const described = [
+  ...extras,
+  ...pages.map((page) => ({
+    path: `/docs/${page.path}`,
+    title: page.documentTitle,
+    name: page.title,
+    description: page.blurb,
+    listed: true,
+  })),
+];
+
+for (const route of built) {
+  if (!described.some((page) => page.path === (route === '/' ? '' : route))) {
+    fail(
+      `${route} is prerendered and nothing describes it`,
+      '  a page needs a title and one sentence before it can be in the sitemap, the',
+      '  Open Graph tags or llms.txt',
+      '  add it to EXTRA_PAGES in src/app/seo.ts, or to DOCS_NAV in src/app/docs/nav.ts',
+    );
+  }
+}
+
+const listed = described.filter((page) => page.listed);
+const urlOf = (page) => `${ORIGIN}${page.path}/`.replace(/([^:])\/\/+/g, '$1/');
+
+if (!CHECK_ONLY) {
+  writeFileSync(join(out, 'sitemap.xml'), sitemap(listed));
+  writeFileSync(join(out, 'robots.txt'), robots());
+  writeFileSync(join(out, 'llms.txt'), llms(listed));
+}
+
+// Read back, not remembered. Everything below is about the bytes on disk.
+for (const name of ['sitemap.xml', 'robots.txt', 'llms.txt']) {
+  if (!existsSync(join(out, name))) {
+    fail(`${name} was not generated`, `  expected ${join(out, name)}`);
+  }
+}
+
+const sitemapText = readFileSync(join(out, 'sitemap.xml'), 'utf8');
+const inSitemap = [...sitemapText.matchAll(/<loc>([^<]+)<\/loc>/g)].map((found) => found[1]);
+const wanted = listed.map(urlOf);
+
+const absent = wanted.filter((url) => !inSitemap.includes(url));
+const unexpected = inSitemap.filter((url) => !wanted.includes(url));
+if (absent.length > 0 || unexpected.length > 0) {
+  fail(
+    'sitemap.xml does not match the routes that were built',
+    ...absent.map((url) => `  built, missing from the sitemap:  ${url}`),
+    ...unexpected.map((url) => `  in the sitemap, never built:      ${url}`),
+    '  it is generated — `node tools/site.mjs` rewrites it from nav.ts and seo.ts',
+  );
+}
+
+const llmsText = readFileSync(join(out, 'llms.txt'), 'utf8');
+for (const page of listed) {
+  if (!llmsText.includes(urlOf(page))) {
+    fail(`llms.txt has no entry for ${urlOf(page)}`, '  it is generated from the same list');
+  }
+}
+
+if (!readFileSync(join(out, 'robots.txt'), 'utf8').includes(`${ORIGIN}/sitemap.xml`)) {
+  fail('robots.txt does not point at the sitemap');
+}
+
+// The pages that must not be indexed must also not be advertised.
+for (const page of described.filter((candidate) => !candidate.listed)) {
+  const url = urlOf(page);
+  if (inSitemap.includes(url) || llmsText.includes(url)) {
+    fail(`${page.path} is listed:false and is still advertised`, `  ${url}`);
+  }
+  const { file, html } = page.path === '/404' ? readNotFound() : read(page.path);
+  if (!/<meta name="robots" content="noindex/.test(html)) {
+    fail(`${page.path} is listed:false and is missing its noindex`, `  ${file}`);
+  }
+}
+
+// And every page's head has to be the head `seo.ts` says it is. Two writers
+// touch a title — the router's own strategy and `Seo` — so this is what proves
+// they agree rather than one quietly winning.
+for (const page of described) {
+  const { file, html } = page.path === '/404' ? readNotFound() : read(page.path);
+  const url = urlOf(page);
+
+  const description = html.match(/<meta name="description" content="([^"]*)"/);
+  if (!description || decode(description[1]) !== page.description) {
+    fail(
+      `${page.path || '/'} has the wrong meta description`,
+      `  seo.ts says  ${page.description}`,
+      `  the file has ${description ? decode(description[1]) : '(none)'}`,
+      `  ${file}`,
+    );
+  }
+
+  const canonical = html.match(/<link rel="canonical" href="([^"]*)"/);
+  const expected = page.path === '/404' ? undefined : url;
+  if (expected && (!canonical || canonical[1] !== expected)) {
+    fail(
+      `${page.path || '/'} has the wrong canonical`,
+      `  expected ${expected}`,
+      `  the file has ${canonical ? canonical[1] : '(none)'}`,
+      `  ${file}`,
+    );
+  }
+
+  if (!/<script type="application\/ld\+json">/.test(html)) {
+    fail(`${page.path || '/'} has no JSON-LD`, `  ${file}`);
+  }
+}
+
+// ── 6. Every URL this site publishes is a URL this site serves ─────────────
 //
 // The check with teeth, and the one that turns `A22`'s *done when* into
 // something a build can decide. The install one-liners are in the README, in
@@ -295,14 +630,18 @@ for (const path of [...published].sort()) {
   }
 }
 
-// ── 5. Jekyll, and the shell nobody asked for ──────────────────────────────
+// ── 7. Jekyll, and the shell nobody asked for ──────────────────────────────
 
-writeFileSync(join(out, '.nojekyll'), '');
+if (!CHECK_ONLY) {
+  writeFileSync(join(out, '.nojekyll'), '');
+}
 
 // Angular emits this beside `index.html` as the client-side-rendered shell. On
 // a static site nothing serves it, and a crawler that finds it finds a page
 // with no content on it — so it goes rather than sitting there.
-rmSync(join(out, 'index.csr.html'), { force: true });
+if (!CHECK_ONLY) {
+  rmSync(join(out, 'index.csr.html'), { force: true });
+}
 
 const files = readdirSync(out).length;
 console.log(

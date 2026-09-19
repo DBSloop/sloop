@@ -28,7 +28,25 @@
     />
     <meta name="twitter:card" content="summary_large_image" />
 
+    <!--
+      Three icons, and the order is the point.
+
+      `favicon.ico` is first because it is the one a browser asks for on its
+      own, at `/favicon.ico`, whether or not the document mentions it — and a
+      site that serves only an SVG answers that request with a 404, which is
+      exactly why nothing was showing. Every browser that prefers the SVG takes
+      the SVG regardless of order; the ones that do not fall back to a file that
+      now exists.
+
+      The `.ico` carries 16, 32 and 48 and weighs 6 KB. The source it came from
+      carried eight sizes up to 256 as uncompressed 32-bit frames and weighed
+      446 KB, which is a lot to fetch on every cold load for something drawn at
+      16 pixels. The 256 lives on as the Apple touch icon, flattened onto the
+      site's own background because iOS composites a transparent one onto black.
+    -->
+    <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48" />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
 
     <!--
       Dark on first paint, with no flash.

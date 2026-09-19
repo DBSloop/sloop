@@ -16,7 +16,8 @@
     "test": "ng test",
     "commands": "node tools/commands.mjs",
     "commands:check": "node tools/commands.mjs --check",
-    "site": "ng build && node tools/site.mjs"
+    "site": "ng build && node tools/site.mjs",
+    "site:check": "node tools/site.mjs --check"
   },
   "dependencies": {
     "@angular/common": "^21.2.0",
