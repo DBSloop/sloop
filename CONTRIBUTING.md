@@ -39,6 +39,14 @@ cargo test
 
 All three have to pass. Warnings are denied in CI, so a warning is a failure.
 
+The shell scripts are linted too, and CI's shellcheck is older than the one your package
+manager will give you — a newer one passes things 0.9 rejects. Match it:
+
+```sh
+pip install shellcheck-py==0.9.0.6
+shellcheck --shell=sh --severity=style install/*.sh ci/*.sh
+```
+
 ### And the one that is not about the code
 
 ```sh

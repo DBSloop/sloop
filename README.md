@@ -86,9 +86,10 @@ half of the key is on this machine and nowhere else, and losing the machine with
 means losing every backup it took. The first backup stops and says so; without a terminal to
 say it to, it refuses and exits `2`.
 
-Or run `sloop` with no arguments and answer the questions — the menu does the whole job, and
-every interactive run ends by printing the flag form of what it just did, so a session
-becomes a line you can schedule.
+Or run `sloop` with no arguments and answer the questions. The menu covers registering,
+backing up, restoring, mirroring, syncing, reading and the backup key; installing and
+scheduling the background service is by flag for now. Every interactive run ends by printing
+the flag form of what it just did, so a session becomes a line you can schedule.
 
 ---
 

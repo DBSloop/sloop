@@ -114,7 +114,10 @@ if [ -f cli/Cargo.toml ]; then
     if ! grep -q '^readme = "\.\./README\.md"$' cli/Cargo.toml; then
         problem "cli/Cargo.toml no longer points readme at the repository's README.md"
     elif command -v cargo > /dev/null 2>&1; then
-        listed=$(cd cli && cargo package --list --allow-dirty 2> /dev/null | grep -c '^README\.md$' || true)
+        listed=$(
+            cd cli || exit 1
+            cargo package --list --allow-dirty 2> /dev/null | grep -c '^README\.md$'
+        )
         if [ "${listed:-0}" -eq 0 ]; then
             problem "cargo would not put a README.md in the published crate"
         else
