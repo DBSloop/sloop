@@ -12,6 +12,14 @@ use crate::failure::Outcome;
 struct Known {
     databases: Vec<String>,
     backups: Vec<String>,
+    /// What the service has been told to watch. Its own list, because `R23a`'s pickers read
+    /// it rather than the registry — a database can be registered and unattached, and the
+    /// screens that offer one have to tell those apart.
+    watched: Vec<String>,
+    /// Which of them are in the **global** registry. Its own list for the same reason: a
+    /// machine can have a project full of databases and nothing a service could watch, and
+    /// that is the case `service attach` has a sentence of its own for.
+    globally: Vec<String>,
 }
 
 impl Known {
@@ -19,6 +27,8 @@ impl Known {
         Self {
             databases: databases.iter().map(|name| (*name).to_owned()).collect(),
             backups: vec!["20260916T031500Z".to_owned(), "20260915T031500Z".to_owned()],
+            watched: databases.iter().map(|name| (*name).to_owned()).collect(),
+            globally: databases.iter().map(|name| (*name).to_owned()).collect(),
         }
     }
 
@@ -26,6 +36,26 @@ impl Known {
         Self {
             databases: Vec::new(),
             backups: Vec::new(),
+            watched: Vec::new(),
+            globally: Vec::new(),
+        }
+    }
+
+    /// Databases registered, and a service watching none of them.
+    fn none_attached(databases: &[&str]) -> Self {
+        Self {
+            watched: Vec::new(),
+            ..Self::with(databases)
+        }
+    }
+
+    /// Databases registered in a project, and none in the global store — which is the only
+    /// one a service can see.
+    fn none_global(databases: &[&str]) -> Self {
+        Self {
+            globally: Vec::new(),
+            watched: Vec::new(),
+            ..Self::with(databases)
         }
     }
 
@@ -50,32 +80,67 @@ impl Doing for Known {
         self.backups.clone()
     }
 
+    fn globally_registered(&self) -> Vec<String> {
+        self.globally.clone()
+    }
+
+    fn watched(&self) -> Vec<String> {
+        self.watched.clone()
+    }
+
     fn run(&mut self, _job: Job, _answers: &Answers) -> Outcome<Exit> {
         unreachable!("these tests never run anything")
     }
 }
 
 /// Every job, so a flow added later cannot quietly go untested.
-const EVERY: &[Job] = &[
-    Job::DbAdd,
-    Job::DbCreate,
-    Job::DbList,
-    Job::DbTest,
-    Job::DbEdit,
-    Job::DbRename,
-    Job::DbRemove,
-    Job::DbDrop,
-    Job::Backup,
-    Job::BackupAll,
-    Job::BackupsList,
-    Job::Restore,
-    Job::BackupsPrune,
-    Job::Mirror,
-    Job::Sync,
-    Job::KeyExport,
-    Job::KeyImport,
-    Job::Doctor,
-];
+///
+/// **`Job::every()`, not a list kept here.** This one was eighteen entries long while the
+/// enum had twenty-three, so `query`, `setup`, `server install`, `server connection` and
+/// `service activity` were all outside a constant named `EVERY`. One list now, guarded by an
+/// exhaustive match in `flow.rs`.
+fn every() -> &'static [Job] {
+    Job::every()
+}
+
+/// **`R23a`, and `R28`'s rule reaching the menu.** A screen with an empty list says what to
+/// do about it, and what to do is not the same thing for all three: a database has to be
+/// registered globally before the service can watch it, and watched before it can be
+/// scheduled or detached. The generic sentence — *register another database first* — would
+/// send somebody who has done exactly that back to do it again.
+#[test]
+fn a_service_screen_with_nothing_to_pick_names_the_step_that_fixes_it() {
+    let nothing_watched = Known::none_attached(&["orders"]);
+
+    for (job, expected) in [
+        (Job::ServiceDetach, "not watching anything"),
+        (Job::ServiceSchedule, "not watching anything"),
+    ] {
+        match job.next(&Answers::default(), &nothing_watched) {
+            Next::Blocked(said) => assert!(
+                said.contains(expected),
+                "{job:?} said {said:?}, which does not name the step"
+            ),
+            other => panic!("{job:?} offered a list of nothing: {other:?}"),
+        }
+    }
+
+    // A project full of databases and nothing in the global store, which is the only one a
+    // service can see. `Known::empty()` would not reach this: with nothing registered at all
+    // the flow blocks a step earlier, on the sentence every job shares.
+    let nothing_global = Known::none_global(&["orders"]);
+    match Job::ServiceAttach.next(&Answers::default(), &nothing_global) {
+        Next::Blocked(said) => assert!(said.contains("global registry"), "{said:?}"),
+        other => panic!("attach offered a list of nothing: {other:?}"),
+    }
+}
+
+#[test]
+fn the_list_of_every_job_is_every_job() {
+    for job in every() {
+        assert!(job.in_the_list(), "{job:?} is missing from Job::every()");
+    }
+}
 
 /// Answer every question the way somebody pressing Enter would: the first item of a list,
 /// or whatever is already in the box. Returns what was asked, in order.
@@ -110,7 +175,7 @@ fn walk_it(job: Job, world: &dyn Doing) -> (Answers, Vec<Step>) {
 fn every_job_can_be_answered_to_the_end() {
     let world = Known::with(&["orders", "orders_staging"]);
 
-    for job in EVERY {
+    for job in every() {
         let (answers, asked) = walk_it(*job, &world);
         assert_eq!(
             job.next(&answers, &world),
@@ -127,7 +192,7 @@ fn every_job_can_be_answered_to_the_end() {
 fn no_question_is_asked_twice_and_none_is_empty() {
     let world = Known::with(&["orders", "orders_staging"]);
 
-    for job in EVERY {
+    for job in every() {
         let (_, asked) = walk_it(*job, &world);
 
         let mut seen: Vec<&str> = Vec::new();
@@ -163,7 +228,7 @@ fn no_question_is_asked_twice_and_none_is_empty() {
 fn no_flow_ever_asks_for_a_password() {
     let world = Known::with(&["orders"]);
 
-    for job in EVERY {
+    for job in every() {
         let (_, asked) = walk_it(*job, &world);
         for step in &asked {
             let question = step.question.to_lowercase();
@@ -195,20 +260,25 @@ fn dropping_a_database_is_a_pick_and_the_typing_is_the_commands() {
 fn a_job_that_needs_a_database_says_so_when_there_are_none() {
     let world = Known::empty();
 
-    for job in EVERY {
+    // **Checked against the rule rather than against a list of exceptions.** The list
+    // version named five jobs and swept the rest into `_`, which was right while `EVERY`
+    // held eighteen of them and wrong the moment it held all thirty-one: `setup`,
+    // `server install` and most of `service` are answerable on a machine with nothing
+    // registered, and being swept into "must be blocked" would have made this test demand
+    // the opposite of what those commands are for.
+    for job in every() {
         let asked = job.next(&Answers::default(), &world);
-        match job {
-            Job::DbAdd | Job::DbCreate => {
-                assert!(matches!(asked, Next::Ask(_)), "{job:?} refused to start");
-            }
-            Job::DbList | Job::KeyExport | Job::KeyImport => {
-                assert_eq!(asked, Next::Ready, "{job:?}");
-            }
-            Job::Doctor => assert!(matches!(asked, Next::Ask(_)), "{job:?}"),
-            _ => assert!(
+        if job.needs_a_database() {
+            assert!(
                 matches!(asked, Next::Blocked(_)),
                 "{job:?} offered a list of nothing"
-            ),
+            );
+        } else {
+            assert!(
+                !matches!(asked, Next::Blocked(_)),
+                "{job:?} refused to start on a machine with nothing registered, and it does \
+                 not need anything registered"
+            );
         }
     }
 }
@@ -463,7 +533,7 @@ fn a_box_says_whether_leaving_it_blank_is_an_answer() {
 fn every_box_that_opens_full_is_one_enter_can_answer() {
     let world = Known::with(&["orders", "orders_staging"]);
 
-    for job in EVERY {
+    for job in every() {
         for step in walk_it(*job, &world).1 {
             let How::Type {
                 initial, needed, ..

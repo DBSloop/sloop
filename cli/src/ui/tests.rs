@@ -34,6 +34,14 @@ impl Doing for Bench {
         vec!["20260916T031500Z".to_owned()]
     }
 
+    fn globally_registered(&self) -> Vec<String> {
+        self.databases()
+    }
+
+    fn watched(&self) -> Vec<String> {
+        self.databases()
+    }
+
     fn on_the_server(&self, label: &str) -> Option<String> {
         Some(format!("{label}_live"))
     }
@@ -752,7 +760,29 @@ fn down_to(door: usize, leaf: usize) -> Vec<Does> {
 #[test]
 fn every_command_is_reachable_and_completable_from_the_menu() {
     let leaves = every_leaf();
-    assert_eq!(leaves.len(), 22, "the tree lost a command: {leaves:?}");
+
+    // **Counted against the enum, not against a number kept here.** A hard-coded 22 is a
+    // number somebody edits to make the test pass, which is the opposite of what it is for.
+    // `Job` is the list of every command the menu can run, so a variant added without a row
+    // on a screen fails here with the name of the one that is missing.
+    let reachable: Vec<Job> = leaves.iter().map(|(_, _, job)| *job).collect();
+    let missing: Vec<Job> = crate::ui::flow::Job::every()
+        .iter()
+        .copied()
+        // Setup is the one job with no row on the home screen, on purpose: it is what the
+        // first-run screen offers and it is gone from every screen after that.
+        .filter(|job| *job != Job::Setup)
+        .filter(|job| !reachable.contains(job))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these commands are not reachable from the menu: {missing:?}"
+    );
+    assert_eq!(
+        leaves.len(),
+        reachable.len(),
+        "a command has two rows on the menu: {leaves:?}"
+    );
 
     for (door, leaf, job) in leaves {
         let mut script = down_to(door, leaf);

@@ -172,9 +172,86 @@ pub fn argv(job: Job, answers: &Answers, world: &dyn Doing) -> Option<Vec<String
         }
 
         Job::ServiceActivity => out.extend(["service".to_owned(), "activity".to_owned()]),
+
+        // **`R23a`.** Its own function: `argv` is one arm per command, and eight more of them
+        // in line would put it past what anybody reads in one go.
+        Job::ServiceInstall
+        | Job::ServiceUninstall
+        | Job::ServiceAttach
+        | Job::ServiceDetach
+        | Job::ServiceSchedule
+        | Job::ServiceStart
+        | Job::ServiceStop
+        | Job::ServiceStatus => servicing(&mut out, job, answers),
     }
 
     Some(out)
+}
+
+/// `R23a`'s eight, as the line that would have done the same thing.
+fn servicing(out: &mut Vec<String>, job: Job, answers: &Answers) {
+    out.push("service".to_owned());
+    out.push(
+        match job {
+            Job::ServiceInstall => "install",
+            Job::ServiceUninstall => "uninstall",
+            Job::ServiceAttach => "attach",
+            Job::ServiceDetach => "detach",
+            Job::ServiceSchedule => "schedule",
+            Job::ServiceStart => "start",
+            Job::ServiceStop => "stop",
+            // `uninstall`, `start`, `stop` and `status` take nothing after the verb.
+            _ => "status",
+        }
+        .to_owned(),
+    );
+
+    if matches!(
+        job,
+        Job::ServiceAttach | Job::ServiceDetach | Job::ServiceSchedule
+    ) && let Some(name) = answers.some(field::NAME)
+    {
+        out.push(name.to_owned());
+    }
+
+    match job {
+        Job::ServiceInstall => {
+            // The screen asks "start it now?" and the flag is the other way round, so the
+            // line carries `--no-start` only when the answer was no.
+            if !answers.yes(field::START_NOW) {
+                out.push("--no-start".to_owned());
+            }
+            // Printed only when it is not the default, because a line that repeats the
+            // default is a line that stops being true when the default moves.
+            if let Some(seconds) = answers.number::<u64>(field::INTERVAL)
+                && seconds != crate::service::daemon::INTERVAL_SECONDS
+            {
+                out.push("--interval".to_owned());
+                out.push(seconds.to_string());
+            }
+        }
+
+        Job::ServiceSchedule => match answers.some(field::EVERY) {
+            // Blank was how the screen said "stop backing it up", and `--off` refuses to sit
+            // beside the other three, so the line is that flag on its own.
+            None => out.push("--off".to_owned()),
+            Some(every) => {
+                out.push("--every".to_owned());
+                out.push(every.to_owned());
+                for (name, value) in [
+                    ("--keep", answers.some(field::KEEP)),
+                    ("--keep-for-days", answers.some(field::KEEP_DAYS)),
+                ] {
+                    if let Some(value) = value {
+                        out.push(name.to_owned());
+                        out.push(value.to_owned());
+                    }
+                }
+            }
+        },
+
+        _ => {}
+    }
 }
 
 /// `db add` and `db edit`: the same vocabulary, and the same two halves under it.

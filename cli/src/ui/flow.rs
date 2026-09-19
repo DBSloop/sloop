@@ -65,6 +65,22 @@ pub enum Job {
     Query,
     /// `service activity`
     ServiceActivity,
+    /// `service install`
+    ServiceInstall,
+    /// `service uninstall`
+    ServiceUninstall,
+    /// `service attach`
+    ServiceAttach,
+    /// `service detach`
+    ServiceDetach,
+    /// `service schedule`
+    ServiceSchedule,
+    /// `service start`
+    ServiceStart,
+    /// `service stop`
+    ServiceStop,
+    /// `service status`
+    ServiceStatus,
     /// `doctor`
     Doctor,
     /// `setup` — the one job that runs before there is a registry to read.
@@ -146,6 +162,14 @@ pub mod field {
     pub const OFFLINE: &str = "offline";
     /// Print sloop's own database password as well as where it is kept?
     pub const PASSWORD: &str = "password";
+    /// Start the service now, or only at the next boot?
+    pub const START_NOW: &str = "start-now";
+    /// Seconds between one round of the service's readings and the next.
+    pub const INTERVAL: &str = "interval";
+    /// How often a scheduled backup runs.
+    pub const EVERY: &str = "every";
+    /// Prune anything older than this many days.
+    pub const KEEP_DAYS: &str = "keep-days";
     /// Reached straight, or through an SSH server?
     pub const REACH: &str = "reach";
     /// The SSH server.
@@ -351,6 +375,20 @@ pub trait Doing {
     /// its own directory — which is what `restore --from` takes.
     fn backups_of(&self, name: &str) -> Vec<String>;
 
+    /// Every database in the **global** registry, which is the only one a service can see.
+    ///
+    /// **A service has no working directory**, so `-C` and the walk up from the shell that
+    /// found this session's project mean nothing to it. `service attach` says so in its own
+    /// help; this is how the menu's picker says the same thing by not offering the rest.
+    fn globally_registered(&self) -> Vec<String>;
+
+    /// Every database the service has been told to watch, by the name it is attached under.
+    ///
+    /// What `detach` and `schedule` pick from: scheduling a database the service is not
+    /// watching is a refusal the command already makes, and a menu that offers it is a menu
+    /// that walks somebody into it.
+    fn watched(&self) -> Vec<String>;
+
     /// What a registered database is called **on its server**, which is not its label.
     ///
     /// **`--confirm` takes this one**, and rule 5 is the reason: the flag names the thing
@@ -368,6 +406,93 @@ pub trait Doing {
 }
 
 impl Job {
+    /// Every job there is, which is every command the menu can run.
+    ///
+    /// **One list, and the compiler will not let it go stale.** Two hand-written lists of
+    /// these already existed — one in `flow_tests`, one as a count in `ui::tests` — and both
+    /// were short by the time `R23a` looked at them, which is how `query`, `setup` and the
+    /// whole of `service` came to be untested by the tests that said *every*. The exhaustive
+    /// `match` in [`Job::in_the_list`] is what makes adding a variant a compile error here
+    /// rather than a quiet gap somewhere else.
+    #[cfg(test)]
+    pub const fn every() -> &'static [Self] {
+        &[
+            Self::DbAdd,
+            Self::DbCreate,
+            Self::DbList,
+            Self::DbTest,
+            Self::DbEdit,
+            Self::DbRename,
+            Self::DbRemove,
+            Self::DbDrop,
+            Self::Backup,
+            Self::BackupAll,
+            Self::BackupsList,
+            Self::Restore,
+            Self::BackupsPrune,
+            Self::Mirror,
+            Self::Sync,
+            Self::KeyExport,
+            Self::KeyImport,
+            Self::Query,
+            Self::Doctor,
+            Self::Setup,
+            Self::ServerInstall,
+            Self::ServerConnection,
+            Self::ServiceActivity,
+            Self::ServiceInstall,
+            Self::ServiceUninstall,
+            Self::ServiceAttach,
+            Self::ServiceDetach,
+            Self::ServiceSchedule,
+            Self::ServiceStart,
+            Self::ServiceStop,
+            Self::ServiceStatus,
+        ]
+    }
+
+    /// Is this variant in [`Job::every`]?
+    ///
+    /// **The arm that will not compile.** A variant added to the enum has no arm here, and
+    /// `rustc` says so at the line above the list it also needs adding to. Nothing calls this
+    /// outside the test below; it exists to be exhaustive.
+    #[cfg(test)]
+    const fn in_the_list(self) -> bool {
+        match self {
+            Self::DbAdd
+            | Self::DbCreate
+            | Self::DbList
+            | Self::DbTest
+            | Self::DbEdit
+            | Self::DbRename
+            | Self::DbRemove
+            | Self::DbDrop
+            | Self::Backup
+            | Self::BackupAll
+            | Self::BackupsList
+            | Self::Restore
+            | Self::BackupsPrune
+            | Self::Mirror
+            | Self::Sync
+            | Self::KeyExport
+            | Self::KeyImport
+            | Self::Query
+            | Self::Doctor
+            | Self::Setup
+            | Self::ServerInstall
+            | Self::ServerConnection
+            | Self::ServiceActivity
+            | Self::ServiceInstall
+            | Self::ServiceUninstall
+            | Self::ServiceAttach
+            | Self::ServiceDetach
+            | Self::ServiceSchedule
+            | Self::ServiceStart
+            | Self::ServiceStop
+            | Self::ServiceStatus => true,
+        }
+    }
+
     /// Does this need something in the registry before it can be started?
     const fn needs_a_database(self) -> bool {
         matches!(
@@ -385,6 +510,12 @@ impl Job {
                 | Self::Mirror
                 | Self::Sync
                 | Self::Query
+                // A service watches a database by the name it is registered under, so
+                // there has to be one. `install`, `start`, `stop`, `status` and `uninstall`
+                // are about the machine and are answerable with an empty registry.
+                | Self::ServiceAttach
+                | Self::ServiceDetach
+                | Self::ServiceSchedule
         )
     }
 
@@ -427,14 +558,37 @@ impl Job {
             if let How::Pick { values, .. } = &step.how
                 && values.is_empty()
             {
-                return Next::Blocked(format!(
-                    "There is nothing to choose for {}. Register another database first.",
-                    step.field
-                ));
+                return Next::Blocked(self.nothing_to_choose(step.field));
             }
             return Next::Ask(Box::new(step));
         }
         Next::Ready
+    }
+
+    /// What to say when a question has nothing on its list.
+    ///
+    /// **Because the fix is not the same fix.** A `mirror` with one database registered
+    /// needs a second one registered; a `service schedule` with none attached needs
+    /// `attach`, and telling that person to register a database sends them to a screen they
+    /// have already been to. `R28`'s rule reaches the menu as well: the sentence names the
+    /// step, not just the problem.
+    fn nothing_to_choose(self, field: &str) -> String {
+        match self {
+            Self::ServiceDetach => "The service is not watching anything yet. Watch a \
+                                    database first — it is the item above this one."
+                .to_owned(),
+            Self::ServiceSchedule => "There is nothing on a schedule yet, because the \
+                                      service is not watching anything. Watch a database \
+                                      first."
+                .to_owned(),
+            Self::ServiceAttach => "A service can only watch a database in the global \
+                                    registry, and there are none. Register one outside a \
+                                    project first."
+                .to_owned(),
+            _ => {
+                format!("There is nothing to choose for {field}. Register another database first.")
+            }
+        }
     }
 
     /// Every question this job asks, given what has been answered so far.
@@ -456,12 +610,24 @@ impl Job {
             // `service activity` asks nothing either: it is a reading of what is already
             // recorded, and every choice it could offer — which database, which window — is
             // on the screen at once instead.
+            // `service start`, `stop`, `status` and `uninstall` have nothing to ask: each
+            // is one verb aimed at the one service this machine has. `install` asks below,
+            // because two of its three flags change what gets registered.
             Self::Setup
             | Self::ServerInstall
             | Self::DbList
             | Self::KeyExport
             | Self::KeyImport
-            | Self::ServiceActivity => Vec::new(),
+            | Self::ServiceActivity
+            | Self::ServiceUninstall
+            | Self::ServiceStart
+            | Self::ServiceStop
+            | Self::ServiceStatus => Vec::new(),
+
+            Self::ServiceInstall
+            | Self::ServiceAttach
+            | Self::ServiceDetach
+            | Self::ServiceSchedule => servicing(self, world),
 
             Self::DbAdd => registering(answers),
             Self::DbCreate => making(),
@@ -630,6 +796,72 @@ impl Job {
 }
 
 /// `db add`: a URL, or five fields, and then where the password lives.
+/// `R23a`'s four screens that ask something.
+///
+/// **Which list each picker reads is the whole of it.** A service has no working directory,
+/// so `attach` offers the global registry and not this session's project; and `detach` and
+/// `schedule` offer what is already attached, because scheduling a database the service is
+/// not watching is a refusal the command already makes.
+fn servicing(job: Job, world: &dyn Doing) -> Vec<Step> {
+    match job {
+        Job::ServiceInstall => vec![
+            yes_or_no(
+                field::START_NOW,
+                "Start it as soon as it is registered?",
+                true,
+                "either way it starts at the next boot",
+            ),
+            box_for(
+                field::INTERVAL,
+                "How many seconds between one round of readings and the next?",
+                &crate::service::daemon::INTERVAL_SECONDS.to_string(),
+                "60 is the default. Lower reads more often and costs the databases more",
+                false,
+            ),
+        ],
+
+        Job::ServiceAttach => vec![pick_one(
+            "Which database should the service watch?",
+            &world.globally_registered(),
+        )],
+
+        Job::ServiceDetach => vec![pick_one(
+            "Which one should it stop watching?",
+            &world.watched(),
+        )],
+
+        _ => vec![
+            pick_one(
+                "Which database should be backed up on a schedule?",
+                &world.watched(),
+            ),
+            // **A default, not a blank.** Blank is how this screen says "stop backing it
+            // up", and an empty box on a screen called *Back one up on a schedule* means
+            // somebody pressing Enter through it turns off the thing they came to set up.
+            // So the box arrives filled, and clearing it is the deliberate act.
+            box_for(
+                field::EVERY,
+                "How often?",
+                "1d",
+                "30m, 6h, 1d, 2w. Clear it to stop backing this one up",
+                false,
+            ),
+            box_for(
+                field::KEEP,
+                "How many of the newest backups should be kept?",
+                "7",
+                "blank to keep them all and go by age alone",
+                false,
+            ),
+            optional(
+                field::KEEP_DAYS,
+                "Delete anything older than how many days?",
+                "blank to go by count alone",
+            ),
+        ],
+    }
+}
+
 fn registering(answers: &Answers) -> Vec<Step> {
     let mut plan = vec![
         typed(

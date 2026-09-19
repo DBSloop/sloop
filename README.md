@@ -255,7 +255,7 @@ sloop service schedule orders --every 1d --keep 7 --keep-for-days 30
 Nothing is written to crontab, Task Scheduler or a systemd timer. The service takes the
 backup, applies the retention policy and prunes what falls outside it.
 
-All of it is on the menu as well — `sloop`, then **This machine**.
+All of it is on the menu as well — `sloop`, then **The background service**.
 
 | Flag | What it does |
 |---|---|

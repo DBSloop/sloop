@@ -11,30 +11,15 @@ use crate::cli::{BackupsCommand, Cli, Command, DbCommand};
 use crate::ui::flow::{Answers, Doing, How, Job, Next, field};
 
 /// Every job the menu can run, so a new one cannot be added without an arm here.
-const EVERY_JOB: &[Job] = &[
-    Job::DbAdd,
-    Job::DbCreate,
-    Job::DbList,
-    Job::DbTest,
-    Job::DbEdit,
-    Job::DbRename,
-    Job::DbRemove,
-    Job::DbDrop,
-    Job::Backup,
-    Job::BackupAll,
-    Job::BackupsList,
-    Job::Restore,
-    Job::BackupsPrune,
-    Job::Mirror,
-    Job::Sync,
-    Job::KeyExport,
-    Job::KeyImport,
-    Job::Query,
-    Job::Doctor,
-    Job::Setup,
-    Job::ServerInstall,
-    Job::ServerConnection,
-];
+/// Every job, from the one list of them.
+///
+/// **Not a copy kept here.** This was the third hand-written list of `Job` in the tree and
+/// the third to be short — it was missing `service activity` before `R23a` and would have
+/// been missing eight more after it, which for a test that walks *every* job is a test
+/// quietly walking some of them.
+fn every_job() -> &'static [Job] {
+    Job::every()
+}
 
 /// A world with a few databases and a backup in it, so every question has an answer.
 #[derive(Default)]
@@ -47,6 +32,14 @@ impl Doing for Bench {
 
     fn backups_of(&self, _name: &str) -> Vec<String> {
         vec!["20260916T031500Z".to_owned()]
+    }
+
+    fn globally_registered(&self) -> Vec<String> {
+        self.databases()
+    }
+
+    fn watched(&self) -> Vec<String> {
+        self.databases()
     }
 
     /// The label is not the name. `orders` is filed under that label and is called
@@ -98,7 +91,7 @@ fn parsed(job: Job, answers: &Answers) -> Option<Cli> {
 /// by reading. A flag renamed on the command surface and forgotten here fails right there.
 #[test]
 fn every_line_the_menu_prints_is_one_the_binary_accepts() {
-    for job in EVERY_JOB {
+    for job in every_job() {
         let answers = pressing_enter(*job);
         let Some(cli) = parsed(*job, &answers) else {
             continue;
@@ -254,7 +247,7 @@ fn doctors_question_is_the_opposite_of_its_flag() {
 /// A password is never in the line — the route is, exactly as the registry holds it.
 #[test]
 fn no_line_ever_carries_a_password() {
-    for job in EVERY_JOB {
+    for job in every_job() {
         let answers = pressing_enter(*job);
         let Some(printed) = line(*job, &answers, &Bench) else {
             continue;
@@ -352,7 +345,7 @@ fn a_direct_database_says_no_ssh_rather_than_nothing() {
 #[test]
 #[ignore = "prints rather than asserts"]
 fn print_every_line() {
-    for job in EVERY_JOB {
+    for job in every_job() {
         let answers = pressing_enter(*job);
         match line(*job, &answers, &Bench) {
             Some(printed) => println!("{job:?}\t{printed}"),

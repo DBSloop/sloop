@@ -15,13 +15,13 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::cli::{Fields, PasswordSource, SshFields};
+use crate::cli::{Fields, PasswordSource, ServiceCommand, SshFields};
 use crate::commands;
 use crate::consent::Consent;
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::locations::Locations;
-use crate::registry::{Disk, Registries, Resolution, resolve};
+use crate::registry::{Disk, Registries, Resolution, Scope, resolve};
 use crate::ssh::tunnel::Tunnels;
 use crate::ui::flow::{Answers, Doing, Job, field};
 
@@ -36,6 +36,14 @@ pub struct Machine {
     resolution: Resolution,
     /// `--password-command`, which outranks whatever route a record names.
     password_command: Option<String>,
+    /// The environment the global store was worked out from.
+    ///
+    /// **Kept because `service` is answered from it and not from a registry.** Every other
+    /// job here opens `Registries`; `service install`, `attach` and the rest take
+    /// [`Locations`] and find sloop's own store themselves, exactly as `main` hands it to
+    /// them from a flag. Keeping it is what lets the menu call the same function rather than
+    /// a second implementation of it.
+    locations: Locations,
     /// Every SSH forward this session holds.
     ///
     /// **Owned by the machine, not by a job, and that is the owner's whole sentence about
@@ -68,6 +76,7 @@ impl Machine {
             cwd,
             resolution,
             password_command: password_command.map(ToOwned::to_owned),
+            locations: locations.clone(),
             tunnels: Tunnels::new()?,
         })
     }
@@ -164,6 +173,34 @@ impl Doing for Machine {
         names
     }
 
+    fn globally_registered(&self) -> Vec<String> {
+        let Ok(registries) = self.open() else {
+            return Vec::new();
+        };
+        registries
+            .in_scope(Scope::Global)
+            .map(|registry| {
+                registry
+                    .entries()
+                    .map(|(name, _)| name.to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn watched(&self) -> Vec<String> {
+        let Ok(dir) = crate::registry::adopt::global(&self.locations) else {
+            return Vec::new();
+        };
+        let Ok(Some(store)) = crate::registry::store::Store::open(&dir) else {
+            return Vec::new();
+        };
+        let Ok(attached) = crate::service::watch::attachments(&store) else {
+            return Vec::new();
+        };
+        attached.into_iter().map(|one| one.label).collect()
+    }
+
     fn on_the_server(&self, label: &str) -> Option<String> {
         let registries = self.open().ok()?;
         let (_, database) = registries.find(label).ok()?;
@@ -200,7 +237,21 @@ impl Doing for Machine {
         let registries = self.open()?;
 
         match job {
-            Job::Setup | Job::ServerInstall | Job::ServerConnection | Job::ServiceActivity => {
+            // Everything `before_the_registry` answered. Listed rather than guarded, because
+            // a guard arm does not count towards exhaustiveness and the exhaustiveness is
+            // the point: a job added later has no arm here and will not compile.
+            Job::Setup
+            | Job::ServerInstall
+            | Job::ServerConnection
+            | Job::ServiceActivity
+            | Job::ServiceInstall
+            | Job::ServiceUninstall
+            | Job::ServiceAttach
+            | Job::ServiceDetach
+            | Job::ServiceSchedule
+            | Job::ServiceStart
+            | Job::ServiceStop
+            | Job::ServiceStatus => {
                 unreachable!("handled above, before the registries are opened")
             }
             Job::DbAdd => self.add(registries, answers),
@@ -225,30 +276,7 @@ impl Doing for Machine {
             Job::Backup => self.backup(registries, answers.some(field::NAME), answers),
             Job::BackupAll => self.backup(registries, None, answers),
 
-            Job::BackupsList => commands::backups::list(
-                &commands::backups::Context {
-                    registries,
-                    global: &self.global,
-                    consent: Consent::given(false, false, None),
-                },
-                answers.some(field::WHICH),
-                answers.yes(field::CHECK),
-            ),
-
-            Job::BackupsPrune => commands::backups::prune(
-                &commands::backups::Context {
-                    registries,
-                    global: &self.global,
-                    consent: Consent::given(false, false, None),
-                },
-                &commands::backups::Pruning {
-                    name: answers.some(field::WHICH),
-                    keep: answers.number(field::KEEP),
-                    older_than: answers.some(field::OLDER),
-                    dry_run: answers.yes(field::DRY),
-                    include_broken: answers.yes(field::BROKEN),
-                },
-            ),
+            Job::BackupsList | Job::BackupsPrune => self.backups(job, registries, answers),
 
             Job::Restore => commands::restore::run(
                 &commands::restore::Context {
@@ -334,8 +362,84 @@ impl Machine {
             // way `server connection` reaches it — and a machine whose service is stopped
             // still has months of it to show.
             Job::ServiceActivity => Some(commands::activity::show(&self.global)),
-            _ => None,
+
+            _ => self.service(job, answers),
         }
+    }
+
+    /// `R23a`'s eight, or `None` for a job that is not one of them.
+    ///
+    /// **The same command, built from the answers.** Every one of these goes through
+    /// `commands::service::run` with the `ServiceCommand` a shell would have produced, for
+    /// the reason this module's header gives - a menu with its own copy of what
+    /// `service schedule` does is a menu that is subtly wrong about it within a release.
+    ///
+    /// **None of them opens the registry**, which is why they sit beside
+    /// `before_the_registry` rather than in `run`: a service is answered from `Locations`
+    /// and sloop's own store, not from the databases this session happened to resolve to.
+    fn service(&self, job: Job, answers: &Answers) -> Option<Outcome<Exit>> {
+        let command = match job {
+            Job::ServiceInstall => ServiceCommand::Install {
+                no_start: !answers.yes(field::START_NOW),
+                user: None,
+                interval: answers
+                    .number(field::INTERVAL)
+                    .unwrap_or(crate::service::daemon::INTERVAL_SECONDS),
+            },
+            Job::ServiceUninstall => ServiceCommand::Uninstall,
+            Job::ServiceAttach => ServiceCommand::Attach {
+                name: answers.text(field::NAME).to_owned(),
+            },
+            Job::ServiceDetach => ServiceCommand::Detach {
+                name: answers.text(field::NAME).to_owned(),
+            },
+            Job::ServiceSchedule => {
+                let every = answers.some(field::EVERY).map(ToOwned::to_owned);
+                ServiceCommand::Schedule {
+                    // Blank is how the menu says "turn it off": there is no flag to leave
+                    // out on a screen, so the absence of an interval is the answer.
+                    off: every.is_none(),
+                    name: answers.text(field::NAME).to_owned(),
+                    every,
+                    keep: answers.number(field::KEEP),
+                    keep_for_days: answers.number(field::KEEP_DAYS),
+                }
+            }
+            Job::ServiceStart => ServiceCommand::Start,
+            Job::ServiceStop => ServiceCommand::Stop,
+            Job::ServiceStatus => ServiceCommand::Status,
+            _ => return None,
+        };
+
+        Some(commands::service::run(&self.locations, &command))
+    }
+
+    /// `backups list` and `backups prune`, which take the same context.
+    fn backups(&self, job: Job, registries: Registries, answers: &Answers) -> Outcome<Exit> {
+        let context = commands::backups::Context {
+            registries,
+            global: &self.global,
+            consent: Consent::given(false, false, None),
+        };
+
+        if job == Job::BackupsList {
+            return commands::backups::list(
+                &context,
+                answers.some(field::WHICH),
+                answers.yes(field::CHECK),
+            );
+        }
+
+        commands::backups::prune(
+            &context,
+            &commands::backups::Pruning {
+                name: answers.some(field::WHICH),
+                keep: answers.number(field::KEEP),
+                older_than: answers.some(field::OLDER),
+                dry_run: answers.yes(field::DRY),
+                include_broken: answers.yes(field::BROKEN),
+            },
+        )
     }
 
     /// `db add`, from the answers.
