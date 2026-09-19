@@ -42,6 +42,10 @@ impl Doing for Bench {
         self.databases()
     }
 
+    fn may_change_the_machine(&self) -> bool {
+        true
+    }
+
     /// The label is not the name. `orders` is filed under that label and is called
     /// `orders_live` on its server, which is exactly the difference `--confirm` is about.
     fn on_the_server(&self, label: &str) -> Option<String> {

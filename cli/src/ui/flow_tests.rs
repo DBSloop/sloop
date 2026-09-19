@@ -20,6 +20,8 @@ struct Known {
     /// machine can have a project full of databases and nothing a service could watch, and
     /// that is the case `service attach` has a sentence of its own for.
     globally: Vec<String>,
+    /// Whether this run could register something to start at boot.
+    elevated: bool,
 }
 
 impl Known {
@@ -29,6 +31,7 @@ impl Known {
             backups: vec!["20260916T031500Z".to_owned(), "20260915T031500Z".to_owned()],
             watched: databases.iter().map(|name| (*name).to_owned()).collect(),
             globally: databases.iter().map(|name| (*name).to_owned()).collect(),
+            elevated: true,
         }
     }
 
@@ -38,6 +41,15 @@ impl Known {
             backups: Vec::new(),
             watched: Vec::new(),
             globally: Vec::new(),
+            elevated: true,
+        }
+    }
+
+    /// A terminal that cannot register anything to start at boot.
+    fn unprivileged() -> Self {
+        Self {
+            elevated: false,
+            ..Self::with(&["orders"])
         }
     }
 
@@ -88,6 +100,10 @@ impl Doing for Known {
         self.watched.clone()
     }
 
+    fn may_change_the_machine(&self) -> bool {
+        self.elevated
+    }
+
     fn run(&mut self, _job: Job, _answers: &Answers) -> Outcome<Exit> {
         unreachable!("these tests never run anything")
     }
@@ -133,6 +149,54 @@ fn a_service_screen_with_nothing_to_pick_names_the_step_that_fixes_it() {
         Next::Blocked(said) => assert!(said.contains("global registry"), "{said:?}"),
         other => panic!("attach offered a list of nothing: {other:?}"),
     }
+}
+
+/// **The whole of the owner's instruction, in one assertion.** *"they must not see that the
+/// task failed in mid process because they were not in administrator mode"* — so the screen
+/// that needs an elevated terminal says so instead of its first question, not instead of its
+/// result.
+#[test]
+fn installing_the_service_is_refused_before_it_asks_anything() {
+    let cannot = Known::unprivileged();
+
+    match Job::ServiceInstall.next(&Answers::default(), &cannot) {
+        Next::Blocked(said) => {
+            assert!(said.contains("machine-wide change"), "{said:?}");
+            assert!(
+                said.contains("administrator") || said.contains("sudo"),
+                "the refusal should name the terminal to open: {said:?}"
+            );
+        }
+        other => panic!("it asked a question instead of refusing: {other:?}"),
+    }
+
+    // And nothing else on that screen's shelf is held up by it: watching a database, putting
+    // one on a schedule and reading what was recorded are all things an ordinary account does.
+    for job in [
+        Job::ServiceAttach,
+        Job::ServiceSchedule,
+        Job::ServiceActivity,
+        Job::ServiceStatus,
+    ] {
+        assert!(
+            !matches!(job.next(&Answers::default(), &cannot), Next::Blocked(_)),
+            "{job:?} does not need an administrator and should not be refused"
+        );
+    }
+}
+
+/// The same screen in a terminal that can, so the refusal above is about elevation and not
+/// about the screen.
+#[test]
+fn installing_the_service_asks_its_questions_when_it_can() {
+    let can = Known::with(&["orders"]);
+    assert!(
+        matches!(
+            Job::ServiceInstall.next(&Answers::default(), &can),
+            Next::Ask(_)
+        ),
+        "an elevated terminal should reach the questions"
+    );
 }
 
 #[test]

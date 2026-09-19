@@ -389,6 +389,13 @@ pub trait Doing {
     /// that walks somebody into it.
     fn watched(&self) -> Vec<String>;
 
+    /// Can this run change what the machine does at boot?
+    ///
+    /// **False only when the machine has said so.** A machine that would not answer reads as
+    /// `true` here, for the reason `service::elevation` gives: a check that cannot tell must
+    /// not be the thing that refuses.
+    fn may_change_the_machine(&self) -> bool;
+
     /// What a registered database is called **on its server**, which is not its label.
     ///
     /// **`--confirm` takes this one**, and rule 5 is the reason: the flag names the thing
@@ -528,6 +535,19 @@ impl Job {
     #[must_use]
     pub fn next(self, answers: &Answers, world: &dyn Doing) -> Next {
         let known = world.databases();
+
+        // **Before the questions, not after them.** `service install` is the one screen here
+        // that asks anything *and* needs an elevated terminal, so it is the one place
+        // somebody could answer two questions and only then be told they were in the wrong
+        // terminal all along. The other three that need elevation ask nothing, so their
+        // first line is already the answer.
+        if self == Self::ServiceInstall && !world.may_change_the_machine() {
+            return Next::Blocked(format!(
+                "Registering sloop to start at boot is a machine-wide change, and this \
+                 terminal cannot make one. {}",
+                crate::service::elevation::advice()
+            ));
+        }
 
         if self.needs_a_database() && known.is_empty() {
             return Next::Blocked(

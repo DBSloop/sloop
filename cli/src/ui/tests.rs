@@ -17,12 +17,34 @@ use crate::failure::{Failure, Outcome};
 
 /// A world with two databases and a backup of each, which runs nothing and remembers what
 /// it was asked to run.
-#[derive(Default)]
 struct Bench {
     /// Every job that was run, with the answers it was handed.
     ran: Vec<(Job, Answers)>,
     /// What the next job should come back as.
     says: Option<Failure>,
+    /// Whether this run could register something to start at boot. `Default` says yes, so
+    /// every test that is not about elevation is unaffected by it.
+    elevated: bool,
+}
+
+impl Default for Bench {
+    fn default() -> Self {
+        Self {
+            ran: Vec::new(),
+            says: None,
+            elevated: true,
+        }
+    }
+}
+
+impl Bench {
+    /// The same bench in a terminal that cannot register anything to start at boot.
+    fn unprivileged() -> Self {
+        Self {
+            elevated: false,
+            ..Self::default()
+        }
+    }
 }
 
 impl Doing for Bench {
@@ -40,6 +62,10 @@ impl Doing for Bench {
 
     fn watched(&self) -> Vec<String> {
         self.databases()
+    }
+
+    fn may_change_the_machine(&self) -> bool {
+        self.elevated
     }
 
     fn on_the_server(&self, label: &str) -> Option<String> {
@@ -498,6 +524,34 @@ fn every_leaf_says_what_it_does_in_words_its_title_did_not() {
         thin.len(),
         if thin.len() == 1 { "" } else { "s" },
         thin.join("\n  ")
+    );
+}
+
+/// **Reached from the menu, not from the flow.** `flow_tests` proves the block is there;
+/// this proves somebody choosing the item meets it — on the screen, with nothing run.
+#[test]
+fn choosing_install_in_an_ordinary_terminal_says_so_and_runs_nothing() {
+    let screen = Screen::Home { cursor: 0 };
+    let bench = Bench::unprivileged();
+
+    let leaf = (0..commands_on_the_home_screen()).find_map(|index| {
+        match screen.chose(&shell(false), &bench, index) {
+            super::Flow::To(Screen::Doing { leaf, .. }) if leaf.job == Job::ServiceInstall => {
+                Some(leaf)
+            }
+            _ => None,
+        }
+    });
+    let leaf = leaf.expect("installing the service is on the home screen");
+
+    let super::flow::Next::Blocked(said) = leaf.job.next(&Answers::default(), &bench) else {
+        panic!("the screen asked a question instead of saying it needs another terminal");
+    };
+    assert!(said.contains("machine-wide change"), "{said:?}");
+    assert!(
+        bench.ran.is_empty(),
+        "nothing should have been run: {:?}",
+        bench.ran
     );
 }
 

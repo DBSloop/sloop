@@ -42,7 +42,7 @@ pub fn require(mechanism: Mechanism) -> Outcome<()> {
 }
 
 /// What to do about it, in this machine's own words.
-fn advice() -> &'static str {
+pub fn advice() -> &'static str {
     if cfg!(windows) {
         "open a terminal with 'Run as administrator' and run it again. Nothing has been \
          changed by this run."
@@ -52,7 +52,14 @@ fn advice() -> &'static str {
 }
 
 /// Does this run have what it takes? `None` when the machine would not say.
-fn enough() -> Option<bool> {
+///
+/// **Public for the menu, which has to know before it asks anything.** A command can refuse
+/// at its own door; a screen has to refuse before the first question, or somebody answers
+/// two of them and is then told they needed a different terminal all along.
+///
+/// It runs a program, so a caller that asks on every keypress should ask once and keep the
+/// answer — see `commands::menu::Machine`.
+pub fn enough() -> Option<bool> {
     if cfg!(windows) {
         windows_integrity()
     } else {

@@ -36,6 +36,13 @@ pub struct Machine {
     resolution: Resolution,
     /// `--password-command`, which outranks whatever route a record names.
     password_command: Option<String>,
+    /// Whether this run can change what the machine does at boot, asked once.
+    ///
+    /// **Once, because asking runs a program.** `Job::next` is called on every render, and
+    /// shelling out to `whoami` or `id` each time a highlight moves would be a process per
+    /// keypress. Elevation cannot change while a menu is open, so one answer is the right
+    /// number of answers.
+    elevated: bool,
     /// The environment the global store was worked out from.
     ///
     /// **Kept because `service` is answered from it and not from a registry.** Every other
@@ -77,6 +84,8 @@ impl Machine {
             resolution,
             password_command: password_command.map(ToOwned::to_owned),
             locations: locations.clone(),
+            // `None` — the machine would not say — is not a no. See `service::elevation`.
+            elevated: crate::service::elevation::enough() != Some(false),
             tunnels: Tunnels::new()?,
         })
     }
@@ -199,6 +208,10 @@ impl Doing for Machine {
             return Vec::new();
         };
         attached.into_iter().map(|one| one.label).collect()
+    }
+
+    fn may_change_the_machine(&self) -> bool {
+        self.elevated
     }
 
     fn on_the_server(&self, label: &str) -> Option<String> {
