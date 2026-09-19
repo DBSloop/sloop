@@ -6,6 +6,7 @@ import { Backups } from './backups/backups';
 import { Commands } from './commands/commands';
 import { Databases } from './databases/databases';
 import { Docs } from './docs';
+import { MirrorAndSync } from './mirror-and-sync/mirror-and-sync';
 import { DOCS_PAGES } from './nav';
 import { GettingStarted } from './getting-started/getting-started';
 import { Install } from './install/install';
@@ -26,6 +27,7 @@ const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   databases: Databases,
   backups: Backups,
   'backup-key': BackupKey,
+  'mirror-and-sync': MirrorAndSync,
 };
 
 /**

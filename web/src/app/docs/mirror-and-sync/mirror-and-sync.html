@@ -1,0 +1,277 @@
+<!--
+  Mirror and sync.
+
+  The panel at the top is the page. Everything under it is evidence for it, and
+  the evidence was produced: one cluster, a `live` source and a `staging`
+  destination holding different data including one row that exists nowhere
+  else, and the destination reset between the two runs so both are shown doing
+  their real work from the same starting state.
+
+  The class comment on `MirrorAndSync` says how, names the one substitution,
+  and explains why the cross-engine hint mentions `R29`.
+-->
+<app-docs-page
+  heading="Mirror and sync"
+  lede="Two commands that sound alike and do opposite things to whatever is already in the destination. This page exists so you pick the right one the first time."
+  eyebrow="Copying"
+  path="mirror-and-sync"
+>
+  <p>
+    Both copy one database into another. The difference is what happens to the rows already in the
+    destination — and it is the whole of the difference, so it is first.
+  </p>
+
+  <!-- The comparison this page exists for. Deliberately before any prose that
+       could be read instead of it, and laid out so either column stands alone
+       on a phone. -->
+  <div class="docs-bare mt-8 grid gap-4 md:grid-cols-2">
+    @for (command of commands; track command.name; let i = $index) {
+      <div
+        class="rounded-xl border p-5 sm:p-6"
+        [class]="i === 0 ? 'border-accent/30 bg-accent-soft' : 'border-line bg-surface'"
+      >
+        <p class="font-mono text-sm" [class]="i === 0 ? 'text-accent' : 'text-faint'">
+          sloop {{ command.name }}
+        </p>
+        <p class="mt-2 text-2xl font-semibold tracking-tight text-text">{{ command.verb }}</p>
+        <p class="mt-2 max-w-measure text-sm text-muted">{{ command.ends }}</p>
+
+        <dl class="mt-5 space-y-4 border-t border-line pt-5">
+          <div>
+            <dt class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">
+              Rows only the destination has
+            </dt>
+            <dd class="mt-1 max-w-measure text-sm text-muted">{{ command.destinationOnly }}</dd>
+          </div>
+          <div>
+            <dt class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">
+              How it gets there
+            </dt>
+            <dd class="mt-1 max-w-measure text-sm text-muted">{{ command.reach }}</dd>
+          </div>
+          <div>
+            <dt class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">
+              Reach for it when
+            </dt>
+            <dd class="mt-1 max-w-measure text-sm text-muted">{{ command.use }}</dd>
+          </div>
+        </dl>
+      </div>
+    }
+  </div>
+
+  <p class="docs-bare mt-5 text-sm text-faint">
+    <span
+      aria-hidden="true"
+      class="mr-2.5 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
+    ></span
+    >Showing <strong class="font-semibold text-text">{{ osLabel() }}</strong
+    >. Only one path on this page changes with it — the temporary file <code>--safe</code> writes.
+  </p>
+
+  <div class="docs-bare mt-7 rounded-xl border border-accent/25 bg-accent-soft p-5 sm:p-6">
+    <p class="max-w-measure text-base text-text">
+      <strong class="font-semibold">The source is only ever read.</strong> Neither command runs a
+      single statement against it that writes — not an index build, not a
+      <code class="font-mono text-sm">VACUUM</code>, not even
+      <code class="font-mono text-sm">ANALYZE</code>. Whatever you point either of these at, it is
+      exactly as you left it afterwards.
+    </p>
+  </div>
+
+  <h2 id="mirror">mirror — the destination ends up identical</h2>
+  <p>
+    Both commands are destructive to the destination, so both are
+    <strong>typed rather than clicked</strong>, and neither will run unattended without
+    <code>--confirm</code>:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 2" [lines]="mirrorRefusal" copy />
+  </div>
+
+  <p>
+    <code>--dry-run</code> does all the reading and all the counting and stops where it would write.
+    It is the cheapest way to find out what a copy is about to cost:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="a rehearsal" [lines]="mirrorDry" copy />
+  </div>
+
+  <p>
+    <strong>10,841 rows in, 1,001 rows going.</strong> That second number is the one to read — it is
+    what the destination is about to lose, and <code>mirror</code> loses all of it, including the
+    one row in this example that exists nowhere else.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="the real thing" [lines]="mirrorReal" copy />
+  </div>
+
+  <p>
+    It finishes by counting both sides, table by table, with exact
+    <code>count(*)</code> — the same verification a
+    <a routerLink="/docs/backups" fragment="verification">restore</a> does, for the same reason. A
+    copy that finished is not the same statement as a copy that arrived.
+  </p>
+
+  <h2 id="sync">sync — the destination ends up holding both</h2>
+  <p>
+    Same source, same destination, same starting state as the block above — and a different command.
+    Watch what happens to the row that only staging has:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="a merge" [lines]="syncReal" copy />
+  </div>
+
+  <p>
+    <strong
+      ><code>1 kept that the source has no row for</code> is the sentence that separates these two
+      commands.</strong
+    >
+    <code>mirror</code> called that row part of <em>what the destination has now</em> and removed
+    it. <code>sync</code> counted it and left it alone.
+  </p>
+
+  <h3 id="the-rules">The rules sync states as rules</h3>
+  <p>
+    A merge has more ways to go subtly wrong than a replacement does, so sloop is loud about each of
+    them. Four of the five below are visible in the block above.
+  </p>
+
+  <ol class="docs-bare mt-7 space-y-px overflow-hidden rounded-xl border border-line">
+    @for (rule of rules; track rule.rule; let i = $index) {
+      <li class="flex gap-4 bg-surface p-5 sm:gap-5 sm:p-6">
+        <span
+          class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-soft font-mono text-xs font-semibold text-accent"
+          aria-hidden="true"
+          >{{ i + 1 }}</span
+        >
+        <div class="min-w-0">
+          <p class="max-w-measure text-base font-semibold text-text">{{ rule.rule }}</p>
+          <p class="mt-1.5 max-w-measure text-sm text-muted">{{ rule.detail }}</p>
+        </div>
+      </li>
+    }
+  </ol>
+
+  <p>
+    The fifth is a refusal rather than a warning, because there is no half-right answer to give:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 2" [lines]="circular" copy />
+  </div>
+
+  <p>
+    And the hint points at the command that <em>can</em> do it — <code>mirror</code> replaces the
+    destination outright, so it has no load order to get right in the first place.
+  </p>
+
+  <h2 id="scoping">Copying part of a database</h2>
+  <p>
+    <code>--table</code> narrows either command to the tables you name. It is repeatable, it takes a
+    schema in front, and it takes a glob:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="a pattern that matches nothing" [lines]="noMatch" copy />
+  </div>
+
+  <p>
+    Naming a table without naming what it points at does not work, and sloop says so before it
+    touches anything rather than failing halfway through a load:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 2" [lines]="tableAlone" copy />
+  </div>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="--with-references" [lines]="withReferences" copy />
+  </div>
+
+  <p>
+    Note the second line of that block. A scoped <code>mirror</code> drops and recreates the tables
+    you named and <strong>leaves the rest of the destination exactly as it is</strong> — so the
+    destination does not end up identical to the source, which is the one thing an unscoped
+    <code>mirror</code> guarantees. sloop says that out loud every time, because a flag that quietly
+    changes what a command promises is worse than one that does not exist.
+  </p>
+
+  <h3 id="safe">--safe, for a copy you would rather not have to start again</h3>
+  <p>
+    <code>--safe</code> dumps the source to a file before loading it, so a copy that fails partway
+    can be retried from the dump instead of from the source. The trade is stated where it happens:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="a file on the way past" [lines]="safe()" copy />
+  </div>
+
+  <p>
+    <strong>That file is not encrypted</strong> and sloop says so rather than leaving it to be
+    discovered. It is removed once the counts agree, so a successful run leaves nothing behind; a
+    failed one leaves the dump on purpose, which is the point of the flag.
+  </p>
+
+  <h2 id="creating-the-destination">Making the destination first</h2>
+  <p>
+    <code>--create</code> replaces <code>--to</code> when the destination does not exist yet. It
+    makes the database <strong>and a role that owns it</strong>, registers the result, and copies
+    into it in one run:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="server, role, record, copy" [lines]="create" copy />
+  </div>
+
+  <p>
+    <code>the destination is empty</code> rather than
+    <em>replacing what the destination has now</em>
+    — there was nothing there a moment ago. The superuser password is used once and kept nowhere;
+    the new role's password is the one that gets stored.
+  </p>
+
+  <h2 id="what-is-refused">What both commands refuse</h2>
+  <p>Two refusals, and both exist because the alternative is losing data quietly.</p>
+
+  <div class="mt-7">
+    <app-terminal
+      class="block"
+      caption="source and destination are the same"
+      [lines]="sameDatabase"
+      copy
+    />
+  </div>
+
+  <p>
+    A <code>mirror</code> clears the destination first. If the destination <em>is</em> the source,
+    that clears the source — so the check happens before anything is contacted.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="postgres to mysql" [lines]="crossEngine" copy />
+  </div>
+
+  <p>
+    <strong>Both commands are same-engine only.</strong> PostgreSQL to MySQL is refused rather than
+    attempted, and the reason is in the message: the type systems do not map cleanly, and a copy
+    that quietly rounds, truncates or reinterprets your data is worse than one that does not run.
+    <code>restore</code> refuses across engines for the same reason — a dump is written in its own
+    engine's dialect.
+  </p>
+
+  <h2 id="picking-one">Picking one</h2>
+  <p>
+    If you want the destination to <strong>match</strong> the source, use <code>mirror</code>. If
+    the destination has rows of its own that matter, use <code>sync</code> — and read the
+    <code>kept</code> count it prints, because those are the rows the source would have removed.
+  </p>
+  <p>
+    Every flag either command takes is on the
+    <a routerLink="/docs/commands">command reference</a>, generated from <code>--help</code>.
+  </p>
+</app-docs-page>

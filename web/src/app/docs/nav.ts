@@ -181,6 +181,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         path: 'mirror-and-sync',
         documentTitle: 'Mirror vs sync: copy or merge a database — sloop',
         title: 'Mirror and sync',
+        written: true,
         blurb:
           'One makes the destination identical to the source. The other merges into what is already there. Picking the wrong one is the mistake this page exists to stop.',
         covers: [
