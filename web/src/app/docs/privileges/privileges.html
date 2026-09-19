@@ -1,0 +1,191 @@
+<!--
+  The privileges a backup role needs.
+
+  Every row here is read from web/privileges.json at build time. That file is
+  written by a Rust test from the same table `sloop doctor` checks a live
+  connection against, so the page, the check and the GRANT a reader copies
+  cannot drift apart. Nothing on this page is typed by hand — including which
+  rows lead, which are found by looking for a silent consequence in the data.
+
+  The two doctor blocks are real runs: exit 8 naming every gap, then exit 0
+  after running exactly the GRANT lines it printed.
+-->
+<app-docs-page
+  heading="The privileges a backup role needs"
+  lede="Every engine wants more than SELECT — and on MySQL and MariaDB, one missing grant costs you every trigger and every stored routine without a word of warning."
+  eyebrow="Reference"
+  path="privileges"
+>
+  <p>
+    You should not back up a database as its superuser. But a role with only
+    <code>SELECT</code> writes dumps that are quietly incomplete, and the gap between those two is
+    what this page is.
+  </p>
+
+  <h2 id="the-silent-ones">The failures that say nothing</h2>
+  <p>
+    Most missing privileges are loud: the dump stops, nothing is written, and you find out
+    immediately. <strong>{{ howManySilent }} {{ silentVerb }} not</strong>, and they are the reason
+    this page exists.
+  </p>
+
+  <div class="docs-bare mt-7 space-y-4">
+    @for (one of silentGroups; track one.title + one.grant) {
+      <div class="rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
+        <p class="flex items-center gap-2.5 font-mono text-xs text-warn">
+          <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-warn"></span>
+          {{ engineList(one.engines) }} · {{ one.title }}
+        </p>
+        <p class="mt-3 max-w-measure text-sm text-text">{{ one.consequence }}</p>
+        <p class="mt-3 font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">
+          The grant that fixes it
+        </p>
+        <p class="mt-1 overflow-x-auto font-mono text-xs text-accent">{{ one.grant }}</p>
+      </div>
+    }
+  </div>
+
+  <p>
+    A backup that <em>looks</em> fine, exits <code>0</code>, has a plausible size and a valid
+    checksum — and has lost every function, every procedure and every trigger in the database. You
+    would find out at the restore, which is the worst possible moment to find out anything.
+  </p>
+
+  <h2 id="doctor">sloop doctor asks, so you do not find out later</h2>
+  <p>
+    Rather than discovering this during a backup, <code>doctor</code> asks each registered
+    connection what its role can <strong>really</strong> do — and prints the exact
+    <code>GRANT</code> for anything missing:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 8" [lines]="failing" copy />
+  </div>
+
+  <p>
+    <strong>Exit <code>8</code> exists for this.</strong> A health check that exits <code>0</code>
+    while a role is quietly writing incomplete dumps is worse than no health check, so
+    <code>doctor</code> has a code of its own and automation can act on it.
+  </p>
+  <p>Run the lines it printed — and only those — and it changes its mind:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="exit 0" [lines]="fixed" copy />
+  </div>
+
+  <p>
+    Note that it separates <strong>backing up</strong> from <strong>restoring into</strong>. A role
+    that can dump a database perfectly may be unable to restore one, and the two are reported apart
+    because they are needed at different times.
+  </p>
+
+  <h2 id="the-table">What each engine needs</h2>
+  <p>
+    Everything below is read from the same table <code>doctor</code> checks against. It is not a
+    transcription of it — <strong>editing the check changes this page</strong>, and a row here that
+    the code does not check cannot exist.
+  </p>
+
+  <!-- The engine strip. Deliberately not the OS strip in the toolbar: that one
+       is about the reader's machine, and this is about the database's engine.
+       Two different questions, so two different controls. -->
+  <div class="docs-bare mt-7 flex flex-wrap gap-2" role="group" aria-label="Engine">
+    @for (engine of engines; track engine.key) {
+      <button
+        type="button"
+        (click)="chosen.set(engine.key)"
+        [attr.aria-pressed]="chosen() === engine.key"
+        [class]="
+          chosen() === engine.key
+            ? 'border-accent/40 bg-accent-soft text-accent'
+            : 'border-line bg-surface text-muted hover:border-line-strong hover:text-text'
+        "
+        class="rounded-lg border px-3.5 py-1.5 font-mono text-xs transition-colors duration-2 ease-out"
+      >
+        {{ engine.label }}
+      </button>
+    }
+  </div>
+
+  <h3 id="to-back-up">To back a database up</h3>
+  <dl class="docs-bare mt-5 space-y-px overflow-hidden rounded-xl border border-line">
+    @for (one of toBackUp(); track one.id) {
+      <div class="bg-surface p-5 sm:p-6">
+        <dt class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span class="text-base font-semibold text-text">{{ one.title }}</span>
+          <span class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">{{
+            howMany(one.applies)
+          }}</span>
+        </dt>
+        <dd class="mt-2 max-w-measure text-sm text-muted">{{ one.consequence }}</dd>
+        <dd class="mt-2 flex flex-wrap gap-1.5">
+          @for (privilege of one.privileges; track privilege) {
+            <span
+              class="rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-xs text-muted"
+              >{{ privilege }}</span
+            >
+          }
+        </dd>
+        <dd class="mt-2 overflow-x-auto whitespace-pre font-mono text-xs text-accent">
+          {{ one.grant }}
+        </dd>
+      </div>
+    }
+  </dl>
+
+  <h3 id="to-restore">To restore into one</h3>
+  <dl class="docs-bare mt-5 space-y-px overflow-hidden rounded-xl border border-line">
+    @for (one of toRestore(); track one.id) {
+      <div class="bg-surface p-5 sm:p-6">
+        <dt class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span class="text-base font-semibold text-text">{{ one.title }}</span>
+          <span class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">{{
+            howMany(one.applies)
+          }}</span>
+        </dt>
+        <dd class="mt-2 max-w-measure text-sm text-muted">{{ one.consequence }}</dd>
+        <dd class="mt-2 flex flex-wrap gap-1.5">
+          @for (privilege of one.privileges; track privilege) {
+            <span
+              class="rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-xs text-muted"
+              >{{ privilege }}</span
+            >
+          }
+        </dd>
+        <dd class="mt-2 overflow-x-auto whitespace-pre font-mono text-xs text-accent">
+          {{ one.grant }}
+        </dd>
+      </div>
+    }
+  </dl>
+
+  @if (waives().length) {
+    <h2 id="not-needed">What {{ label(chosen()) }}'s manual asks for and sloop does not need</h2>
+    <p>
+      Every guide to backing up MySQL tells you to grant these. sloop does not need them, because of
+      how it calls the dump program — and a privilege you were told to grant and did not have to is
+      a privilege worth not granting.
+    </p>
+
+    <dl class="docs-bare mt-7 space-y-px overflow-hidden rounded-xl border border-line">
+      @for (waived of waives(); track waived.privilege) {
+        <div class="bg-surface p-5 sm:p-6">
+          <dt class="font-mono text-sm text-accent">{{ waived.privilege }}</dt>
+          <dd class="mt-1.5 max-w-measure text-sm text-muted">{{ waived.because }}</dd>
+        </div>
+      }
+    </dl>
+  }
+
+  <h2 id="in-practice">In practice</h2>
+  <p>
+    Make the role, run <code>sloop doctor</code>, paste what it prints. That is the whole workflow —
+    and
+    <a routerLink="/docs/databases" fragment="creating-one"><code>sloop db create</code></a> skips
+    it entirely by making the database <em>and</em> a role that already has what it needs.
+  </p>
+  <p>
+    <code>doctor</code> also checks the client tools and sloop's own PostgreSQL; the
+    <a routerLink="/docs/commands">command reference</a> has its flags.
+  </p>
+</app-docs-page>

@@ -14,6 +14,7 @@ import { Install } from './install/install';
 import { Overview } from './overview/overview';
 import { Pending } from './pending';
 import { Postgres } from './postgres/postgres';
+import { Privileges } from './privileges/privileges';
 import { Query } from './query/query';
 import { Security } from './security/security';
 import { Service } from './service/service';
@@ -40,6 +41,7 @@ const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   postgres: Postgres,
   ssh: Ssh,
   security: Security,
+  privileges: Privileges,
 };
 
 /**

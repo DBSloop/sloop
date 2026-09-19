@@ -332,6 +332,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         documentTitle: 'PostgreSQL and MySQL backup user privileges and GRANTs',
         title: 'The privileges a backup role needs',
         short: 'Role privileges',
+        written: true,
         blurb:
           'What a role has to be able to do per engine, what breaks silently without it, and the GRANT that fixes it.',
         covers: [
