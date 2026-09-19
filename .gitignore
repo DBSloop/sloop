@@ -1,8 +1,14 @@
 # How the project gets built, not what ships. Owner's direction — these never reach the
 # public repository.
-docs/
-.claude/
-CLAUDE.md
+#
+# Anchored with a leading slash, and that is not cosmetic. A pattern without one matches a
+# directory of that name at ANY depth, so plain `docs/` also swallowed `web/src/app/docs/` —
+# the entire documentation section of the site — and `git status` said nothing at all,
+# because an ignored file is not an untracked one. Anchoring says what these three always
+# meant: the planning folder, the skills folder and the brief, at the root of the repository.
+/docs/
+/.claude/
+/CLAUDE.md
 
 # Rust
 cli/target/

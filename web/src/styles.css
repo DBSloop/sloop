@@ -8,10 +8,14 @@
  *   fonts    the @font-face declarations, self-hosted
  *   tokens   THE ONE PLACE: every colour, size, radius, shadow and duration
  *   base     element defaults, focus ring, selection, the scrollbar
+ *   docs     the type rhythm inside a documentation page, under .docs-prose
+ *
+ * docs.css is deliberately NOT in a layer — the reasoning is at the top of it.
  */
 @import './styles/fonts.css';
 @import './styles/tokens.css';
 @import './styles/base.css';
+@import './styles/docs.css';
 
 @tailwind base;
 @tailwind components;

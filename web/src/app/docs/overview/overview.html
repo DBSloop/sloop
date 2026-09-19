@@ -1,0 +1,315 @@
+<!--
+  The documentation index.
+
+  Two jobs at once, which is the owner's instruction for the whole docs section
+  and is sharpest here: it is the map a person needs, and it is the page a
+  search engine or a model reads when somebody asks what sloop is.
+
+  **On how the second job is done.** Every phrase below that reads like a search
+  query is one — back up a PostgreSQL database on Windows, schedule MySQL
+  backups without cron, copy a production database into staging, restore an
+  encrypted dump, mirror against sync — and every one of them is also a true
+  sentence about what the tool does, checked against docs/TOTAL_FEATURE_LIST.md.
+  Nothing here is a phrase inserted for a crawler that a reader would trip over;
+  a page that reads badly is a page nobody links to, which is the only ranking
+  signal that has ever really mattered.
+
+  The questions at the bottom are written as questions on purpose. They are what
+  people type, they are what a model lifts when it answers on this tool's
+  behalf, and A23 turns the same list into llms.txt.
+-->
+<app-docs-page
+  heading="sloop documentation"
+  lede="Back up, restore, mirror and sync PostgreSQL, MySQL and MariaDB databases from one command line — on Windows, Linux and macOS, on a schedule, with nothing ever leaving your machine."
+>
+  <!--
+    The guarantee, first. It is at the top of the README and above the fold on
+    the landing page, and CLAUDE.md puts it at the top of the docs for the same
+    reason: it is the product rather than a feature of it. The wording is fixed
+    and is not weakened without the owner.
+  -->
+  <div class="docs-bare rounded-2xl border border-accent/25 bg-accent-soft p-6 sm:p-8">
+    <p class="flex items-center gap-3 font-mono text-xs text-accent">
+      <span aria-hidden="true" class="h-px w-6 bg-accent/45"></span>The guarantee
+    </p>
+    <p class="mt-4 max-w-measure text-xl font-semibold text-text sm:text-2xl">
+      Your credentials never leave your machine.
+    </p>
+    <p class="mt-3 max-w-measure text-base text-muted">
+      No telemetry, no analytics, no update pings.
+      <code class="font-mono text-sm text-text">cargo tree</code> on this repository shows no HTTP
+      client in the dependency graph — there is nothing in the binary that
+      <em class="italic">could</em> phone home.
+    </p>
+  </div>
+
+  <h2 id="what-sloop-is">What sloop is</h2>
+  <p>
+    sloop is a free, open-source
+    <strong>database backup and migration tool for the command line</strong>. One binary registers
+    your databases once, then backs them up, restores them, mirrors them, syncs them, reads them,
+    and keeps all of that on a schedule. It speaks <strong>PostgreSQL, MySQL and MariaDB</strong>,
+    and it runs on <strong>Windows, Linux and macOS</strong>, on x86-64 and on aarch64. There is no
+    agent to deploy, no server to run and no account to make, and it is MIT or Apache-2.0 licensed.
+  </p>
+  <p>
+    It has two surfaces and one implementation. <code>sloop</code> on its own opens an interactive
+    menu covering every command; every flag a scheduler would use runs the same function that menu
+    calls, so the two cannot drift apart. Every interactive run finishes by printing the flag form
+    of what it just did, which is how a session you worked out by hand becomes a line you can put in
+    a script.
+  </p>
+  <p>
+    Underneath, it drives the client tools your database vendor ships —
+    <code>pg_dump</code>, <code>pg_restore</code>, <code>mysqldump</code>,
+    <code>mariadb-dump</code> — so what goes into a backup is an ordinary dump in the format those
+    tools produce, with an age encryption layer over it that <code>sloop restore</code> takes back
+    off. What it adds is everything around them: where the backup went, whether every row actually
+    arrived, what the password was and where it came from, when the next run is due, and what to
+    delete when the disk fills up.
+  </p>
+  <p>
+    Work happens against a <strong>registry</strong> — the set of databases sloop knows about. There
+    is one global registry and as many project registries as you like, found by walking up from the
+    working directory the way <code>git</code> finds <code>.git</code>. A password is never in a
+    registry: a record holds a <em class="italic">route</em> to one — the operating system's
+    keyring, an Argon2id-encrypted file, an environment variable, or a command to run — and never a
+    value.
+  </p>
+
+  <h2 id="what-you-can-do-with-it">What you can do with it</h2>
+  <p>
+    Each of these is one command, and each has a page below that shows the command with its real
+    output.
+  </p>
+  <ul>
+    <li>
+      <strong>Back up a PostgreSQL, MySQL or MariaDB database</strong> from the command line on
+      Windows, Linux or macOS — and have every row counted on both sides before the run calls itself
+      finished.
+    </li>
+    <li>
+      <strong>Schedule nightly database backups without cron</strong>, without a systemd timer and
+      without a Task Scheduler entry. sloop registers itself with the machine's own service manager
+      and does the work with nobody logged in.
+    </li>
+    <li>
+      <strong>Keep a retention policy</strong> — the newest seven, or nothing older than thirty days
+      — and have the old ones pruned automatically, but only ever after a backup that worked.
+    </li>
+    <li>
+      <strong>Restore a database from an encrypted backup</strong>, and know before you start which
+      backup you are restoring and what it is about to replace.
+    </li>
+    <li>
+      <strong>Copy a production database into staging.</strong> Exactly, with <code>mirror</code>,
+      so the destination ends up identical — or merged, with <code>sync</code>, so rows the
+      destination already had are kept.
+    </li>
+    <li>
+      <strong>Read a table without writing any SQL</strong>: pick the table, tick the columns,
+      choose the test. The server is told the transaction is read-only, so nothing it runs can
+      write.
+    </li>
+    <li>
+      <strong>Check that a backup role has the grants it needs</strong> before a dump goes quietly
+      wrong — which, on MySQL and MariaDB, is a thing that genuinely happens.
+    </li>
+    <li>
+      <strong>Reach a database whose port is closed</strong> by having sloop run your own
+      <code>ssh</code> and forward the connection, rather than opening a hole in a firewall.
+    </li>
+    <li>
+      <strong>Drive all of it from CI or a scheduler</strong> and branch on the exit code, with
+      machine-readable output and no prompt that can ever hang a run.
+    </li>
+  </ul>
+
+  <h2 id="install-it">Install it</h2>
+  <p>
+    One line, for the platform selected in the strip above. Both installers put the binary on
+    <code>PATH</code> and both say clearly that the shell you are in has to be restarted afterwards.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" [caption]="installCaption()" [lines]="installLines()" />
+  </div>
+
+  <p>
+    <a routerLink="/docs/install">Installation</a> covers what each installer does to
+    <code>PATH</code>, the options it takes, taking a release archive by hand and checking it
+    against <code>SHA256SUMS</code>, and both ways to remove sloop again — neither of which ever
+    deletes a backup.
+  </p>
+  <p>
+    And the claim at the top of this page is something you can check rather than something you have
+    to accept. It takes about thirty seconds:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="checking the claim" [lines]="proofLines" />
+  </div>
+
+  <h2 id="how-these-pages-are-arranged">How these pages are arranged</h2>
+  <p>
+    The groups are the CLI's own menu headings, so whichever surface you learned the tool from, the
+    other one is already arranged the way you think. <em class="italic">Start here</em> and
+    <em class="italic">Reference</em> are the two the menu has no equivalent of.
+  </p>
+
+  <div
+    class="docs-bare mt-8 grid gap-px overflow-hidden rounded-2xl border border-line bg-line sm:grid-cols-2"
+  >
+    @for (group of groups; track group.title) {
+      <section class="bg-surface p-6">
+        <h3 class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-accent">
+          {{ group.title }}
+        </h3>
+        <p class="mt-2.5 text-sm text-muted">{{ group.line }}</p>
+        <ul class="mt-4 space-y-2">
+          @for (page of group.pages; track page.path) {
+            <li>
+              <a
+                [routerLink]="url(page)"
+                class="group flex items-baseline gap-2 text-sm font-medium text-text transition-colors duration-2 ease-out hover:text-accent"
+              >
+                <span
+                  aria-hidden="true"
+                  class="font-mono text-xs text-line-strong transition-colors duration-2 ease-out group-hover:text-accent"
+                  >→</span
+                >
+                {{ label(page) }}
+              </a>
+            </li>
+          }
+        </ul>
+      </section>
+    }
+  </div>
+
+  <h2 id="what-people-get-wrong-first">What people get wrong first</h2>
+  <p>
+    Four things, because each of them is easier to read here than to discover from a command that
+    refused.
+  </p>
+  <ul>
+    <li>
+      <strong><code>mirror</code> and <code>sync</code> are not the same command.</strong>
+      <code>mirror</code> makes the destination identical to the source, so anything that existed
+      only there is gone. <code>sync</code> merges: rows are added, rows already there are replaced,
+      and rows only the destination has are kept. They have different engines underneath and
+      <a routerLink="/docs/mirror-and-sync">their own page</a>.
+    </li>
+    <li>
+      <strong>Exporting the backup key is a step, not an aside.</strong> Backups are encrypted, and
+      the first encrypted backup refuses to run until the private key has been exported or you have
+      explicitly declined. Losing it loses every backup you have.
+    </li>
+    <li>
+      <strong>Exit <code>6</code> is not success and not a crash.</strong> It means the dump
+      finished and then the row counts disagreed. A scheduler that treats every non-zero code the
+      same will page somebody for the wrong reason.
+    </li>
+    <li>
+      <strong>sloop never prompts when there is no terminal.</strong> A scheduled run that hangs on
+      a question is the worst failure this tool could have, so instead it exits <code>2</code> and
+      names the exact flag that would have answered it.
+    </li>
+  </ul>
+
+  <h2 id="questions-people-ask">Questions people ask</h2>
+
+  <h3 id="how-do-i-back-up-a-postgresql-database-on-windows">
+    How do I back up a PostgreSQL database on Windows?
+  </h3>
+  <p>
+    Install sloop with the PowerShell one-liner above, register the database once with
+    <code>sloop db add</code>, then run <code>sloop backup &lt;name&gt;</code>. Windows does not
+    ship <code>pg_dump</code>, so the first run offers to fetch the official PostgreSQL binaries —
+    checksum-verified, once, and only after you say yes. The same three steps work for MySQL and
+    MariaDB, and they are the same three steps on Linux and macOS.
+    <a routerLink="/docs/getting-started">Getting started</a> walks the whole thing.
+  </p>
+
+  <h3 id="can-i-schedule-database-backups-without-cron">
+    Can I schedule database backups without cron or Task Scheduler?
+  </h3>
+  <p>
+    Yes, and that is the intended way to run it. <code>sloop service install</code> registers a
+    systemd unit on Linux, a launchd daemon on macOS or a real Windows service, and
+    <code>sloop service schedule orders --every 1d --keep 7</code> is the whole of a nightly backup
+    with a retention policy.
+    <strong>Nothing is written to crontab, to a systemd timer or to Task Scheduler</strong> — sloop
+    runs the same commands you would have typed, and a missed run is caught up once and labelled
+    late rather than replayed a hundred times.
+    <a routerLink="/docs/service">The background service</a> has the detail.
+  </p>
+
+  <h3 id="does-sloop-send-my-database-credentials-anywhere">
+    Does sloop send my database credentials anywhere?
+  </h3>
+  <p>
+    No, and the binary is built so that it could not. There is no HTTP client anywhere in its
+    dependency graph and no SSH client either, continuous integration fails the build if one ever
+    appears, and the background service never opens a port. Passwords are never passed in
+    <code>argv</code>, so they never appear in <code>ps</code> output, and a log is written to be
+    pasteable into a public issue. <a routerLink="/docs/security">Security</a> shows how to verify
+    all of that yourself.
+  </p>
+
+  <h3 id="what-is-the-difference-between-mirror-and-sync">
+    What is the difference between mirror and sync?
+  </h3>
+  <p>
+    <code>sloop mirror source --to dest</code> makes the destination an exact copy: anything that
+    existed only in the destination is gone afterwards.
+    <code>sloop sync source --to dest</code> merges instead — rows are added, rows already present
+    are replaced, and rows only the destination has are kept. <code>sync</code> needs a primary key
+    on every table, resets sequences and identity columns afterwards, and refuses outright on
+    circular foreign keys. Both only ever read the source.
+    <a routerLink="/docs/mirror-and-sync">Mirror and sync</a> puts them side by side.
+  </p>
+
+  <h3 id="can-sloop-copy-a-postgresql-database-to-mysql">
+    Can sloop copy a PostgreSQL database to MySQL?
+  </h3>
+  <p>
+    No. Copying is same-engine, and a cross-engine copy is refused rather than attempted — the type
+    systems do not map cleanly and a silent corruption is worse than a refusal. PostgreSQL to
+    PostgreSQL, MySQL to MySQL and MariaDB to MariaDB all work, including across versions and across
+    machines.
+  </p>
+
+  <h3 id="how-do-i-know-a-backup-is-complete">How do I know a backup is complete?</h3>
+  <p>
+    Every row is counted on both sides, per table, with one statement — not estimated. A planner
+    estimate has been observed reporting double the true count, so it is available as
+    <code>SLOOP_VERIFY=fast</code>, is always labelled an estimate, and is never presented as proof.
+    A table that did not arrive at all is a failure and the run exits <code>6</code>. Every backup
+    also gets a manifest beside it recording the engine version, the size, a checksum, the duration
+    and the per-table row counts, and <code>sloop backups list --check</code> re-hashes the dumps
+    later to confirm nothing rotted. <a routerLink="/docs/backups">Backups and restoring</a> has the
+    whole of it.
+  </p>
+
+  <h3 id="why-would-a-mysql-dump-be-missing-triggers">
+    Why would a MySQL dump be missing its triggers and stored routines?
+  </h3>
+  <p>
+    Because the role taking it was short of one grant. MySQL and MariaDB will write a dump with
+    every stored routine and every trigger missing from it, say nothing about it, and exit
+    <code>0</code> — which is the single most dangerous thing in this area, and the reason
+    <code>sloop doctor</code> exists. It checks what each registered role may actually do against
+    the live connection and exits <code>8</code> when it finds something that will break a backup.
+    <a routerLink="/docs/privileges">The privileges a backup role needs</a> lists the minimum per
+    engine and the <code>GRANT</code> that fixes each one.
+  </p>
+
+  <h3 id="is-sloop-free-and-open-source">Is sloop free and open source?</h3>
+  <p>
+    Yes — MIT or Apache-2.0, the Rust default, and the whole source is on
+    <a href="https://github.com/DBSloop/sloop" rel="noreferrer">GitHub</a>. There is no paid tier,
+    no account and no hosted component, which is also why there is nothing in it that needs to
+    contact a server.
+  </p>
+</app-docs-page>

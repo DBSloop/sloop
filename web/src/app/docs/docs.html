@@ -1,0 +1,122 @@
+<!--
+  The docs shell.
+
+  Three regions, and the split between them is the whole design: a toolbar that
+  holds the choices which are global, a rail that holds where you can go, and a
+  column that holds what you came to read. Nothing in the first two belongs to
+  the page currently open, which is why the OS tab strip is up here rather than
+  inside an article — the choice survives every page and every reload.
+
+  No 3D and nothing floating. That is the landing page's character and it is
+  settled that it is nowhere else's; a documentation page that moves while it is
+  being read is a documentation page nobody finishes. See "The 3D is the hero's,
+  and nowhere else's" in docs/OWNER-DECISIONS.md.
+-->
+<div class="bg-bg text-text">
+  <!-- ═══ The toolbar ═════════════════════════════════════════════════════
+       Sticky directly under the navbar. `top` is a measured value rather than
+       a guessed one — see the ResizeObserver in docs.ts, and the note there on
+       why 71px in a stylesheet would have been a number waiting to go wrong.
+  -->
+  <div class="docs-bar sticky z-40 border-b border-line bg-bg/85 backdrop-blur-md">
+    <div
+      #bar
+      class="mx-auto flex max-w-[84rem] items-center gap-3 px-5 py-2.5 sm:px-8 lg:gap-5 lg:px-12"
+    >
+      <!-- Below lg the rail is gone, so this is the way into it. A disclosure
+           rather than a modal: no focus trap to get wrong, no scroll lock to
+           forget, and it opens with the keyboard because it is a button. -->
+      <button
+        type="button"
+        class="flex shrink-0 items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm font-medium text-muted transition-colors duration-2 ease-out hover:border-line-strong hover:text-text lg:hidden"
+        [attr.aria-expanded]="panel()"
+        aria-controls="docs-panel"
+        (click)="panel.set(!panel())"
+      >
+        <svg
+          class="h-4 w-4 shrink-0"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          aria-hidden="true"
+          focusable="false"
+        >
+          @if (panel()) {
+            <path d="m4 4 8 8M12 4l-8 8" />
+          } @else {
+            <path d="M2.5 4h11M2.5 8h11M2.5 12h7" />
+          }
+        </svg>
+        {{ panel() ? 'Close' : 'Contents' }}
+      </button>
+
+      <!-- Where you are, as a path rather than a title — the title is the
+           first thing in the article below and does not need saying twice. -->
+      <nav class="hidden min-w-0 items-center gap-2 lg:flex" aria-label="Breadcrumb">
+        <a
+          routerLink="/docs"
+          class="shrink-0 font-mono text-xs text-faint transition-colors duration-2 ease-out hover:text-text"
+          >docs</a
+        >
+        @if (here(); as page) {
+          <span aria-hidden="true" class="shrink-0 font-mono text-xs text-line-strong">/</span>
+          <span class="shrink-0 font-mono text-xs text-faint">{{ group() }}</span>
+          <span aria-hidden="true" class="shrink-0 font-mono text-xs text-line-strong">/</span>
+          <span class="truncate font-mono text-xs text-muted">{{ page.title }}</span>
+        }
+      </nav>
+
+      <div class="ml-auto shrink-0">
+        <app-os-tabs />
+      </div>
+    </div>
+
+    <!-- The panel is inside the sticky container, so it stays on screen while
+         it is open and takes its scroll from its own box rather than the
+         page's. It is capped so the toolbar can never grow taller than the
+         phone it is on. -->
+    @if (panel()) {
+      <div
+        id="docs-panel"
+        class="max-h-[min(70dvh,34rem)] overflow-y-auto border-t border-line bg-bg px-5 py-5 sm:px-8 lg:hidden"
+      >
+        <app-docs-nav #panelNav (picked)="panel.set(false)" />
+      </div>
+    }
+  </div>
+
+  <div class="mx-auto max-w-[84rem] px-5 sm:px-8 lg:px-12">
+    <div class="lg:grid lg:grid-cols-[16rem_minmax(0,1fr)] lg:gap-12">
+      <!-- ═══ The rail ════════════════════════════════════════════════════
+           Its own scroll, so a long tree never drags the article with it, and
+           sized to whatever is left of the viewport under the two sticky bars.
+      -->
+      <aside class="hidden lg:block">
+        <div class="docs-rail sticky h-[calc(100dvh-var(--docs-rail,134px))] py-9 pr-2">
+          <app-docs-nav #rail />
+        </div>
+      </aside>
+
+      <main class="min-w-0">
+        <router-outlet />
+      </main>
+    </div>
+
+    <div
+      class="flex flex-col gap-3 border-t border-line py-8 text-xs text-faint sm:flex-row sm:items-center sm:justify-between"
+    >
+      <p>sloop — a database operations CLI for PostgreSQL, MySQL and MariaDB. MIT or Apache-2.0.</p>
+      <nav class="flex items-center gap-5" aria-label="Elsewhere">
+        <a routerLink="/" class="transition-colors duration-2 ease-out hover:text-text">Home</a>
+        <a
+          href="https://github.com/DBSloop/sloop"
+          rel="noreferrer"
+          class="transition-colors duration-2 ease-out hover:text-text"
+          >GitHub</a
+        >
+      </nav>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,229 @@
+/* ==========================================================================
+   docs.css — the type rhythm every documentation page is written in.
+
+   A page inside the docs shell writes `<h2 id="...">`, `<p>`, `<ul>`, `<code>`
+   and `<table>`, and gets the scale. Seventeen pages each restating the same
+   dozen utility classes on every paragraph is seventeen chances for one of them
+   to drift; this is the contract instead, and a page reaches for a utility only
+   where it wants something the contract does not give it.
+
+   Every value here comes from tokens.css. No colour, size or duration is
+   written in this file.
+
+   ## Why every selector is wrapped in `:where()`
+
+   So that a utility class always wins.
+
+   `.docs-prose p` would be specificity 0,1,1, and `<p class="mt-0">` would then
+   quietly do nothing — the trade the typography plugin makes, and the reason
+   its users end up writing `!important` through their markup.
+   `.docs-prose :where(p)` is 0,1,0 instead, because `:where()` contributes
+   nothing: the same weight as a Tailwind utility. Ties go to source order, this
+   file is imported ahead of `@tailwind utilities`, and so the utility wins
+   every time, with no `!` anywhere.
+
+   It still beats preflight, which resets margins and list markers at 0,0,1.
+
+   The one exception is `scroll-margin-top`, which is written with an `[id]`
+   attribute selector so it outranks base.css's `:target` rule. That rule is
+   right for the rest of the site and 52px short here, where two sticky bars sit
+   above the reading line.
+   ========================================================================== */
+
+.docs-prose {
+  color: rgb(var(--ch-muted));
+}
+
+/* Rhythm, not a uniform stack: a heading opens a long gap above itself and
+   closes a short one below, so a section reads as a section rather than as
+   evenly spaced lines. */
+
+.docs-prose :where(h2) {
+  margin-top: 3.75rem;
+  font-size: var(--fs-2xl);
+  line-height: var(--lh-2xl);
+  letter-spacing: var(--tr-2xl);
+  font-weight: 600;
+  color: rgb(var(--ch-text));
+}
+
+.docs-prose :where(h3) {
+  margin-top: 2.5rem;
+  font-size: var(--fs-lg);
+  line-height: var(--lh-lg);
+  letter-spacing: var(--tr-lg);
+  font-weight: 600;
+  color: rgb(var(--ch-text));
+}
+
+/* Clear both sticky bars plus a little air. The heights are measured at
+   runtime by the docs shell; the fallback is what they measure to at 1440. */
+.docs-prose :where(h2, h3, h4)[id] {
+  scroll-margin-top: calc(var(--docs-rail, 134px) + 1.5rem);
+}
+
+.docs-prose :where(p, ul, ol) {
+  margin-top: 1.25rem;
+  max-width: var(--measure);
+}
+
+.docs-prose :where(h2 + p, h3 + p, h2 + ul, h3 + ul) {
+  margin-top: 0.875rem;
+}
+
+/* Preflight strips the markers off every list on the page, which is right for
+   navigation and wrong for prose. */
+.docs-prose :where(ul, ol) {
+  padding-left: 1.3rem;
+}
+
+.docs-prose :where(ul) {
+  list-style: disc;
+}
+
+.docs-prose :where(ol) {
+  list-style: decimal;
+}
+
+.docs-prose :where(li) {
+  margin-top: 0.5rem;
+  padding-left: 0.3rem;
+}
+
+.docs-prose :where(li)::marker {
+  color: rgb(var(--ch-faint));
+}
+
+.docs-prose > :where(:first-child) {
+  margin-top: 0;
+}
+
+.docs-prose :where(strong) {
+  font-weight: 600;
+  color: rgb(var(--ch-text));
+}
+
+.docs-prose :where(em) {
+  font-style: italic;
+}
+
+.docs-prose :where(a) {
+  color: rgb(var(--ch-accent));
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: rgb(var(--ch-accent) / 0.35);
+  transition: text-decoration-color var(--dur-2) var(--ease-out);
+}
+
+.docs-prose :where(a:hover) {
+  text-decoration-color: rgb(var(--ch-accent));
+}
+
+/* Inline code sits inside a line of prose, so it is a shade smaller than the
+   text around it — a monospace face at the same size reads as larger. */
+.docs-prose :where(code) {
+  border-radius: var(--r-sm);
+  border: 1px solid rgb(var(--ch-line));
+  background-color: rgb(var(--ch-surface-2));
+  padding: 0.125em 0.36em;
+  font-size: 0.875em;
+  color: rgb(var(--ch-text));
+}
+
+/* …but not inside a heading, where it is already display type, and not inside
+   a terminal block, which paints its own. */
+.docs-prose :where(h2, h3, h4, figure) :where(code) {
+  border: 0;
+  background-color: transparent;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+}
+
+.docs-prose :where(figure) {
+  margin-top: 1.75rem;
+}
+
+.docs-prose :where(hr) {
+  margin-top: 3.5rem;
+  margin-bottom: 3.5rem;
+  border-color: rgb(var(--ch-line));
+}
+
+.docs-prose :where(table) {
+  width: 100%;
+  margin-top: 1.75rem;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+
+.docs-prose :where(th) {
+  border-bottom: 1px solid rgb(var(--ch-line-strong));
+  padding: 0 1rem 0.625rem 0;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgb(var(--ch-faint));
+}
+
+.docs-prose :where(td) {
+  border-bottom: 1px solid rgb(var(--ch-line));
+  padding: 0.75rem 1rem 0.75rem 0;
+  vertical-align: top;
+}
+
+.docs-prose :where(th:last-child, td:last-child) {
+  padding-right: 0;
+}
+
+.docs-prose :where(tbody tr:last-child td) {
+  border-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+   .docs-bare — the escape hatch, and the reason there is exactly one.
+
+   A documentation page is mostly prose, and then it is a card grid, a tab
+   strip, a comparison panel. Those are designed components that happen to be
+   built out of lists and links, and much of the contract above is wrong for
+   them: a bulleted card, an orange underline through a label, a 70ch cap on a
+   two-column grid.
+
+   A component marks its own root `docs-bare` and the contract stops there.
+   Inside it, Tailwind utilities are the only thing styling anything, which is
+   how the rest of the site is built. Equal specificity to the rules above and
+   written after them, so it wins the tie — and still loses to a utility, which
+   is the whole point of the `:where()` above.
+   -------------------------------------------------------------------------- */
+
+.docs-prose :where(.docs-bare, .docs-bare *) {
+  margin: 0;
+  max-width: none;
+  padding-left: 0;
+  list-style: none;
+  font-size: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  font-weight: inherit;
+  color: inherit;
+  text-decoration: none;
+}
+
+/* `border` and `background-color` are deliberately absent above. The shorthand
+   `border: 0` also sets `border-style: none`, which outranks preflight's
+   `border-style: solid` — and a Tailwind `border` utility only sets a width, so
+   every bordered card inside a `docs-bare` block would silently lose its
+   outline. Inline code is the one thing the contract paints that a designed
+   block never wants, so it is undone by name. */
+.docs-prose :where(.docs-bare code) {
+  border-width: 0;
+  background-color: transparent;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+}

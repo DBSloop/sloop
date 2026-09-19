@@ -18,10 +18,21 @@ export const routes: Routes = [
     title: 'Foundation — sloop',
   },
 
-  // The navbar's primary tab points at /docs, which A5 builds. Until it does,
-  // an unmatched path lands on the one page there is rather than throwing
-  // NG04002 into a console this project requires to be empty. A5 adds the real
-  // route and A12 adds real 404 handling; both replace this.
+  // The documentation, and everything under it.
+  //
+  // Lazy, for the reason three.js is lazy on the landing page and the reverse
+  // of it: the docs are the largest route set on the site by count, and
+  // somebody who came for the home page should not download seventeen route
+  // definitions to read it. The split also keeps the landing bundle — which
+  // owns the 3D — out of the docs.
+  {
+    path: 'docs',
+    loadChildren: () => import('./docs/docs.routes').then((m) => m.docsRoutes),
+  },
+
+  // An unmatched path lands on the one page every visitor can use rather than
+  // throwing NG04002 into a console this project requires to be empty. A22 owns
+  // real 404 handling, and replaces this.
   {
     path: '**',
     redirectTo: '',
