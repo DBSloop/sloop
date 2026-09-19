@@ -15,6 +15,7 @@ import { Overview } from './overview/overview';
 import { Pending } from './pending';
 import { Postgres } from './postgres/postgres';
 import { Query } from './query/query';
+import { Security } from './security/security';
 import { Service } from './service/service';
 import { Ssh } from './ssh/ssh';
 
@@ -38,6 +39,7 @@ const WRITTEN: Readonly<Record<string, Type<unknown>>> = {
   activity: Activity,
   postgres: Postgres,
   ssh: Ssh,
+  security: Security,
 };
 
 /**

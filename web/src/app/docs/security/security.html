@@ -1,0 +1,179 @@
+<!--
+  Security.
+
+  Every claim on this page is demonstrated rather than asserted, and all four
+  demonstrations are real runs: a password given in a URL and the log written by
+  that same run, a token inside somebody's own --password-command shown on the
+  terminal and redacted in the log, a password of nothing but shell
+  metacharacters that round-trips and connects, and the dependency check run
+  exactly as the page prints it.
+
+  The class comment on `Security` says how. There are no substitutions.
+-->
+<app-docs-page
+  heading="Security"
+  lede="The guarantee, expanded — and every part of it written so you can check it yourself rather than take it on trust."
+  eyebrow="Reference"
+  path="security"
+>
+  <div class="docs-bare mt-2 rounded-xl border border-accent/25 bg-accent-soft p-5 sm:p-6">
+    <p class="max-w-measure text-base text-text">
+      <strong class="font-semibold">Your credentials never leave your machine.</strong> No
+      telemetry, no analytics, no update pings. <code class="font-mono text-sm">cargo tree</code> on
+      this repository shows no HTTP client in the dependency graph — there is nothing in the binary
+      that <em>could</em> phone home.
+    </p>
+  </div>
+
+  <p>
+    That is a claim about a dependency graph, which makes it a claim anybody can check. So the first
+    section is how, and it takes about thirty seconds.
+  </p>
+
+  <h2 id="check-it">Check it yourself</h2>
+  <p>Copy this. It clones the repository and greps the whole dependency graph:</p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="thirty seconds" [lines]="check" copy />
+  </div>
+
+  <p>
+    <strong>It prints nothing</strong>, and nothing is the result. 269 crates go into that binary
+    and not one of them can open a socket — <code>--edges normal,build,dev</code> so a
+    build-dependency cannot hide there, and <code>--target all</code> because something behind
+    <code>[target.'cfg(windows)'.dependencies]</code> is invisible to a plain
+    <code>cargo tree</code> run on Linux, which is precisely where it would hide.
+  </p>
+
+  <p>
+    The same check is a script in the repository, and it runs on every push. It fails the build
+    rather than printing a warning:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="on every push" [lines]="guard" copy />
+  </div>
+
+  <p>
+    <strong>SSH clients are denied too</strong>, and that is not an afterthought: <code>ssh2</code>,
+    <code>libssh2-sys</code>, <code>russh</code>, <code>thrussh</code>, <code>async-ssh2-*</code>,
+    <code>ssh-rs</code> and <code>makiko</code> fail the build beside <code>reqwest</code> and
+    <code>hyper</code>. An embedded SSH client can open a socket to anywhere, so the promise above
+    would stop being true while a check that only looked for HTTP clients still passed. A claim that
+    holds only because the check is narrow is not worth making — which is why
+    <a routerLink="/docs/ssh">sloop runs your own <code>ssh</code></a> instead.
+  </p>
+
+  <h2 id="routes">A registry holds a route, never a value</h2>
+  <p>
+    There is <strong>no spelling of a password a registry will accept</strong>. It stores which of
+    four routes to take, and the value is fetched at the moment it is needed — which is what makes
+    it impossible to put a password there by accident.
+  </p>
+
+  <dl class="docs-bare mt-7 space-y-px overflow-hidden rounded-xl border border-line">
+    @for (route of routes; track route.flag) {
+      <div class="bg-surface p-5 sm:p-6">
+        <dt class="font-mono text-sm text-accent">{{ route.flag }}</dt>
+        <dd class="mt-2 max-w-measure text-sm text-text">{{ route.where }}</dd>
+        <dd class="mt-1 max-w-measure text-sm text-muted">{{ route.when }}</dd>
+      </div>
+    }
+  </dl>
+
+  <p>
+    <code>sloop db list</code> shows the route beside every database and
+    <strong>cannot show a password</strong>, because there is not one there to show.
+    <a routerLink="/docs/databases" fragment="where-the-password-lives">Databases and registries</a>
+    has that listing.
+  </p>
+
+  <h2 id="argv">Nothing in argv, so nothing in ps</h2>
+  <p>
+    A password reaches a child process through a <strong>pipe</strong>, or through that one child's
+    environment — never as a command-line argument. Anybody running <code>ps</code> on a shared
+    machine while a backup is going sees the command and not the credential.
+  </p>
+  <p>
+    Which leaves one hole sloop cannot close: a password <em>you</em> typed into a URL was already
+    in your shell's history and in <code>ps</code> before sloop ever ran. It says so rather than
+    quietly accepting it, and then keeps its own half of the bargain:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="named, not hidden" [lines]="inTheUrl" copy />
+  </div>
+
+  <h2 id="logs">A log you could paste into a public issue</h2>
+  <p>
+    <code>--log-file</code> writes what the run printed, without colour and with anything that reads
+    like a credential removed. That holds for two reasons, and only one of them is a filter.
+  </p>
+  <p>
+    <strong>The structural half:</strong> the one line that carries a real password goes through a
+    function that has no logging in it at all. sloop does not redact its own passwords out of its
+    logs — it never writes them.
+  </p>
+  <p>
+    <strong>The net under it</strong> is for credentials that arrive inside something else: a URL
+    with a password in it, a <code>key=value</code> pair whose key says what it is, or a word after
+    something that announces a secret. Like a token inside a <code>--password-command</code> you
+    wrote, which sloop cannot see coming:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="terminal, then log" [lines]="redacted" copy />
+  </div>
+
+  <div class="docs-bare mt-7 rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
+    <p class="flex items-center gap-2.5 font-mono text-xs text-warn">
+      <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-warn"></span>
+      A redactor is a net, not a design
+    </p>
+    <p class="mt-3 max-w-measure text-sm text-muted">
+      Note the terminal above shows the token in full — it is the command you typed, and hiding it
+      from you would be theatre. It is the <strong>log</strong> that is scrubbed, because the log is
+      the thing that ends up in an issue. And what keeps sloop's own passwords out of logs is not
+      this filter; it is that they are never printed.
+    </p>
+  </div>
+
+  <h2 id="parsed">Config is parsed, never evaluated</h2>
+  <p>
+    Real passwords contain <code>$</code>, backticks, <code>&gt;</code>, <code>#</code>, quotes,
+    pipes, backslashes and spaces. Nothing sloop reads is ever <code>source</code>d or
+    <code>eval</code>'d, so none of that is interpreted. Here is a PostgreSQL role whose password is
+    nothing but metacharacters:
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="and it just works" [lines]="awkward" copy />
+  </div>
+
+  <p>
+    Registered through a pipe, stored in the keyring, and read back on a <em>later</em> run to open
+    a real connection. <code>$HOME</code> did not expand, the backticks did not execute, the
+    <code>&gt;</code> did not redirect and the <code>#</code> did not start a comment.
+  </p>
+  <p>
+    A <code>\r</code> is the one character sloop removes — Windows editors add them, and the
+    authentication failure that follows is invisible.
+  </p>
+
+  <h2 id="what-this-is-not">What this is not</h2>
+  <p>
+    None of it is a substitute for the database's own access control. sloop runs as you, with the
+    credentials you gave it, and can do exactly what those credentials allow —
+    <a routerLink="/docs/privileges">the privileges a backup role needs</a> is the page for keeping
+    that set small. And an encrypted backup is only as safe as
+    <a routerLink="/docs/backup-key">the key</a>: lose it and the backups are unreadable, leave it
+    beside them and they are not protected.
+  </p>
+  <p>
+    Securing the machine and the network is still the operator's job. What sloop guarantees is
+    narrower and checkable:
+    <strong
+      >it cannot send your credentials anywhere, because it cannot send anything anywhere.</strong
+    >
+  </p>
+</app-docs-page>

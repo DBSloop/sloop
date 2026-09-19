@@ -316,6 +316,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         path: 'security',
         documentTitle: 'Security — your database credentials never leave the machine',
         title: 'Security',
+        written: true,
         blurb: 'The guarantee, expanded — and how to check it yourself in thirty seconds.',
         covers: [
           'No HTTP client and no SSH client in the dependency graph, and the CI script that fails the build if one appears.',
