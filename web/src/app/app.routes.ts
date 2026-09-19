@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 
 import { Foundation } from './foundation/foundation';
 import { Landing } from './landing/landing';
+import { NotFound } from './not-found/not-found';
 
 export const routes: Routes = [
   {
@@ -30,11 +31,23 @@ export const routes: Routes = [
     loadChildren: () => import('./docs/docs.routes').then((m) => m.docsRoutes),
   },
 
-  // An unmatched path lands on the one page every visitor can use rather than
-  // throwing NG04002 into a console this project requires to be empty. A22 owns
-  // real 404 handling, and replaces this.
+  // **A real 404, and prerendered like everything else.** `A22` builds this
+  // route to its own `index.html` and `tools/site.mjs` moves it to `404.html`,
+  // which is the file GitHub Pages serves — with a real `404` status — for a
+  // path that has no file. Every path that *does* exist has one, so nothing
+  // real ever reaches this.
+  {
+    path: '404',
+    component: NotFound,
+    title: 'Not found — sloop',
+  },
+
+  // The same component for a bad link followed inside the site. Not a redirect:
+  // sending a typo to the home page tells somebody the page exists and they
+  // arrived somewhere else, which is a worse lie than saying it does not.
   {
     path: '**',
-    redirectTo: '',
+    component: NotFound,
+    title: 'Not found — sloop',
   },
 ];

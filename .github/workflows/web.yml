@@ -1,0 +1,191 @@
+# The site's gate, and the thing that puts it on the internet.
+#
+# `cli.yml` guards the binary; this guards the pages that document it and then
+# publishes them. Two jobs, and the second only runs on a push to the default
+# branch — a pull request builds the site and checks it, and publishes nothing.
+#
+# **Only first-party actions here**, the same rule `cli.yml` states and for the
+# same reason: a tool whose headline claim is about what it does *not* depend on
+# should not hand a third-party action a checkout of itself. `actions/checkout`
+# and `actions/setup-node` are GitHub's own, and the publish is `git`.
+#
+# **`cli/**` is in the paths on purpose.** `web/src/app/docs/commands/commands.json`
+# is generated from `sloop --help` by `web/tools/commands.mjs`, and
+# `web/privileges.json` by a Rust test — so a change to the CLI can make the
+# published reference wrong without touching a single file under `web/`. The
+# `reference` job builds the binary and asks it, which is the only way that
+# drift is ever caught.
+
+name: web
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - web/**
+      - install/**
+      - cli/**
+      - .github/workflows/web.yml
+  pull_request:
+    paths:
+      - web/**
+      - install/**
+      - cli/**
+      - .github/workflows/web.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A second push while the first is still deploying would race it to the Pages
+# repository. `cancel-in-progress` on the branch keeps the last push the one
+# that wins, which is what anybody would expect.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The floor `web/package.json` names, and what the lockfile was
+          # resolved against.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+
+      # Templates typecheck here and nowhere else -- `tsc --noEmit` does not see
+      # them. This is also the step that prerenders all twenty-one routes.
+      - run: npx ng build
+
+      # And this is the one that decides whether what came out is a site: every
+      # route a real file, every page the page `nav.ts` names, `404.html` where
+      # GitHub Pages looks for it, the four scripts published, and every
+      # `dbsloop.github.io/...` URL in the source resolving to something that
+      # exists. It exits non-zero rather than warning.
+      - run: node tools/site.mjs
+
+      - name: Keep the built site for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: web/dist/web/browser
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: error
+
+  # The command reference is generated, not written, so it can go stale without
+  # anybody editing it. This is the check that notices.
+  reference:
+    name: reference
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # `--bin sloop` and nothing else: this job needs a binary to interrogate,
+      # not a test run. `cli.yml` owns the tests.
+      - name: The binary the reference is generated from
+        run: cargo build --release --bin sloop --manifest-path cli/Cargo.toml
+
+      - name: commands.json still matches what the binary prints
+        working-directory: web
+        run: |
+          npm ci
+          npm run commands:check
+
+  publish:
+    name: publish
+    needs: [build, reference]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: The site this run built
+        uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: site
+
+      # **Cloned rather than force-pushed over.** The Pages repository holds
+      # generated output and nothing else, so its history is not precious -- but
+      # discarding it means nobody can ever diff two deploys, and that is the
+      # first thing anybody wants when a page goes wrong. So: clone it, replace
+      # its contents, commit the difference.
+      #
+      # Pushing to another repository needs a credential of its own --
+      # `GITHUB_TOKEN` is scoped to this one. `PAGES_TOKEN` is a fine-grained
+      # token with contents:write on `DBSloop/dbsloop.github.io`.
+      - name: Publish to DBSloop/dbsloop.github.io
+        env:
+          TOKEN: ${{ secrets.PAGES_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::error::PAGES_TOKEN is not set. Create a fine-grained token with" \
+                 "contents:write on DBSloop/dbsloop.github.io and add it as a repository" \
+                 "secret named PAGES_TOKEN."
+            exit 1
+          fi
+
+          remote="https://x-access-token:${TOKEN}@github.com/DBSloop/dbsloop.github.io.git"
+
+          # The default branch comes from the clone rather than from a guess
+          # here: a Pages site serves whatever its repository's default branch
+          # is, and this workflow has no business deciding that it is `main`.
+          if ! git clone --depth 1 "$remote" pages 2>/dev/null; then
+            echo "::error::could not clone DBSloop/dbsloop.github.io. The repository" \
+                 "has to exist, and PAGES_TOKEN has to be able to read and write it."
+            exit 1
+          fi
+
+          # `symbolic-ref` rather than `rev-parse`: on the very first deploy the
+          # repository is empty, HEAD points at a branch that has no commit on
+          # it yet, and `rev-parse --abbrev-ref HEAD` fails outright. This
+          # returns the name either way, so the first deploy needs nothing done
+          # to the repository by hand.
+          branch=$(git -C pages symbolic-ref --short HEAD)
+
+          # Everything the site had, gone; everything it has now, in. `.git`
+          # survives because it is named, and so does `CNAME` -- GitHub writes
+          # that file itself when a custom domain is set, and a deploy that
+          # deleted it would take the domain down.
+          find pages -mindepth 1 -maxdepth 1 \
+            ! -name .git ! -name CNAME -exec rm -rf {} +
+          cp -a site/. pages/
+
+          cd pages
+          # `install.sh` is fetched and piped straight into `sh`. A checkout that
+          # rewrote its line endings would publish a script `sh` chokes on, so the
+          # conversion is turned off here rather than assumed to be off.
+          git config core.autocrlf false
+          git config user.name "sloop CI"
+          git config user.email "ci@dbsloop.invalid"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "the built site is identical to what is published. Nothing to do."
+            exit 0
+          fi
+
+          git commit -q -m "Built from ${GITHUB_REPOSITORY}@${GITHUB_SHA}
+
+          ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+          git push origin "HEAD:${branch}"
+
+          echo "published to ${branch} — https://dbsloop.github.io/"

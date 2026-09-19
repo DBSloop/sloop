@@ -15,7 +15,8 @@
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
     "commands": "node tools/commands.mjs",
-    "commands:check": "node tools/commands.mjs --check"
+    "commands:check": "node tools/commands.mjs --check",
+    "site": "ng build && node tools/site.mjs"
   },
   "dependencies": {
     "@angular/common": "^21.2.0",
@@ -35,6 +36,8 @@
     "@angular/build": "^21.2.24",
     "@angular/cli": "^21.2.24",
     "@angular/compiler-cli": "^21.2.0",
+    "@angular/platform-server": "^21.2.23",
+    "@angular/ssr": "^21.2.24",
     "autoprefixer": "^10.4.21",
     "jsdom": "^28.0.0",
     "postcss": "^8.5.6",
