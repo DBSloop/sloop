@@ -1,7 +1,10 @@
 # sloop
 
-Register your databases once, then back them up, restore them, mirror them and sync them —
-from a menu or from a flag, on Windows, Linux and macOS.
+**Database backup, restore, mirror and sync for PostgreSQL, MySQL and MariaDB — one
+command-line tool, on Windows, Linux and macOS.**
+
+Register your databases once, then back them up, restore them, copy them between servers and
+keep them on a schedule. From a menu, or from a flag a scheduler can run.
 
 **Your credentials never leave your machine.** No telemetry, no analytics, no update pings.
 `cargo tree` on this repository shows no HTTP client in the dependency graph — there is
@@ -11,17 +14,37 @@ nothing in the binary that *could* phone home.
 [![crates.io](https://img.shields.io/crates/v/dbsloop.svg)](https://crates.io/crates/dbsloop)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-PostgreSQL, MySQL and MariaDB. Documentation at **[dbsloop.github.io](https://dbsloop.github.io)**.
+Documentation at **[dbsloop.github.io](https://dbsloop.github.io)**.
+
+---
+
+## What sloop does
+
+| | What it means |
+|---|---|
+| **Back up** | PostgreSQL, MySQL and MariaDB dumps, encrypted, with every row counted and a manifest beside them |
+| **Restore** | any stored backup back into a database, verified against what the manifest recorded |
+| **Mirror** | an exact copy of a database onto another server. The destination ends up identical |
+| **Sync** | a merge into another database. Rows added and replaced, destination-only rows kept |
+| **Schedule** | backups and retention run by sloop's own background service, with no cron line and no Task Scheduler entry |
+| **Monitor** | rows in, rows out and size per database, by day, week and month |
+| **Read** | pick a table and tick the columns. No SQL, and nothing it runs can write |
+
+One binary. No agent to deploy, no server to run, no account to make.
 
 ---
 
 ## Install
 
-```sh
-# Linux and macOS
-curl -fsSL https://dbsloop.github.io/install.sh | sh
+**Linux and macOS**
 
-# Windows
+```sh
+curl -fsSL https://dbsloop.github.io/install.sh | sh
+```
+
+**Windows**
+
+```powershell
 irm https://dbsloop.github.io/install.ps1 | iex
 ```
 
@@ -33,7 +56,7 @@ does not see that until it restarts.
 | Linux, macOS | `~/.local/bin`, with a line appended to your shell's startup file |
 | Windows | `%LOCALAPPDATA%\Programs\sloop\bin`, via `HKCU\Environment` |
 
-Installer options — pass them after `sh -s --`, or as PowerShell parameters:
+Installer options:
 
 | Option | What it does |
 |---|---|
@@ -42,8 +65,16 @@ Installer options — pass them after `sh -s --`, or as PowerShell parameters:
 | `--from <url\|dir>` | fetch from there instead of GitHub releases |
 | `--no-modify-path` | do not touch `PATH` or any startup file |
 
+**Linux and macOS** — after `sh -s --`, which is how `sh` is told where its own arguments stop:
+
 ```sh
-curl -fsSL https://dbsloop.github.io/install.sh | sh -s -- --version 1.2.3
+curl -fsSL https://dbsloop.github.io/install.sh | sh -s -- --version 1.2.3 --dir ~/bin
+```
+
+**Windows** — as PowerShell parameters, which needs the script turned into a script block:
+
+```powershell
+& ([scriptblock]::Create((irm https://dbsloop.github.io/install.ps1))) -Version 1.2.3
 ```
 
 ### Or take the binary yourself
@@ -86,10 +117,10 @@ half of the key is on this machine and nowhere else, and losing the machine with
 means losing every backup it took. The first backup stops and says so; without a terminal to
 say it to, it refuses and exits `2`.
 
-Or run `sloop` with no arguments and answer the questions. The menu covers registering,
-backing up, restoring, mirroring, syncing, reading and the backup key; installing and
-scheduling the background service is by flag for now. Every interactive run ends by printing
-the flag form of what it just did, so a session becomes a line you can schedule.
+Or run `sloop` with no arguments and answer the questions. Every command is on the menu —
+registering a database, backing up, restoring, mirroring, syncing, reading, the backup key
+and the background service — and every interactive run ends by printing the flag form of what
+it just did, so a session becomes a line you can schedule.
 
 ---
 
@@ -223,6 +254,8 @@ sloop service schedule orders --every 1d --keep 7 --keep-for-days 30
 
 Nothing is written to crontab, Task Scheduler or a systemd timer. The service takes the
 backup, applies the retention policy and prunes what falls outside it.
+
+All of it is on the menu as well — `sloop`, then **This machine**.
 
 | Flag | What it does |
 |---|---|
@@ -401,6 +434,69 @@ Planned. No dates.
 - DDL: creating and altering tables from sloop.
 - Editing rows in place.
 - A local interface that reads sloop's own PostgreSQL the way the CLI does.
+
+---
+
+## Questions
+
+### Which databases does sloop support?
+
+PostgreSQL, MySQL and MariaDB. MariaDB is handled as its own engine rather than as a MySQL
+variant, because it ships `mariadb-dump` where MySQL ships `mysqldump`.
+
+### Does sloop send anything over the network?
+
+Only to your own database servers. There is no telemetry, no analytics and no update check,
+and no HTTP client anywhere in the dependency graph — `cargo tree` on this repository shows
+none, and CI fails the build the day one appears. The single job that needs the internet,
+fetching client tools, runs the system's own `curl` or `Invoke-WebRequest` after you agree.
+
+### Where does sloop store passwords?
+
+Never in plaintext, and never in `argv` where `ps` would show them. Four routes: the OS
+keyring, an XChaCha20-Poly1305 file with an Argon2id-derived key, an environment variable
+read at run time, or a command whose output is read through a pipe. A registry holds the
+route, never the value.
+
+### Can sloop copy a database from one server to another?
+
+Yes, two ways. `sloop mirror` makes the destination identical to the source. `sloop sync`
+merges instead — rows are added and replaced, and rows only the destination has are kept.
+The source is only ever read in both.
+
+### Does sloop replace cron for scheduled backups?
+
+Yes, on all three platforms. `sloop service install` registers a background service, and
+`sloop service schedule <name> --every 1d --keep 7` puts a database on a schedule. Nothing is
+written to crontab, Task Scheduler or a systemd timer.
+
+### Can it copy from PostgreSQL to MySQL?
+
+No. Cross-engine copying is refused rather than attempted, because the type systems do not
+map cleanly and a silent corruption is worse than a refusal.
+
+### Are backups encrypted?
+
+Yes, with an [age](https://age-encryption.org) keypair. The public key sits in the registry
+so a scheduled backup needs no secret to run; the private key stays on the machine and only a
+restore reads it. Export it with `sloop key export` — without a copy, losing the machine
+loses every backup it took.
+
+### How does sloop verify a backup?
+
+It counts every row on both sides with one statement, per table. Planner estimates are not
+used as proof — they have been seen reporting double the real figure — and any number that is
+an estimate is labelled as one.
+
+### Does sloop need root or an agent?
+
+No. It is one binary you run as yourself. Installing the background service is the only step
+that needs administrator or `sudo`, because registering something to start at boot is a
+machine-wide change.
+
+### Is sloop free?
+
+Yes. MIT or Apache-2.0, at your option.
 
 ---
 

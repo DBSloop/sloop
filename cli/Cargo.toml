@@ -11,7 +11,9 @@ homepage = "https://dbsloop.github.io"
 
 [package]
 name = "dbsloop"
-description = "Register your databases once, then back them up, restore, mirror and sync them. No credential ever leaves the machine."
+# **What crates.io search matches on**, so it leads with the words somebody types rather
+# than with the sentence the README opens on: the verbs, then the engines, then the claim.
+description = "Database backup, restore, mirror and sync CLI for PostgreSQL, MySQL and MariaDB. Cross-platform, scriptable, and no credential ever leaves your machine."
 # **The repository's README is the crate's page.** Cargo resolves `readme` against this
 # manifest and packages the file it finds, so `../README.md` is copied into the crate as
 # `README.md` — one file, rendered by GitHub and crates.io both, with nothing to keep in
@@ -19,7 +21,9 @@ description = "Register your databases once, then back them up, restore, mirror 
 # in the repository, because a silent divergence here is a crates.io page nobody looks at.
 readme = "../README.md"
 categories = ["command-line-utilities", "database"]
-keywords = ["backup", "restore", "postgresql", "mysql", "database"]
+# Five is the limit crates.io allows. `database` goes because `categories` already says it
+# and the engine names are what people actually search for.
+keywords = ["backup", "restore", "postgresql", "mysql", "mariadb"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
