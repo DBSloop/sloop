@@ -279,7 +279,11 @@ fn into_a_registered_database(
             "{} is {} and {destination} is {}",
             asked.source, from.engine, into.engine
         ))
-        .hint("R29 is where copying across engines gets decided; today it is refused"));
+        .hint(
+            "copying between engines is not built: the type systems do not map cleanly, and a \
+             copy that quietly rounds or truncates is worse than one that refuses. Mirror \
+             between two databases on the same engine",
+        ));
     }
 
     // The paperwork before a password is fetched or a socket opened.

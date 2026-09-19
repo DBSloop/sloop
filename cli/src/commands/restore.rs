@@ -221,7 +221,11 @@ fn same_engine(manifest: &Manifest, record: &Database, name: &str) -> Outcome<()
         "that backup is {} and {name} is {}",
         manifest.engine, record.engine
     ))
-    .hint("R29 is where restoring across engines gets decided; today it is refused"))
+    .hint(
+        "restoring across engines is not built: a dump is written in its own engine's dialect, \
+         and reinterpreting it would corrupt quietly rather than fail loudly. Restore this \
+         backup into a database on the engine it was taken from",
+    ))
 }
 
 /// What the chosen backup says about itself, or why it cannot say anything.

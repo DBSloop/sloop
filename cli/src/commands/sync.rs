@@ -239,7 +239,9 @@ fn into_a_new_database(
     )
 }
 
-/// Two engines is `R29`'s question, and until then it is a refusal that says where.
+/// Two engines is `R29`'s question. Until it is answered this is a refusal, and it says why
+/// rather than naming `R29`: an entry in this project's own build list means nothing to
+/// somebody reading the error, and three hints used to print it.
 fn refuse_across_engines(
     source: &str,
     from: &Database,
@@ -254,7 +256,11 @@ fn refuse_across_engines(
         "{source} is {} and {destination} is {}",
         from.engine, into.engine
     ))
-    .hint("R29 is where copying across engines gets decided; today it is refused"))
+    .hint(
+        "copying between engines is not built: the type systems do not map cleanly, and a \
+         copy that quietly rounds or truncates is worse than one that refuses. Sync \
+         between two databases on the same engine",
+    ))
 }
 
 /// What syncing a database into itself would have done, which is the half worth reading.
