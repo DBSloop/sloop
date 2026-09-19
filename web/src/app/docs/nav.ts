@@ -295,6 +295,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         path: 'commands',
         documentTitle: 'sloop command reference — every command and every flag',
         title: 'Command reference',
+        written: true,
         blurb: 'Every command and every flag, checked against --help rather than remembered.',
         covers: [
           'Forty commands across eight groups, two paragraphs each and then the table.',

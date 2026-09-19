@@ -188,6 +188,13 @@
   padding-right: 0;
 }
 
+/* A connection string or a long flag has nowhere to go inside a two-column
+   cell, and a chip that runs past the edge of the table reads as broken. In a
+   table, and only there, code breaks mid-token rather than overflowing. */
+.docs-prose :where(td, th) :where(code) {
+  overflow-wrap: anywhere;
+}
+
 .docs-prose :where(tbody tr:last-child td) {
   border-bottom: 0;
 }

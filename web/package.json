@@ -13,7 +13,9 @@
     "start": "ng serve",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
-    "test": "ng test"
+    "test": "ng test",
+    "commands": "node tools/commands.mjs",
+    "commands:check": "node tools/commands.mjs --check"
   },
   "dependencies": {
     "@angular/common": "^21.2.0",

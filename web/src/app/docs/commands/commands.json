@@ -1,0 +1,5793 @@
+{
+  "$generated": "web/tools/commands.mjs — do not edit by hand",
+  "version": "sloop 0.1.0",
+  "globalOptions": [
+    {
+      "short": null,
+      "long": "--global",
+      "value": null,
+      "spec": "--global",
+      "text": "Use the global registry, whichever directory you are standing in"
+    },
+    {
+      "short": "-C",
+      "long": "--project",
+      "value": "PATH|NAME",
+      "spec": "-C, --project <PATH|NAME>",
+      "text": "Work on this project: a directory, or a name `sloop init` recorded"
+    },
+    {
+      "short": null,
+      "long": "--password-command",
+      "value": "COMMAND",
+      "spec": "--password-command <COMMAND>",
+      "text": "Take the password from this command's output instead of wherever the registry says"
+    },
+    {
+      "short": "-y",
+      "long": "--yes",
+      "value": null,
+      "spec": "-y, --yes",
+      "text": "Answer yes to a question this would otherwise stop and ask"
+    },
+    {
+      "short": null,
+      "long": "--force",
+      "value": null,
+      "spec": "--force",
+      "text": "Override a refusal that is there to protect something"
+    },
+    {
+      "short": null,
+      "long": "--confirm",
+      "value": "NAME",
+      "spec": "--confirm <NAME>",
+      "text": "The name of the thing being destroyed, typed out"
+    },
+    {
+      "short": "-q",
+      "long": "--quiet",
+      "value": null,
+      "spec": "-q, --quiet",
+      "text": "Say nothing but what went wrong"
+    },
+    {
+      "short": null,
+      "long": "--json",
+      "value": null,
+      "spec": "--json",
+      "text": "Print one JSON document instead of talking"
+    },
+    {
+      "short": null,
+      "long": "--no-color",
+      "value": null,
+      "spec": "--no-color",
+      "text": "Never colour the output, whatever this terminal supports"
+    },
+    {
+      "short": null,
+      "long": "--log-file",
+      "value": "PATH",
+      "spec": "--log-file <PATH>",
+      "text": "Append everything this run prints to a file as well"
+    },
+    {
+      "short": null,
+      "long": "--dry-run",
+      "value": null,
+      "spec": "--dry-run",
+      "text": "Say what would happen and change nothing"
+    }
+  ],
+  "commands": [
+    {
+      "path": [],
+      "name": "sloop",
+      "summary": "Register your databases once — then back up, restore, mirror and sync them. **Seven booleans, and clippy is right in general and wrong here.** Every one of them is a global flag a user typed, read once in `main` and never passed around; the struct clippy is warning about is a struct whose fields get muddled at a call site, and this one has no call sites at all — clap fills it in from `argv` by name",
+      "description": [
+        "Register your databases once — then back them up, restore them, mirror them and sync them, from a menu or from a flag, on Windows, Linux and macOS.",
+        "Your credentials never leave this machine. No telemetry, no analytics, no update pings: there is no HTTP client anywhere in this binary's dependency graph, so there is nothing in it that could phone home even if it wanted to."
+      ],
+      "usage": "sloop [OPTIONS] [COMMAND]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        },
+        {
+          "short": "-V",
+          "long": "--version",
+          "value": null,
+          "spec": "-V, --version",
+          "text": "Print version"
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Run `sloop` with no command for the interactive menu.",
+          "text": ""
+        }
+      ],
+      "children": [
+        "init",
+        "doctor",
+        "db",
+        "backup",
+        "backups",
+        "restore",
+        "mirror",
+        "sync",
+        "query",
+        "key",
+        "setup",
+        "server",
+        "service",
+        "reset",
+        "uninstall"
+      ],
+      "ownOptions": [
+        {
+          "short": "-V",
+          "long": "--version",
+          "value": null,
+          "spec": "-V, --version",
+          "text": "Print version"
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Run `sloop` with no command for the interactive menu.",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "path": [
+        "init"
+      ],
+      "name": "init",
+      "summary": "Start a project registry in this directory, or in the one `-C` names",
+      "description": [
+        "Start a project registry in this directory, or in the one `-C` names"
+      ],
+      "usage": "sloop init [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "doctor"
+      ],
+      "name": "doctor",
+      "summary": "Report which client tools are present, and what each registered role may do",
+      "description": [
+        "Report which client tools are present, and what each registered role may do"
+      ],
+      "usage": "sloop doctor [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": null,
+          "long": "--offline",
+          "value": null,
+          "spec": "--offline",
+          "text": "Do not connect to anything. Reports the client tools and the documented privilege minimums, and asks no server about its grants"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--offline",
+          "value": null,
+          "spec": "--offline",
+          "text": "Do not connect to anything. Reports the client tools and the documented privilege minimums, and asks no server about its grants"
+        }
+      ]
+    },
+    {
+      "path": [
+        "db"
+      ],
+      "name": "db",
+      "summary": "Tell sloop about a database, and change or forget what it knows",
+      "description": [
+        "Tell sloop about a database, and change or forget what it knows"
+      ],
+      "usage": "sloop db [OPTIONS] <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [
+        "add",
+        "create",
+        "list",
+        "test",
+        "edit",
+        "rename",
+        "remove",
+        "drop"
+      ],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "db",
+        "add"
+      ],
+      "name": "db add",
+      "summary": "Register a database, by URL or field by field",
+      "description": [
+        "Register a database, by URL or field by field"
+      ],
+      "usage": "sloop db add [OPTIONS] <NAME>",
+      "arguments": [
+        {
+          "name": "<NAME>",
+          "text": "What to call it here. Not the database's own name — the label you will type"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": null,
+          "long": "--url",
+          "value": "URL",
+          "spec": "--url <URL>",
+          "text": "The whole connection in one string: `postgres://app@db:5432/orders`"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--engine",
+          "value": "ENGINE",
+          "spec": "--engine <ENGINE>",
+          "text": "postgres, mysql or mariadb"
+        },
+        {
+          "short": null,
+          "long": "--host",
+          "value": "HOST",
+          "spec": "--host <HOST>",
+          "text": "Host name or address"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": null,
+          "long": "--port",
+          "value": "PORT",
+          "spec": "--port <PORT>",
+          "text": "Port. Defaults to the engine's own"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--database",
+          "value": "NAME",
+          "spec": "--database <NAME>",
+          "text": "The database's name on the server"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": null,
+          "long": "--user",
+          "value": "ROLE",
+          "spec": "--user <ROLE>",
+          "text": "The role to connect as"
+        },
+        {
+          "short": null,
+          "long": "--keyring",
+          "value": null,
+          "spec": "--keyring",
+          "text": "Keep the password in the OS keyring. The default"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--encrypted-file",
+          "value": null,
+          "spec": "--encrypted-file",
+          "text": "Keep it in the Argon2id-encrypted file, for a machine with no keyring"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--env",
+          "value": "VARIABLE",
+          "spec": "--env <VARIABLE>",
+          "text": "Read it from this environment variable at run time, for automation"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--password-from",
+          "value": "COMMAND",
+          "spec": "--password-from <COMMAND>",
+          "text": "Run this and read the password from its output, for a team password manager"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": null,
+          "long": "--password-stdin",
+          "value": null,
+          "spec": "--password-stdin",
+          "text": "Take the password from standard input instead of asking for it"
+        },
+        {
+          "short": null,
+          "long": "--test",
+          "value": null,
+          "spec": "--test",
+          "text": "Connect before saving, and refuse to save if it does not work"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--url",
+          "value": "URL",
+          "spec": "--url <URL>",
+          "text": "The whole connection in one string: `postgres://app@db:5432/orders`"
+        },
+        {
+          "short": null,
+          "long": "--engine",
+          "value": "ENGINE",
+          "spec": "--engine <ENGINE>",
+          "text": "postgres, mysql or mariadb"
+        },
+        {
+          "short": null,
+          "long": "--host",
+          "value": "HOST",
+          "spec": "--host <HOST>",
+          "text": "Host name or address"
+        },
+        {
+          "short": null,
+          "long": "--port",
+          "value": "PORT",
+          "spec": "--port <PORT>",
+          "text": "Port. Defaults to the engine's own"
+        },
+        {
+          "short": null,
+          "long": "--database",
+          "value": "NAME",
+          "spec": "--database <NAME>",
+          "text": "The database's name on the server"
+        },
+        {
+          "short": null,
+          "long": "--user",
+          "value": "ROLE",
+          "spec": "--user <ROLE>",
+          "text": "The role to connect as"
+        },
+        {
+          "short": null,
+          "long": "--keyring",
+          "value": null,
+          "spec": "--keyring",
+          "text": "Keep the password in the OS keyring. The default"
+        },
+        {
+          "short": null,
+          "long": "--encrypted-file",
+          "value": null,
+          "spec": "--encrypted-file",
+          "text": "Keep it in the Argon2id-encrypted file, for a machine with no keyring"
+        },
+        {
+          "short": null,
+          "long": "--env",
+          "value": "VARIABLE",
+          "spec": "--env <VARIABLE>",
+          "text": "Read it from this environment variable at run time, for automation"
+        },
+        {
+          "short": null,
+          "long": "--password-from",
+          "value": "COMMAND",
+          "spec": "--password-from <COMMAND>",
+          "text": "Run this and read the password from its output, for a team password manager"
+        },
+        {
+          "short": null,
+          "long": "--password-stdin",
+          "value": null,
+          "spec": "--password-stdin",
+          "text": "Take the password from standard input instead of asking for it"
+        },
+        {
+          "short": null,
+          "long": "--test",
+          "value": null,
+          "spec": "--test",
+          "text": "Connect before saving, and refuse to save if it does not work"
+        }
+      ]
+    },
+    {
+      "path": [
+        "db",
+        "create"
+      ],
+      "name": "db create",
+      "summary": "Create a database and the role that owns it, then register it",
+      "description": [
+        "Create a database and the role that owns it, then register it"
+      ],
+      "usage": "sloop db create [OPTIONS] --engine <ENGINE> <NAME>",
+      "arguments": [
+        {
+          "name": "<NAME>",
+          "text": "What to call it here. The label you will type from now on"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--engine",
+          "value": "ENGINE",
+          "spec": "--engine <ENGINE>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Which engine: postgres, mysql or mariadb",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Use the global registry, whichever directory you are standing in",
+          "text": ""
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Work on this project: a directory, or a name `sloop init` recorded",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--host",
+          "value": "HOST",
+          "spec": "--host <HOST>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "The server it goes on [default: 127.0.0.1]",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Take the password from this command's output instead of wherever the registry says",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--port",
+          "value": "PORT",
+          "spec": "--port <PORT>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Its port. The engine's own default when left out",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--superuser",
+          "value": "USER",
+          "spec": "--superuser <USER>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "The account to create it with — `postgres` or `root` when left out",
+          "text": ""
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Answer yes to a question this would otherwise stop and ask",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Override a refusal that is there to protect something",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-stdin",
+          "value": null,
+          "spec": "--superuser-password-stdin",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Read that account's password from standard input",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "The name of the thing being destroyed, typed out",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-command",
+          "value": "COMMAND",
+          "spec": "--superuser-password-command <COMMAND>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Run this and read that account's password from its output",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--database",
+          "value": "NAME",
+          "spec": "--database <NAME>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "The database's own name on the server. Asked for when left out",
+          "text": ""
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Say nothing but what went wrong",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Print one JSON document instead of talking",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--role",
+          "value": "USER",
+          "spec": "--role <USER>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "The user to create and hand it to. Asked for when left out",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Never colour the output, whatever this terminal supports",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--role-password-stdin",
+          "value": null,
+          "spec": "--role-password-stdin",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Read the new user's password from standard input instead of generating one",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Append everything this run prints to a file as well",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--role-password-command",
+          "value": "COMMAND",
+          "spec": "--role-password-command <COMMAND>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Run this and read the new user's password from its output",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Say what would happen and change nothing",
+          "text": ""
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Print help (see more with '--help')",
+          "text": ""
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--engine",
+          "value": "ENGINE",
+          "spec": "--engine <ENGINE>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Which engine: postgres, mysql or mariadb",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Use the global registry, whichever directory you are standing in",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Work on this project: a directory, or a name `sloop init` recorded",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--host",
+          "value": "HOST",
+          "spec": "--host <HOST>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "The server it goes on [default: 127.0.0.1]",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Take the password from this command's output instead of wherever the registry says",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--port",
+          "value": "PORT",
+          "spec": "--port <PORT>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Its port. The engine's own default when left out",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--superuser",
+          "value": "USER",
+          "spec": "--superuser <USER>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "The account to create it with — `postgres` or `root` when left out",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Answer yes to a question this would otherwise stop and ask",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Override a refusal that is there to protect something",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-stdin",
+          "value": null,
+          "spec": "--superuser-password-stdin",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Read that account's password from standard input",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "The name of the thing being destroyed, typed out",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-command",
+          "value": "COMMAND",
+          "spec": "--superuser-password-command <COMMAND>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Run this and read that account's password from its output",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--database",
+          "value": "NAME",
+          "spec": "--database <NAME>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "The database's own name on the server. Asked for when left out",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Say nothing but what went wrong",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Print one JSON document instead of talking",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--role",
+          "value": "USER",
+          "spec": "--role <USER>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "The user to create and hand it to. Asked for when left out",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Never colour the output, whatever this terminal supports",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--role-password-stdin",
+          "value": null,
+          "spec": "--role-password-stdin",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Read the new user's password from standard input instead of generating one",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Append everything this run prints to a file as well",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--role-password-command",
+          "value": "COMMAND",
+          "spec": "--role-password-command <COMMAND>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Run this and read the new user's password from its output",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Say what would happen and change nothing",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Print help (see more with '--help')",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "path": [
+        "db",
+        "list"
+      ],
+      "name": "db list",
+      "summary": "Show every registered database. Never shows a secret",
+      "description": [
+        "Show every registered database. Never shows a secret"
+      ],
+      "usage": "sloop db list [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "db",
+        "test"
+      ],
+      "name": "db test",
+      "summary": "Open a connection to a registered database and report what happened",
+      "description": [
+        "Open a connection to a registered database and report what happened"
+      ],
+      "usage": "sloop db test [OPTIONS] [NAME]",
+      "arguments": [
+        {
+          "name": "[NAME]",
+          "text": "Which one. Every registered database when this is left out"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "db",
+        "edit"
+      ],
+      "name": "db edit",
+      "summary": "Change where a registered database is, who connects to it, or how",
+      "description": [
+        "Change where a registered database is, who connects to it, or how"
+      ],
+      "usage": "sloop db edit [OPTIONS] <NAME>",
+      "arguments": [
+        {
+          "name": "<NAME>",
+          "text": "Which one"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": null,
+          "long": "--url",
+          "value": "URL",
+          "spec": "--url <URL>",
+          "text": "Replace every connection field at once, from a URL"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--engine",
+          "value": "ENGINE",
+          "spec": "--engine <ENGINE>",
+          "text": "postgres, mysql or mariadb"
+        },
+        {
+          "short": null,
+          "long": "--host",
+          "value": "HOST",
+          "spec": "--host <HOST>",
+          "text": "Host name or address"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": null,
+          "long": "--port",
+          "value": "PORT",
+          "spec": "--port <PORT>",
+          "text": "Port. Defaults to the engine's own"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--database",
+          "value": "NAME",
+          "spec": "--database <NAME>",
+          "text": "The database's name on the server"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": null,
+          "long": "--user",
+          "value": "ROLE",
+          "spec": "--user <ROLE>",
+          "text": "The role to connect as"
+        },
+        {
+          "short": null,
+          "long": "--keyring",
+          "value": null,
+          "spec": "--keyring",
+          "text": "Keep the password in the OS keyring. The default"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--encrypted-file",
+          "value": null,
+          "spec": "--encrypted-file",
+          "text": "Keep it in the Argon2id-encrypted file, for a machine with no keyring"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--env",
+          "value": "VARIABLE",
+          "spec": "--env <VARIABLE>",
+          "text": "Read it from this environment variable at run time, for automation"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--password-from",
+          "value": "COMMAND",
+          "spec": "--password-from <COMMAND>",
+          "text": "Run this and read the password from its output, for a team password manager"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": null,
+          "long": "--password-stdin",
+          "value": null,
+          "spec": "--password-stdin",
+          "text": "Take the password from standard input instead of asking for it"
+        },
+        {
+          "short": null,
+          "long": "--test",
+          "value": null,
+          "spec": "--test",
+          "text": "Connect before saving, and refuse to save if it does not work"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--url",
+          "value": "URL",
+          "spec": "--url <URL>",
+          "text": "Replace every connection field at once, from a URL"
+        },
+        {
+          "short": null,
+          "long": "--engine",
+          "value": "ENGINE",
+          "spec": "--engine <ENGINE>",
+          "text": "postgres, mysql or mariadb"
+        },
+        {
+          "short": null,
+          "long": "--host",
+          "value": "HOST",
+          "spec": "--host <HOST>",
+          "text": "Host name or address"
+        },
+        {
+          "short": null,
+          "long": "--port",
+          "value": "PORT",
+          "spec": "--port <PORT>",
+          "text": "Port. Defaults to the engine's own"
+        },
+        {
+          "short": null,
+          "long": "--database",
+          "value": "NAME",
+          "spec": "--database <NAME>",
+          "text": "The database's name on the server"
+        },
+        {
+          "short": null,
+          "long": "--user",
+          "value": "ROLE",
+          "spec": "--user <ROLE>",
+          "text": "The role to connect as"
+        },
+        {
+          "short": null,
+          "long": "--keyring",
+          "value": null,
+          "spec": "--keyring",
+          "text": "Keep the password in the OS keyring. The default"
+        },
+        {
+          "short": null,
+          "long": "--encrypted-file",
+          "value": null,
+          "spec": "--encrypted-file",
+          "text": "Keep it in the Argon2id-encrypted file, for a machine with no keyring"
+        },
+        {
+          "short": null,
+          "long": "--env",
+          "value": "VARIABLE",
+          "spec": "--env <VARIABLE>",
+          "text": "Read it from this environment variable at run time, for automation"
+        },
+        {
+          "short": null,
+          "long": "--password-from",
+          "value": "COMMAND",
+          "spec": "--password-from <COMMAND>",
+          "text": "Run this and read the password from its output, for a team password manager"
+        },
+        {
+          "short": null,
+          "long": "--password-stdin",
+          "value": null,
+          "spec": "--password-stdin",
+          "text": "Take the password from standard input instead of asking for it"
+        },
+        {
+          "short": null,
+          "long": "--test",
+          "value": null,
+          "spec": "--test",
+          "text": "Connect before saving, and refuse to save if it does not work"
+        }
+      ]
+    },
+    {
+      "path": [
+        "db",
+        "rename"
+      ],
+      "name": "db rename",
+      "summary": "Give a registered database a different name",
+      "description": [
+        "Give a registered database a different name"
+      ],
+      "usage": "sloop db rename [OPTIONS] <FROM> <TO>",
+      "arguments": [
+        {
+          "name": "<FROM>",
+          "text": "What it is called now"
+        },
+        {
+          "name": "<TO>",
+          "text": "What to call it instead"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "db",
+        "remove"
+      ],
+      "name": "db remove",
+      "summary": "Forget a registered database. The server is not touched",
+      "description": [
+        "Forget a registered database. The server is not touched"
+      ],
+      "usage": "sloop db remove [OPTIONS] <NAME>",
+      "arguments": [
+        {
+          "name": "<NAME>",
+          "text": "Which one"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "db",
+        "drop"
+      ],
+      "name": "db drop",
+      "summary": "Drop a database on the server. Asks for its name, and keeps nothing",
+      "description": [
+        "Drop a database on the server. Asks for its name, and keeps nothing"
+      ],
+      "usage": "sloop db drop [OPTIONS] <NAME>",
+      "arguments": [
+        {
+          "name": "<NAME>",
+          "text": "Which registered database to destroy"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "backup"
+      ],
+      "name": "backup",
+      "summary": "Dump a database, check every row arrived, and file the copy with a manifest",
+      "description": [
+        "Dump a database, check every row arrived, and file the copy with a manifest"
+      ],
+      "usage": "sloop backup [OPTIONS] [NAME]",
+      "arguments": [
+        {
+          "name": "[NAME]",
+          "text": "Which registered database. Left out when `--all` is given"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--all",
+          "value": null,
+          "spec": "--all",
+          "text": "Back up every registered database, and do not stop at the first failure"
+        },
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--sequential",
+          "value": null,
+          "spec": "--sequential",
+          "text": "Keep every backup, in a directory named for the moment it was taken. The default"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": null,
+          "long": "--replace",
+          "value": null,
+          "spec": "--replace",
+          "text": "Keep one backup per database, at `backups/<engine>/<name>/latest`"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--all",
+          "value": null,
+          "spec": "--all",
+          "text": "Back up every registered database, and do not stop at the first failure"
+        },
+        {
+          "short": null,
+          "long": "--sequential",
+          "value": null,
+          "spec": "--sequential",
+          "text": "Keep every backup, in a directory named for the moment it was taken. The default"
+        },
+        {
+          "short": null,
+          "long": "--replace",
+          "value": null,
+          "spec": "--replace",
+          "text": "Keep one backup per database, at `backups/<engine>/<name>/latest`"
+        }
+      ]
+    },
+    {
+      "path": [
+        "backups"
+      ],
+      "name": "backups",
+      "summary": "See what has been copied and when, and delete what is past a retention limit",
+      "description": [
+        "See what has been copied and when, and delete what is past a retention limit"
+      ],
+      "usage": "sloop backups [OPTIONS] <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [
+        "list",
+        "prune"
+      ],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "backups",
+        "list"
+      ],
+      "name": "backups list",
+      "summary": "Show stored backups, newest first, in local time",
+      "description": [
+        "Show stored backups, newest first, in local time"
+      ],
+      "usage": "sloop backups list [OPTIONS] [NAME]",
+      "arguments": [
+        {
+          "name": "[NAME]",
+          "text": "Only this database's backups. Every database when left out"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--check",
+          "value": null,
+          "spec": "--check",
+          "text": "Hash every dump and compare it with its manifest"
+        },
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--check",
+          "value": null,
+          "spec": "--check",
+          "text": "Hash every dump and compare it with its manifest"
+        }
+      ]
+    },
+    {
+      "path": [
+        "backups",
+        "prune"
+      ],
+      "name": "backups prune",
+      "summary": "Delete backups past a retention limit, after showing which ones",
+      "description": [
+        "Delete backups past a retention limit, after showing which ones"
+      ],
+      "usage": "sloop backups prune [OPTIONS] [NAME]",
+      "arguments": [
+        {
+          "name": "[NAME]",
+          "text": "Only this database's backups. Every database when left out"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": null,
+          "long": "--keep",
+          "value": "N",
+          "spec": "--keep <N>",
+          "text": "Keep this many of the newest backups of each database"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--older-than",
+          "value": "AGE",
+          "spec": "--older-than <AGE>",
+          "text": "Remove backups older than this — `12h`, `30d`, `6w`"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Show what would go, and remove nothing"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": null,
+          "long": "--include-broken",
+          "value": null,
+          "spec": "--include-broken",
+          "text": "Remove unfinished and damaged directories too"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--keep",
+          "value": "N",
+          "spec": "--keep <N>",
+          "text": "Keep this many of the newest backups of each database"
+        },
+        {
+          "short": null,
+          "long": "--older-than",
+          "value": "AGE",
+          "spec": "--older-than <AGE>",
+          "text": "Remove backups older than this — `12h`, `30d`, `6w`"
+        },
+        {
+          "short": null,
+          "long": "--include-broken",
+          "value": null,
+          "spec": "--include-broken",
+          "text": "Remove unfinished and damaged directories too"
+        }
+      ]
+    },
+    {
+      "path": [
+        "restore"
+      ],
+      "name": "restore",
+      "summary": "Put a stored copy back into a database, replacing what is in it now",
+      "description": [
+        "Put a stored copy back into a database, replacing what is in it now"
+      ],
+      "usage": "sloop restore [OPTIONS] <NAME>",
+      "arguments": [
+        {
+          "name": "<NAME>",
+          "text": "Which registered database to restore into"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--from",
+          "value": "WHEN",
+          "spec": "--from <WHEN>",
+          "text": "Which backup, by its directory's own name. The newest whole one by default"
+        },
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--from",
+          "value": "WHEN",
+          "spec": "--from <WHEN>",
+          "text": "Which backup, by its directory's own name. The newest whole one by default"
+        }
+      ]
+    },
+    {
+      "path": [
+        "mirror"
+      ],
+      "name": "mirror",
+      "summary": "Copy a database exactly, leaving the destination identical to the source",
+      "description": [
+        "Copy a database exactly, leaving the destination identical to the source"
+      ],
+      "usage": "sloop mirror [OPTIONS] <SOURCE>",
+      "arguments": [
+        {
+          "name": "<SOURCE>",
+          "text": "The registered database to copy. Only ever read"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": null,
+          "long": "--to",
+          "value": "NAME",
+          "spec": "--to <NAME>",
+          "text": "The registered database to copy it over. Its contents are replaced"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--create",
+          "value": "NAME",
+          "spec": "--create <NAME>",
+          "text": "Make the destination first, then copy into it. What to call it here"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": null,
+          "long": "--table",
+          "value": "PATTERN",
+          "spec": "--table <PATTERN>",
+          "text": "Only this table. Repeatable, schema-qualified, and it takes a glob"
+        },
+        {
+          "short": null,
+          "long": "--with-references",
+          "value": null,
+          "spec": "--with-references",
+          "text": "Bring in the tables the named ones point at, rather than refusing without them"
+        },
+        {
+          "short": null,
+          "long": "--safe",
+          "value": null,
+          "spec": "--safe",
+          "text": "Dump to a file first, so a copy that fails can be retried"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--to",
+          "value": "NAME",
+          "spec": "--to <NAME>",
+          "text": "The registered database to copy it over. Its contents are replaced"
+        },
+        {
+          "short": null,
+          "long": "--create",
+          "value": "NAME",
+          "spec": "--create <NAME>",
+          "text": "Make the destination first, then copy into it. What to call it here"
+        },
+        {
+          "short": null,
+          "long": "--table",
+          "value": "PATTERN",
+          "spec": "--table <PATTERN>",
+          "text": "Only this table. Repeatable, schema-qualified, and it takes a glob"
+        },
+        {
+          "short": null,
+          "long": "--with-references",
+          "value": null,
+          "spec": "--with-references",
+          "text": "Bring in the tables the named ones point at, rather than refusing without them"
+        },
+        {
+          "short": null,
+          "long": "--safe",
+          "value": null,
+          "spec": "--safe",
+          "text": "Dump to a file first, so a copy that fails can be retried"
+        }
+      ]
+    },
+    {
+      "path": [
+        "sync"
+      ],
+      "name": "sync",
+      "summary": "Merge a database into another, keeping rows the destination already had",
+      "description": [
+        "Merge a database into another, keeping rows the destination already had"
+      ],
+      "usage": "sloop sync [OPTIONS] <SOURCE>",
+      "arguments": [
+        {
+          "name": "<SOURCE>",
+          "text": "The registered database to copy from. Only ever read"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": null,
+          "long": "--to",
+          "value": "NAME",
+          "spec": "--to <NAME>",
+          "text": "The registered database to merge it into. Its rows are added to and replaced"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--create",
+          "value": "NAME",
+          "spec": "--create <NAME>",
+          "text": "Make the destination first, then merge into it. What to call it here"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": null,
+          "long": "--table",
+          "value": "PATTERN",
+          "spec": "--table <PATTERN>",
+          "text": "Only this table. Repeatable, schema-qualified, and it takes a glob"
+        },
+        {
+          "short": null,
+          "long": "--with-references",
+          "value": null,
+          "spec": "--with-references",
+          "text": "Bring in the tables the named ones point at, rather than refusing without them"
+        },
+        {
+          "short": null,
+          "long": "--safe",
+          "value": null,
+          "spec": "--safe",
+          "text": "Dump the source to a file first, so a merge that fails can be replayed"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--to",
+          "value": "NAME",
+          "spec": "--to <NAME>",
+          "text": "The registered database to merge it into. Its rows are added to and replaced"
+        },
+        {
+          "short": null,
+          "long": "--create",
+          "value": "NAME",
+          "spec": "--create <NAME>",
+          "text": "Make the destination first, then merge into it. What to call it here"
+        },
+        {
+          "short": null,
+          "long": "--table",
+          "value": "PATTERN",
+          "spec": "--table <PATTERN>",
+          "text": "Only this table. Repeatable, schema-qualified, and it takes a glob"
+        },
+        {
+          "short": null,
+          "long": "--with-references",
+          "value": null,
+          "spec": "--with-references",
+          "text": "Bring in the tables the named ones point at, rather than refusing without them"
+        },
+        {
+          "short": null,
+          "long": "--safe",
+          "value": null,
+          "spec": "--safe",
+          "text": "Dump the source to a file first, so a merge that fails can be replayed"
+        }
+      ]
+    },
+    {
+      "path": [
+        "query"
+      ],
+      "name": "query",
+      "summary": "Read a database without writing SQL",
+      "description": [
+        "Read a database without writing SQL.",
+        "Pick a table, tick the columns, choose the test — everything comes off a list and the only thing you type is the value you are looking for. The results open in a grid you can scroll, two hundred rows at a time.",
+        "Everything it runs, including `--sql`, runs inside a transaction the server has been told is read-only. Nothing this command sends can change anything, and it is the server that guarantees that rather than a list of forbidden words."
+      ],
+      "usage": "sloop query [OPTIONS] [NAME]",
+      "arguments": [
+        {
+          "name": "[NAME]",
+          "text": "Which registered database. Left out, the ones sloop knows are listed"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": null,
+          "long": "--sql",
+          "value": "STATEMENT",
+          "spec": "--sql <STATEMENT>",
+          "text": "Run this one statement instead of building one"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--sql",
+          "value": "STATEMENT",
+          "spec": "--sql <STATEMENT>",
+          "text": "Run this one statement instead of building one"
+        }
+      ]
+    },
+    {
+      "path": [
+        "key"
+      ],
+      "name": "key",
+      "summary": "Move the backup encryption key between machines",
+      "description": [
+        "Move the backup encryption key between machines"
+      ],
+      "usage": "sloop key [OPTIONS] <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [
+        "export",
+        "import"
+      ],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "key",
+        "export"
+      ],
+      "name": "key export",
+      "summary": "Write the private key out, so losing this machine is not losing the backups",
+      "description": [
+        "Write the private key out, so losing this machine is not losing the backups"
+      ],
+      "usage": "sloop key export [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "key",
+        "import"
+      ],
+      "name": "key import",
+      "summary": "Take a private key exported from another machine",
+      "description": [
+        "Take a private key exported from another machine"
+      ],
+      "usage": "sloop key import [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "setup"
+      ],
+      "name": "setup",
+      "summary": "Prepare the PostgreSQL 18 sloop keeps its own state in",
+      "description": [
+        "Prepare the PostgreSQL 18 sloop keeps its own state in.",
+        "Runs on a machine that has not been set up, and is safe to run again on one that has. A PostgreSQL 18 already serving on 5432 is used as it stands; anything else gets a cluster of sloop's own on 5433, which disturbs nothing already on the machine."
+      ],
+      "usage": "sloop setup [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Use the global registry, whichever directory you are standing in",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-command",
+          "value": "COMMAND",
+          "spec": "--superuser-password-command <COMMAND>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "A command that prints the superuser password of the PostgreSQL already on this machine,",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "for a run with no terminal to ask at",
+          "text": ""
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Work on this project: a directory, or a name `sloop init` recorded",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-stdin",
+          "value": null,
+          "spec": "--superuser-password-stdin",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Read that password from standard input instead of asking for it",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--db-password-command",
+          "value": "COMMAND",
+          "spec": "--db-password-command <COMMAND>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "A command that prints the password to give sloop's own database user",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Take the password from this command's output instead of wherever the registry says",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--db-password-stdin",
+          "value": null,
+          "spec": "--db-password-stdin",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Read that password from standard input instead of generating one",
+          "text": ""
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Answer yes to a question this would otherwise stop and ask",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Override a refusal that is there to protect something",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "The name of the thing being destroyed, typed out",
+          "text": ""
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Say nothing but what went wrong",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Print one JSON document instead of talking",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Never colour the output, whatever this terminal supports",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Append everything this run prints to a file as well",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Say what would happen and change nothing",
+          "text": ""
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Print help (see more with '--help')",
+          "text": ""
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Use the global registry, whichever directory you are standing in",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-command",
+          "value": "COMMAND",
+          "spec": "--superuser-password-command <COMMAND>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "A command that prints the superuser password of the PostgreSQL already on this machine,",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "for a run with no terminal to ask at",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Work on this project: a directory, or a name `sloop init` recorded",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--superuser-password-stdin",
+          "value": null,
+          "spec": "--superuser-password-stdin",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Read that password from standard input instead of asking for it",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--db-password-command",
+          "value": "COMMAND",
+          "spec": "--db-password-command <COMMAND>",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "A command that prints the password to give sloop's own database user",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Take the password from this command's output instead of wherever the registry says",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": "--db-password-stdin",
+          "value": null,
+          "spec": "--db-password-stdin",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Read that password from standard input instead of generating one",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Answer yes to a question this would otherwise stop and ask",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Override a refusal that is there to protect something",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "The name of the thing being destroyed, typed out",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Say nothing but what went wrong",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Print one JSON document instead of talking",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Never colour the output, whatever this terminal supports",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Append everything this run prints to a file as well",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Say what would happen and change nothing",
+          "text": ""
+        },
+        {
+          "short": null,
+          "long": null,
+          "value": null,
+          "spec": "Print help (see more with '--help')",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "path": [
+        "server"
+      ],
+      "name": "server",
+      "summary": "The database servers on this machine — installing one, listing them, and opening sloop's own",
+      "description": [
+        "The database servers on this machine — installing one, listing them, and opening sloop's own.",
+        "`install` is engine, then version, then one confirmation, instead of finding the project's website and following its installation instructions: the archive is downloaded by the system's own curl, proved against whatever that project publishes to prove it with, and started on a port that collides with nothing already here. `connection` is the other direction — where sloop keeps its own state, so you can open it in psql or DataGrip yourself."
+      ],
+      "usage": "sloop server [OPTIONS] <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [
+        "install",
+        "list",
+        "connection"
+      ],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "server",
+        "install"
+      ],
+      "name": "server install",
+      "summary": "Download, install, configure and start a database server",
+      "description": [
+        "Download, install, configure and start a database server"
+      ],
+      "usage": "sloop server install [OPTIONS] [ENGINE]",
+      "arguments": [
+        {
+          "name": "[ENGINE]",
+          "text": "postgres, mysql or mariadb. Left out, it is asked for"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": null,
+          "long": "--version",
+          "value": "VERSION",
+          "spec": "--version <VERSION>",
+          "text": "Which version, as the project writes it. Left out, the ones available are listed"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--version",
+          "value": "VERSION",
+          "spec": "--version <VERSION>",
+          "text": "Which version, as the project writes it. Left out, the ones available are listed"
+        }
+      ]
+    },
+    {
+      "path": [
+        "server",
+        "list"
+      ],
+      "name": "server list",
+      "summary": "Every server sloop has installed here, and how to reach each one",
+      "description": [
+        "Every server sloop has installed here, and how to reach each one"
+      ],
+      "usage": "sloop server list [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "server",
+        "connection"
+      ],
+      "name": "server connection",
+      "summary": "Where sloop keeps its own state, so you can open it yourself",
+      "description": [
+        "Where sloop keeps its own state, so you can open it yourself.",
+        "Host, port, database and user, ready to be pasted into `psql`, DataGrip or anything else that speaks PostgreSQL. The password is kept where this machine keeps secrets and printed only when it is asked for, on a terminal — never into a log file, a document or a pipe."
+      ],
+      "usage": "sloop server connection [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": null,
+          "long": "--show-password",
+          "value": null,
+          "spec": "--show-password",
+          "text": "Print the password too, not only where it is kept"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--show-password",
+          "value": null,
+          "spec": "--show-password",
+          "text": "Print the password too, not only where it is kept"
+        }
+      ]
+    },
+    {
+      "path": [
+        "service"
+      ],
+      "name": "service",
+      "summary": "Keep sloop running in the background, so it works with nobody logged in",
+      "description": [
+        "Keep sloop running in the background, so it works with nobody logged in.",
+        "Registers sloop with whatever this machine uses to run things at boot — systemd on Linux, launchd on macOS, the Service Control Manager on Windows. Once it is installed and started, it comes back by itself after a restart.",
+        "**This is for a server, not for a laptop you are working on.** On a machine you use yourself, running `sloop backup` when you want a backup is the simpler thing and nothing here improves on it.",
+        "It never opens a port. Nothing listens, nothing can be reached from the network, and what it records is read back with `sloop service status` from a file on this machine."
+      ],
+      "usage": "sloop service [OPTIONS] <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [
+        "install",
+        "uninstall",
+        "attach",
+        "detach",
+        "start",
+        "stop",
+        "schedule",
+        "activity",
+        "status"
+      ],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "service",
+        "install"
+      ],
+      "name": "service install",
+      "summary": "Register sloop with this machine, so it starts at boot",
+      "description": [
+        "Register sloop with this machine, so it starts at boot.",
+        "Writes the unit, the agent or the service entry, whichever this platform uses, and starts it unless told not to. Needs administrator rights, because starting something at boot is a machine-wide change on all three platforms."
+      ],
+      "usage": "sloop service install [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": null,
+          "long": "--no-start",
+          "value": null,
+          "spec": "--no-start",
+          "text": "Register it, and leave it stopped"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--user",
+          "value": "USER",
+          "spec": "--user <USER>",
+          "text": "Run as this account instead of the one installing it. Linux and macOS only"
+        },
+        {
+          "short": null,
+          "long": "--interval",
+          "value": "SECONDS",
+          "spec": "--interval <SECONDS>",
+          "text": "Seconds between one round of readings and the next. 60 by default [default: 60]"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--no-start",
+          "value": null,
+          "spec": "--no-start",
+          "text": "Register it, and leave it stopped"
+        },
+        {
+          "short": null,
+          "long": "--user",
+          "value": "USER",
+          "spec": "--user <USER>",
+          "text": "Run as this account instead of the one installing it. Linux and macOS only"
+        },
+        {
+          "short": null,
+          "long": "--interval",
+          "value": "SECONDS",
+          "spec": "--interval <SECONDS>",
+          "text": "Seconds between one round of readings and the next. 60 by default [default: 60]"
+        }
+      ]
+    },
+    {
+      "path": [
+        "service",
+        "uninstall"
+      ],
+      "name": "service uninstall",
+      "summary": "Stop the background service and take it off this machine, keeping what it recorded",
+      "description": [
+        "Stop the background service and take it off this machine, keeping what it recorded.",
+        "Stops it, removes the unit or the service entry, and removes the key file it reads its credentials with. Nothing sloop has recorded is deleted — attachments and history stay, so installing again picks up where this left off."
+      ],
+      "usage": "sloop service uninstall [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "service",
+        "attach"
+      ],
+      "name": "service attach",
+      "summary": "Watch a database. The service picks it up without being restarted",
+      "description": [
+        "Watch a database. The service picks it up without being restarted.",
+        "The attachment is a row sloop's own database holds, and the service reads that list on every round — so attaching reaches one that is already running, and detaching stops it just as quickly."
+      ],
+      "usage": "sloop service attach [OPTIONS] <NAME>",
+      "arguments": [
+        {
+          "name": "<NAME>",
+          "text": "The name it is registered under in the global registry"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "service",
+        "detach"
+      ],
+      "name": "service detach",
+      "summary": "Stop watching a database. Everything already recorded about it stays",
+      "description": [
+        "Stop watching a database. Everything already recorded about it stays"
+      ],
+      "usage": "sloop service detach [OPTIONS] <NAME>",
+      "arguments": [
+        {
+          "name": "<NAME>",
+          "text": "The name it is registered under in the global registry"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "service",
+        "start"
+      ],
+      "name": "service start",
+      "summary": "Start the background service now, rather than waiting for the next boot",
+      "description": [
+        "Start the background service now, rather than waiting for the next boot"
+      ],
+      "usage": "sloop service start [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "service",
+        "stop"
+      ],
+      "name": "service stop",
+      "summary": "Stop the background service now. It still starts again at the next boot",
+      "description": [
+        "Stop the background service now. It still starts again at the next boot"
+      ],
+      "usage": "sloop service stop [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "service",
+        "schedule"
+      ],
+      "name": "service schedule",
+      "summary": "Back this database up on a schedule, with no cron line anywhere",
+      "description": [
+        "Back this database up on a schedule, with no cron line anywhere.",
+        "The service takes the backup, applies the retention policy and prunes what falls outside it. Nothing is written to crontab, Task Scheduler or systemd timers — the schedule is a row sloop's own database holds, and `sloop service status` says when each database last ran and when it runs next."
+      ],
+      "usage": "sloop service schedule [OPTIONS] <NAME>",
+      "arguments": [
+        {
+          "name": "<NAME>",
+          "text": "The name it is registered under in the global registry. It has to be attached"
+        }
+      ],
+      "options": [
+        {
+          "short": null,
+          "long": "--every",
+          "value": "INTERVAL",
+          "spec": "--every <INTERVAL>",
+          "text": "How often: `30m`, `6h`, `1d`, `2w`. The same spelling `--older-than` takes"
+        },
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--keep",
+          "value": "COUNT",
+          "spec": "--keep <COUNT>",
+          "text": "Keep this many of the newest backups, and prune the rest"
+        },
+        {
+          "short": null,
+          "long": "--keep-for-days",
+          "value": "DAYS",
+          "spec": "--keep-for-days <DAYS>",
+          "text": "Prune anything older than this many days"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": null,
+          "long": "--off",
+          "value": null,
+          "spec": "--off",
+          "text": "Stop backing it up. It stays attached and stays sampled"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": [
+        {
+          "short": null,
+          "long": "--every",
+          "value": "INTERVAL",
+          "spec": "--every <INTERVAL>",
+          "text": "How often: `30m`, `6h`, `1d`, `2w`. The same spelling `--older-than` takes"
+        },
+        {
+          "short": null,
+          "long": "--keep",
+          "value": "COUNT",
+          "spec": "--keep <COUNT>",
+          "text": "Keep this many of the newest backups, and prune the rest"
+        },
+        {
+          "short": null,
+          "long": "--keep-for-days",
+          "value": "DAYS",
+          "spec": "--keep-for-days <DAYS>",
+          "text": "Prune anything older than this many days"
+        },
+        {
+          "short": null,
+          "long": "--off",
+          "value": null,
+          "spec": "--off",
+          "text": "Stop backing it up. It stays attached and stays sampled"
+        }
+      ]
+    },
+    {
+      "path": [
+        "service",
+        "activity"
+      ],
+      "name": "service activity",
+      "summary": "What the service has recorded: rows in, rows out and size, by day, week and month",
+      "description": [
+        "What the service has recorded: rows in, rows out and size, by day, week and month.",
+        "**Rows, not bytes.** No engine reports bytes per database — PostgreSQL counts rows, MySQL's byte counters are server-wide — so what is shown is what is true, and every line says which it is. A period nothing was watching reads as having no readings rather than as a zero."
+      ],
+      "usage": "sloop service activity [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "service",
+        "status"
+      ],
+      "name": "service status",
+      "summary": "Is it installed, is it running, and when did it last do anything",
+      "description": [
+        "Is it installed, is it running, and when did it last do anything.",
+        "Answers honestly when it is stopped, and when it was never installed at all — the two are different states and a monitoring system needs them apart."
+      ],
+      "usage": "sloop service status [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "reset"
+      ],
+      "name": "reset",
+      "summary": "Put this machine back to the moment sloop was installed",
+      "description": [
+        "Put this machine back to the moment sloop was installed.",
+        "Removes sloop's own database and everything it knows. A PostgreSQL that sloop installed goes with it; one that was already here keeps every other database on it and loses only sloop's. `sloop setup` is needed again afterwards.",
+        "**Backups are never deleted**, by this or by `uninstall`."
+      ],
+      "usage": "sloop reset [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    },
+    {
+      "path": [
+        "uninstall"
+      ],
+      "name": "uninstall",
+      "summary": "Remove sloop from this machine",
+      "description": [
+        "Remove sloop from this machine.",
+        "Everything `reset` does, and then sloop itself."
+      ],
+      "usage": "sloop uninstall [OPTIONS]",
+      "arguments": [],
+      "options": [
+        {
+          "short": null,
+          "long": "--global",
+          "value": null,
+          "spec": "--global",
+          "text": "Use the global registry, whichever directory you are standing in"
+        },
+        {
+          "short": "-C",
+          "long": "--project",
+          "value": "PATH|NAME",
+          "spec": "-C, --project <PATH|NAME>",
+          "text": "Work on this project: a directory, or a name `sloop init` recorded"
+        },
+        {
+          "short": null,
+          "long": "--password-command",
+          "value": "COMMAND",
+          "spec": "--password-command <COMMAND>",
+          "text": "Take the password from this command's output instead of wherever the registry says"
+        },
+        {
+          "short": "-y",
+          "long": "--yes",
+          "value": null,
+          "spec": "-y, --yes",
+          "text": "Answer yes to a question this would otherwise stop and ask"
+        },
+        {
+          "short": null,
+          "long": "--force",
+          "value": null,
+          "spec": "--force",
+          "text": "Override a refusal that is there to protect something"
+        },
+        {
+          "short": null,
+          "long": "--confirm",
+          "value": "NAME",
+          "spec": "--confirm <NAME>",
+          "text": "The name of the thing being destroyed, typed out"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "value": null,
+          "spec": "-q, --quiet",
+          "text": "Say nothing but what went wrong"
+        },
+        {
+          "short": null,
+          "long": "--json",
+          "value": null,
+          "spec": "--json",
+          "text": "Print one JSON document instead of talking"
+        },
+        {
+          "short": null,
+          "long": "--no-color",
+          "value": null,
+          "spec": "--no-color",
+          "text": "Never colour the output, whatever this terminal supports"
+        },
+        {
+          "short": null,
+          "long": "--log-file",
+          "value": "PATH",
+          "spec": "--log-file <PATH>",
+          "text": "Append everything this run prints to a file as well"
+        },
+        {
+          "short": null,
+          "long": "--dry-run",
+          "value": null,
+          "spec": "--dry-run",
+          "text": "Say what would happen and change nothing"
+        },
+        {
+          "short": "-h",
+          "long": "--help",
+          "value": null,
+          "spec": "-h, --help",
+          "text": "Print help (see more with '--help')"
+        }
+      ],
+      "children": [],
+      "ownOptions": []
+    }
+  ]
+}

@@ -133,6 +133,16 @@ export class DocsToc {
   /** The article to read headings out of. */
   readonly within = input.required<HTMLElement>();
   readonly variant = input<'rail' | 'inline'>('rail');
+  /**
+   * The deepest heading level to list: `2` for `h2` only, `3` for `h2` and `h3`.
+   *
+   * Three is right for a page of prose. The command reference is not one — it
+   * is eight groups holding thirty-nine commands, and listing every command
+   * would put a scroll bar on the contents of a page whose whole job is to be
+   * scanned. It asks for two, and the commands are reached from the index at
+   * the top of it instead.
+   */
+  readonly depth = input(3, { transform: (value: number | string) => Number(value) || 3 });
 
   protected readonly items = signal<readonly TocItem[]>([]);
   protected readonly active = signal('');
@@ -212,9 +222,10 @@ export class DocsToc {
 
   /** Read the article's headings, and say which one the reader is in. */
   private collect(): void {
-    this.headings = Array.from(
-      this.within().querySelectorAll<HTMLElement>('h2[id], h3[id]'),
-    ).filter((heading) => heading.textContent?.trim());
+    const wanted = this.depth() >= 3 ? 'h2[id], h3[id]' : 'h2[id]';
+    this.headings = Array.from(this.within().querySelectorAll<HTMLElement>(wanted)).filter(
+      (heading) => heading.textContent?.trim(),
+    );
 
     this.items.set(
       this.headings.map((heading) => ({

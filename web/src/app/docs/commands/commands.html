@@ -1,0 +1,248 @@
+<!--
+  The command reference.
+
+  Nothing in the command sections below is typed: every name, argument, flag and
+  description is read from commands.json, which web/tools/commands.mjs writes by
+  walking the binary's own --help. Editing this template cannot add a flag to the
+  page and cannot remove one — only the CLI can.
+
+  The two hand-written parts are marked where they appear: the eight groups, in
+  commands.ts, and the paragraphs introducing the global flags below.
+-->
+<app-docs-page
+  heading="Command reference"
+  lede="Every command sloop has and every flag it takes, read straight out of the binary's own help. Thirty-nine commands across eight groups, plus the eleven flags that work on all of them."
+  eyebrow="Reference"
+  path="commands"
+  [tocDepth]="2"
+>
+  <p>
+    This page is <strong>generated from the binary</strong>, not written beside it. Everything below
+    came out of <code>sloop &lt;command&gt; --help</code> at build time, so a flag cannot appear
+    here unless the CLI prints it, and cannot be missing if it does. Built from
+    <strong>{{ version }}</strong
+    >.
+  </p>
+  <p>
+    That makes <code>--help</code> the authority and this a convenience — a faster way to read all
+    of it at once, and something a search engine can index. If the two ever disagree, the binary in
+    front of you is right and the page is stale.
+  </p>
+
+  <!-- The index. Every command on the page, as a jump list, because the
+       contents rail deliberately lists the eight groups rather than all
+       thirty-nine entries. -->
+  <nav class="docs-bare mt-9" aria-label="All commands">
+    <p class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">
+      All {{ count }} commands
+    </p>
+    <div class="mt-4 flex flex-wrap gap-1.5">
+      @for (group of groups; track group.id) {
+        @for (command of group.members; track command.name) {
+          <a
+            [routerLink]="[]"
+            [fragment]="id(command)"
+            class="rounded-md border border-line bg-surface px-2.5 py-1 font-mono text-xs text-muted transition-colors duration-2 ease-out hover:border-line-strong hover:text-accent"
+            >{{ command.name }}</a
+          >
+        }
+      }
+    </div>
+  </nav>
+
+  <h2 id="the-global-flags">The global flags</h2>
+  <p>
+    These eleven work on every command, and they are not repeated in the tables further down — each
+    command's table lists only what is its own. They are the ones every command has, worked out by
+    intersection rather than kept in a list, so a flag that stopped being global would leave this
+    section on its own.
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Flag</th>
+        <th>What it does</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (flag of globalOptions; track flag.spec) {
+        <tr>
+          <td>
+            <code>{{ spec(flag) }}</code>
+          </td>
+          <td>
+            @for (piece of pieces(flag.text); track $index) {
+              @switch (piece.kind) {
+                @case ('code') {
+                  <code>{{ piece.text }}</code>
+                }
+                @case ('strong') {
+                  <strong>{{ piece.text }}</strong>
+                }
+                @default {
+                  <span>{{ piece.text }}</span>
+                }
+              }
+            }
+          </td>
+        </tr>
+      }
+    </tbody>
+  </table>
+
+  <h3 id="yes-force-confirm">
+    Why <code>--yes</code>, <code>--force</code> and <code>--confirm</code> are three things
+  </h3>
+  <p>
+    They look interchangeable and are not, and reaching for the wrong one is how an automated run
+    either stops when it should not have or destroys something it should not have.
+  </p>
+  <ul>
+    <li>
+      <strong><code>--yes</code> answers a question.</strong> A command that would stop and ask
+      something proceeds. It is never enough to destroy a named thing, and it is never a way past a
+      refusal.
+    </li>
+    <li>
+      <strong><code>--force</code> overrides a refusal.</strong> A refusal is sloop declining to do
+      something because of what it found — a circular foreign key, a source that is also the
+      destination. It answers no questions, and the refusal that can be overridden says so when it
+      fires.
+    </li>
+    <li>
+      <strong><code>--confirm &lt;NAME&gt;</code> types the name out.</strong> It is the only way to
+      run a destructive command with no terminal, and it has to match exactly — so a scheduled line
+      names the thing it destroys and cannot be repointed at something else by editing one flag.
+    </li>
+  </ul>
+  <p>
+    With no terminal to ask at, sloop never prompts. It exits <code>2</code> and names the exact
+    flag that would have answered the question, which is why a scheduled run can fail but cannot
+    hang. <a routerLink="/docs/automation">Automation</a> has the exit codes and the rest of it.
+  </p>
+
+  @for (group of groups; track group.id) {
+    <h2 [id]="group.id">{{ group.title }}</h2>
+    <p>{{ group.line }}</p>
+
+    @for (command of group.members; track command.name) {
+      <h3 [id]="id(command)">
+        <code>sloop {{ command.name }}</code>
+      </h3>
+
+      @if (command.description.length) {
+        @for (paragraph of command.description; track $index) {
+          <p>
+            @for (piece of pieces(paragraph); track $index) {
+              @switch (piece.kind) {
+                @case ('code') {
+                  <code>{{ piece.text }}</code>
+                }
+                @case ('strong') {
+                  <strong>{{ piece.text }}</strong>
+                }
+                @default {
+                  <span>{{ piece.text }}</span>
+                }
+              }
+            }
+          </p>
+        }
+      } @else {
+        <p>{{ command.summary }}</p>
+      }
+
+      <p
+        class="docs-bare mt-5 overflow-x-auto rounded-lg border border-line bg-surface-2 px-4 py-2.5 font-mono text-xs text-text"
+      >
+        {{ command.usage }}
+      </p>
+
+      @if (command.children.length) {
+        <p>
+          Subcommands:
+          @for (child of command.children; track child) {
+            <code>{{ child }}</code
+            >{{ $last ? '.' : ', ' }}
+          }
+          Each has its own entry below.
+        </p>
+      }
+
+      @if (command.arguments.length) {
+        <table>
+          <thead>
+            <tr>
+              <th>Argument</th>
+              <th>What it is</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (argument of command.arguments; track argument.name) {
+              <tr>
+                <td>
+                  <code>{{ argument.name }}</code>
+                </td>
+                <td>
+                  @for (piece of pieces(argument.text); track $index) {
+                    @switch (piece.kind) {
+                      @case ('code') {
+                        <code>{{ piece.text }}</code>
+                      }
+                      @case ('strong') {
+                        <strong>{{ piece.text }}</strong>
+                      }
+                      @default {
+                        <span>{{ piece.text }}</span>
+                      }
+                    }
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+
+      @if (command.ownOptions.length) {
+        <table>
+          <thead>
+            <tr>
+              <th>Flag</th>
+              <th>What it does</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (flag of command.ownOptions; track flag.spec) {
+              <tr>
+                <td>
+                  <code>{{ spec(flag) }}</code>
+                </td>
+                <td>
+                  @for (piece of pieces(flag.text); track $index) {
+                    @switch (piece.kind) {
+                      @case ('code') {
+                        <code>{{ piece.text }}</code>
+                      }
+                      @case ('strong') {
+                        <strong>{{ piece.text }}</strong>
+                      }
+                      @default {
+                        <span>{{ piece.text }}</span>
+                      }
+                    }
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      } @else {
+        <p class="text-sm text-faint">
+          Takes no flags of its own — only the {{ globalOptions.length }} global ones above.
+        </p>
+      }
+    }
+  }
+</app-docs-page>

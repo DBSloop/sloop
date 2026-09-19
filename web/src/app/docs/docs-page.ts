@@ -40,7 +40,7 @@ import { DOCS_PAGES, labelOf, urlOf, type DocsPageEntry } from './nav';
         </header>
 
         <div class="mt-9 xl:hidden">
-          <app-docs-toc [within]="body" variant="inline" />
+          <app-docs-toc [within]="body" variant="inline" [depth]="tocDepth()" />
         </div>
 
         <article #body class="docs-prose mt-10">
@@ -85,7 +85,7 @@ import { DOCS_PAGES, labelOf, urlOf, type DocsPageEntry } from './nav';
 
       <aside class="hidden xl:block">
         <div class="sticky max-h-[calc(100dvh-var(--docs-rail,134px)-4rem)] overflow-y-auto">
-          <app-docs-toc [within]="body" />
+          <app-docs-toc [within]="body" [depth]="tocDepth()" />
         </div>
       </aside>
     </div>
@@ -147,6 +147,8 @@ export class DocsPage {
    * previous.
    */
   readonly path = input('');
+  /** Passed through to the on-page contents; see `DocsToc.depth`. */
+  readonly tocDepth = input(3, { transform: (value: number | string) => Number(value) || 3 });
 
   protected readonly previous = computed<DocsPageEntry | null>(() => {
     const at = this.index();
