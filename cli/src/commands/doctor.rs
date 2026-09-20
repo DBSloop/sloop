@@ -38,14 +38,15 @@
 use std::path::Path;
 
 use crate::engine::Engine;
-use crate::engine::privileges::{self, Phase, Report, Verdict};
+use crate::engine::privileges::{self, Report, Verdict};
 use crate::exit::Exit;
 use crate::failure::Failure;
+use crate::mark::Mark;
 use crate::registry::file::Database;
 use crate::registry::{Registries, Scope};
 use crate::secret::{self, Lookup};
 use crate::ssh::tunnel::Tunnels;
-use crate::style;
+use crate::style::{self, Hue};
 use crate::tools::{Candidate, Inventory, Tool, acquire};
 
 /// What `doctor` needs in order to check the second half.
@@ -238,11 +239,18 @@ fn print_report(inventory: &Inventory, fetched: &Path) {
 
 fn print_engine(inventory: &Inventory, engine: Engine) {
     let ready = inventory.has_everything_for(engine);
-    let mark = if ready { "ready" } else { "not ready" };
+    // **The same mark the rest of the report carries**, so one screen does not say
+    // *ready* in green in one section and in grey in another. Amber rather than red for
+    // an engine whose tools are missing: a machine with no MySQL client is not a broken
+    // machine, it is a machine that cannot back up MySQL, and the line under this one
+    // says how to change that.
+    let mark = if ready { Mark::Ok } else { Mark::Warn };
+    let said = if ready { "ready" } else { "not ready" };
     crate::say!(
-        "  {} {}",
+        "  {}  {} {}",
+        style::in_hue(mark.hue(), mark.glyph()),
         style::paint(&format!("{engine}")),
-        style::dim(&format!("— {mark}"))
+        style::dim(&format!("— {said}"))
     );
 
     if !ready {
@@ -598,12 +606,25 @@ fn print_one(name: &str, database: &Database, report: &Report) {
             .filter(|finding| finding.verdict.is_missing())
             .count();
 
-        let summary = if gaps == 0 {
-            format!("— ready {}", phase.heading())
+        // **A mark, and the colour that goes with it.** `R30` gave every other surface in
+        // this tool a tick, a cross or a triangle; this report kept a grey dash, so the one
+        // screen whose whole job is saying what is wrong was the one screen saying it in the
+        // quietest colour there is. Green when the role can do the thing, amber when it
+        // cannot — amber rather than red because only the first phase reaches the exit code,
+        // and a role that is never asked to restore is not a broken role.
+        let (mark, summary) = if gaps == 0 {
+            (Mark::Ok, format!("ready {}", phase.heading()))
         } else {
-            format!("— {}: {gaps} of {needed} missing", phase.heading())
+            (
+                Mark::Warn,
+                format!("{}: {gaps} of {needed} missing", phase.heading()),
+            )
         };
-        crate::say!("    {}", style::dim(&summary));
+        crate::say!(
+            "    {}  {}",
+            style::in_hue(mark.hue(), mark.glyph()),
+            style::in_hue(Hue::Text, &summary)
+        );
 
         // Only the gaps get elaborated. A held privilege is a line nobody needs to read,
         // and printing eleven of them is how the two that matter get scrolled past.
@@ -611,7 +632,11 @@ fn print_one(name: &str, database: &Database, report: &Report) {
             let Verdict::Missing(detail) = &finding.verdict else {
                 continue;
             };
-            crate::say!("      {} {}", style::paint("✗"), finding.requirement.title);
+            crate::say!(
+                "      {} {}",
+                style::in_hue(Mark::Bad.hue(), Mark::Bad.glyph()),
+                finding.requirement.title
+            );
             if !detail.is_empty() {
                 crate::say!("          {}", style::dim(detail));
             }
@@ -661,7 +686,11 @@ fn print_the_documented_minimum(inventory: &Inventory) {
         crate::say!();
         crate::say!("  {}", style::paint(&format!("{engine}")));
 
-        for phase in [Phase::Dump, Phase::Restore] {
+        // **Every phase, from the one list.** This walked `[Dump, Restore]` written out by
+        // hand, so the phase `R30` added was missing from the offline table while the live
+        // one reported it — a documented minimum that was short by exactly the row somebody
+        // reading `--offline` would have wanted.
+        for phase in privileges::PHASES {
             crate::say!("    {}", style::dim(&format!("— {}", phase.heading())));
             // Title first and the grants under it, rather than two columns: a row like
             // "USAGE on each schema, SELECT on each table and sequence" is wider than any
