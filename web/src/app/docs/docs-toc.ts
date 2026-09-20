@@ -281,7 +281,15 @@ export class DocsToc implements AfterViewInit {
       })),
     );
 
-    if (this.variant() === 'rail' && this.headings.length > 1) {
+    // **Only in the browser**, because this is the one part of the collection
+    // that measures rather than reads. `ngAfterViewInit` runs on the server too
+    // — deliberately, so the list is in the prerendered HTML — and the server's
+    // DOM has no `getBoundingClientRect`, so calling it there threw inside the
+    // render pass and left every block after this component on the page
+    // serialised empty. There is nothing to highlight in a render that happens
+    // once and is never scrolled, and `afterNextRender` marks it a moment later
+    // in the browser anyway.
+    if (this.isBrowser && this.variant() === 'rail' && this.headings.length > 1) {
       this.mark();
     }
   }
