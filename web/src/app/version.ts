@@ -10,12 +10,12 @@ import reference from './docs/commands/commands.json';
  * shows a version interpolates this, so a release is one command rather than a
  * hunt through seventeen pages.
  *
- * The field arrives as `sloop 0.1.1`, which is what `--version` prints; this is
- * the number on its own.
+ * The field arrives the way `--version` prints it — `sloop`, a space, the number
+ * — and this is the number on its own.
  */
 export const RELEASE = reference.version.replace(/^\D+/, '');
 
-/** `v0.1.1`, for the places that print one. */
+/** The same with a `v` in front, for the places that print one. */
 export const RELEASE_V = `v${RELEASE}`;
 
 /**
