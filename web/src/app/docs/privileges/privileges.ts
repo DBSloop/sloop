@@ -17,9 +17,31 @@ interface Requirement {
   readonly title: string;
   readonly privileges: readonly string[];
   readonly consequence: string;
-  readonly phase: 'dump' | 'restore';
+  /**
+   * Which of `doctor`'s questions this row answers.
+   *
+   * **A string, not a union of the values that exist today**, and that is this
+   * page's one scar. It was typed `'dump' | 'restore'` and rendered by two
+   * hand-written lists, so when `R30` added a third phase the row for it
+   * matched neither filter and left the page in silence — no type error, no
+   * build failure, nothing to notice. Grouping is derived from the data now:
+   * a phase nobody has heard of still gets a section of its own.
+   */
+  readonly phase: string;
   readonly applies: Applies;
   readonly grant: string;
+}
+
+/** A section of the table: one of `doctor`'s questions, and what to call it. */
+interface Phase {
+  /** The value the generated file carries. */
+  readonly key: string;
+  /** The anchor, which outlives any rewording of the heading. */
+  readonly id: string;
+  /** What this page calls it. */
+  readonly heading: string;
+  /** The sentence under it. Empty for a phase this page has not met. */
+  readonly lede: string;
 }
 
 /** A privilege the engine's own manual asks for and sloop does not need. */
@@ -41,6 +63,39 @@ const LABEL: Readonly<Record<string, string>> = {
 };
 
 /**
+ * `doctor`'s three questions, in the order it asks them.
+ *
+ * `cli/src/engine/privileges.rs` — the `Phase` enum, and the `PHASES` array
+ * beside it that the report walks. The headings are this page's wording of
+ * `Phase::heading`, which prints *to back this database up* inside a sentence
+ * and wants a title here.
+ *
+ * **Naming a phase here is optional and never load-bearing.** This list decides
+ * the order sections come in and the words above them; it does not decide which
+ * sections exist. That comes from the file — see `groups`.
+ */
+const PHASES: readonly Phase[] = [
+  {
+    key: 'dump',
+    id: 'to-back-up',
+    heading: 'To back a database up',
+    lede: 'Everything backup needs, and the source half of mirror and sync.',
+  },
+  {
+    key: 'restore',
+    id: 'to-restore',
+    heading: 'To restore into one',
+    lede: 'A role that dumps a database perfectly may be unable to restore one. Different job, different grants.',
+  },
+  {
+    key: 'drop',
+    id: 'to-drop',
+    heading: 'To delete it from the server',
+    lede: 'Ownership, not a grant — and the one question doctor used to leave unasked, until a drop was refused by a role it had just passed.',
+  },
+];
+
+/**
  * The privileges a backup role needs.
  *
  * **Every row on this page is read from `web/privileges.json` at build time and
@@ -49,6 +104,10 @@ const LABEL: Readonly<Record<string, string>> = {
  * from the same table `sloop doctor` checks a live connection against, so the
  * page, the check and the `GRANT` a reader copies cannot drift apart. Editing
  * the Rust table changes this page; editing this page changes nothing.
+ *
+ * That is the whole of `A25`: the page was typing the phase as two values and
+ * filtering into two lists, so the row `R30` added landed in neither and left
+ * the page with the build still green. Nothing groups by a name typed here now.
  *
  * The one thing chosen here rather than read is **which rows lead**: the
  * requirements whose `consequence` says the dump program exits `0` and says
@@ -63,6 +122,22 @@ const LABEL: Readonly<Record<string, string>> = {
  * 5450 with two deliberately under-privileged roles: `doctor` exiting `8` and
  * naming every missing grant, then — after running exactly the `GRANT` lines it
  * printed and nothing else — the same command exiting `0`.
+ *
+ * **The third phase's rows in them are derived, not captured**, because that run
+ * predates `R30` by a day. Every glyph, column, colour and sentence in those
+ * rows is read out of the code that prints them — `doctor::print_one` for the
+ * shape, `privileges.rs` for the title, the consequence and the `ALTER`, and
+ * `postgres.rs`'s `'owned by '||pg_get_userbyid(d.datdba)` for the detail line.
+ * That is the owner's standing answer to a block that cannot be photographed:
+ * *"rust is built by you, and every message/text is declared in the code, so you
+ * know what should be an output for exact command"* — see "A15: one block on
+ * this site is not a capture" in `docs/OWNER-DECISIONS.md`.
+ *
+ * **And the second capture could not simply turn that row green.** A database
+ * has exactly one owner, so two roles cannot both be ready to drop it; the run
+ * gives ownership to one of them and the other still reports the gap. It exits
+ * `0` all the same, because `Report::can_dump` is what reaches the exit code —
+ * only the first question does.
  */
 @Component({
   selector: 'app-docs-privileges',
@@ -85,13 +160,31 @@ export class Privileges {
     () => this.all.find((engine) => engine.engine === this.chosen()) ?? this.all[0],
   );
 
-  protected readonly toBackUp = computed(() =>
-    this.current().requires.filter((one) => one.phase === 'dump'),
-  );
+  /**
+   * Every row of the chosen engine, in a section per phase.
+   *
+   * **The sections come from the rows, not from a list kept here.** Two
+   * hand-written filters — one for `dump`, one for `restore` — is what made a
+   * `drop` row disappear off this page the day `R30` added it, and a page that
+   * silently drops a row from a generated file is worse than no page. So the
+   * phases present in the data are collected, `PHASES` puts the ones it knows
+   * in the order `doctor` asks them, and anything it does not know follows with
+   * a heading built from its own name. Every row is in exactly one section, and
+   * `site.mjs` fails the build if one of them is not on the built page.
+   */
+  protected readonly groups = computed(() => {
+    const rows = this.current().requires;
+    const present = [...new Set(rows.map((one) => one.phase))];
+    const known = PHASES.filter((phase) => present.includes(phase.key));
+    const strangers: Phase[] = present
+      .filter((key) => !PHASES.some((phase) => phase.key === key))
+      .map((key) => ({ key, id: `to-${key}`, heading: `To ${key} one`, lede: '' }));
 
-  protected readonly toRestore = computed(() =>
-    this.current().requires.filter((one) => one.phase === 'restore'),
-  );
+    return [...known, ...strangers].map((phase) => ({
+      ...phase,
+      rows: rows.filter((one) => one.phase === phase.key),
+    }));
+  });
 
   protected readonly waives = computed(() => this.current().waives);
 
@@ -194,11 +287,12 @@ export class Privileges {
     {
       kind: 'name',
       tag: '  weak',
-      text: '  postgres://weak@127.0.0.1:5450/shop',
+      text: '',
+      note: '  postgres://weak@127.0.0.1:5450/shop',
     },
     { kind: 'dim', text: '    postgres 17.9, connected as weak' },
-    { kind: 'warn', tag: '    — to back this database up: 1 of 4 missing', text: '' },
-    { kind: 'bad', tag: '      ✗ read every table, view and sequence', text: '' },
+    { kind: 'dim', text: '    — to back this database up: 1 of 4 missing' },
+    { kind: 'name', tag: '      ✗', text: ' read every table, view and sequence' },
     {
       kind: 'dim',
       text: '          2 of 2 cannot be read: public.customers, public.customers_id_seq',
@@ -209,34 +303,66 @@ export class Privileges {
     },
     { kind: 'label', tag: '      grant:', text: '' },
     { text: '        GRANT pg_read_all_data TO weak;' },
-    { kind: 'warn', tag: '    — to restore into it: 2 of 2 missing', text: '' },
-    { kind: 'bad', tag: '      ✗ create a schema', text: '' },
-    { kind: 'bad', tag: '      ✗ enter and create in every schema', text: '' },
+    { kind: 'dim', text: '    — to restore into it: 2 of 2 missing' },
+    { kind: 'name', tag: '      ✗', text: ' create a schema' },
+    { kind: 'name', tag: '      ✗', text: ' enter and create in every schema' },
     { kind: 'dim', text: '          cannot enter or create in: public' },
     { kind: 'label', tag: '      grant:', text: '' },
     { text: '        GRANT CREATE ON DATABASE shop TO weak;' },
     { text: '        GRANT USAGE, CREATE ON SCHEMA public TO weak;' },
+    { kind: 'dim', text: '    — to delete it from the server: 1 of 1 missing' },
+    { kind: 'name', tag: '      ✗', text: ' own the database' },
+    { kind: 'dim', text: '          owned by postgres' },
+    {
+      kind: 'dim',
+      text: '          `sloop db drop` is refused with `must be owner of database`, after everything',
+    },
+    { kind: 'dim', text: '          else about the run has already worked' },
+    { kind: 'label', tag: '      grant:', text: '' },
+    { text: '        ALTER DATABASE shop OWNER TO weak;' },
     { text: ' ' },
     { kind: 'prompt', text: 'echo exit $?' },
-    { kind: 'warn', tag: 'exit 8', text: '' },
+    { text: 'exit 8' },
   ];
 
   protected readonly fixed: readonly TerminalLine[] = [
     { kind: 'dim', text: '# exactly the GRANT lines it printed, and nothing else' },
     { kind: 'prompt', text: 'sloop doctor' },
     { kind: 'head', tag: 'Privileges', text: '' },
+    { kind: 'dim', text: '  …' },
     { text: ' ' },
-    { kind: 'name', tag: '  strong', text: '  postgres://strong@127.0.0.1:5450/shop' },
+    {
+      kind: 'name',
+      tag: '  strong',
+      text: '',
+      note: '  postgres://strong@127.0.0.1:5450/shop',
+    },
     { kind: 'dim', text: '    postgres 17.9, connected as strong' },
-    { kind: 'ok', tag: '    — ready to back this database up', text: '' },
-    { kind: 'ok', tag: '    — ready to restore into it', text: '' },
+    { kind: 'dim', text: '    — ready to back this database up' },
+    { kind: 'dim', text: '    — ready to restore into it' },
+    { kind: 'dim', text: '    — ready to delete it from the server' },
     { text: ' ' },
-    { kind: 'name', tag: '  weak', text: '  postgres://weak@127.0.0.1:5450/shop' },
+    {
+      kind: 'name',
+      tag: '  weak',
+      text: '',
+      note: '  postgres://weak@127.0.0.1:5450/shop',
+    },
     { kind: 'dim', text: '    postgres 17.9, connected as weak' },
-    { kind: 'ok', tag: '    — ready to back this database up', text: '' },
-    { kind: 'ok', tag: '    — ready to restore into it', text: '' },
+    { kind: 'dim', text: '    — ready to back this database up' },
+    { kind: 'dim', text: '    — ready to restore into it' },
+    { kind: 'dim', text: '    — to delete it from the server: 1 of 1 missing' },
+    { kind: 'name', tag: '      ✗', text: ' own the database' },
+    { kind: 'dim', text: '          owned by strong' },
+    {
+      kind: 'dim',
+      text: '          `sloop db drop` is refused with `must be owner of database`, after everything',
+    },
+    { kind: 'dim', text: '          else about the run has already worked' },
+    { kind: 'label', tag: '      grant:', text: '' },
+    { text: '        ALTER DATABASE shop OWNER TO weak;' },
     { text: ' ' },
     { kind: 'prompt', text: 'echo exit $?' },
-    { kind: 'ok', tag: 'exit 0', text: '' },
+    { text: 'exit 0' },
   ];
 }

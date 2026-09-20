@@ -8,7 +8,9 @@
   rows lead, which are found by looking for a silent consequence in the data.
 
   The two doctor blocks are real runs: exit 8 naming every gap, then exit 0
-  after running exactly the GRANT lines it printed.
+  after running exactly the GRANT lines it printed. The third phase's rows in
+  them are derived from the code that prints them — that run predates the phase
+  by a day. See the component for exactly which formatter each line comes from.
 -->
 <app-docs-page
   heading="The privileges a backup role needs"
@@ -74,9 +76,19 @@
   </div>
 
   <p>
-    Note that it separates <strong>backing up</strong> from <strong>restoring into</strong>. A role
-    that can dump a database perfectly may be unable to restore one, and the two are reported apart
-    because they are needed at different times.
+    It asks <strong>three</strong> questions, not one: can this role back the database up, can it
+    restore into it, and can it delete it from the server. A role that dumps a database perfectly
+    may be unable to restore one, and a role that can do both may still be refused at
+    <code>db drop</code> — so they are reported apart, because they are needed at different times.
+  </p>
+  <p>
+    The third one has exactly one answer per database. PostgreSQL has no <code>GRANT DROP</code>: a
+    role may drop a database when it <em>owns</em> it, and one role owns it. That is why
+    <code>weak</code> above is still short of that one line after everything else was granted — and
+    why the run exits <code>0</code> anyway.
+    <strong>Only the first question reaches the exit code</strong>, because a role that takes
+    complete backups is a healthy role; the other two are reported so that nothing is discovered at
+    the moment it matters.
   </p>
 
   <h2 id="the-table">What each engine needs</h2>
@@ -107,57 +119,41 @@
     }
   </div>
 
-  <h3 id="to-back-up">To back a database up</h3>
-  <dl class="docs-bare mt-5 space-y-px overflow-hidden rounded-xl border border-line">
-    @for (one of toBackUp(); track one.id) {
-      <div class="bg-surface p-5 sm:p-6">
-        <dt class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span class="text-base font-semibold text-text">{{ one.title }}</span>
-          <span class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">{{
-            howMany(one.applies)
-          }}</span>
-        </dt>
-        <dd class="mt-2 max-w-measure text-sm text-muted">{{ one.consequence }}</dd>
-        <dd class="mt-2 flex flex-wrap gap-1.5">
-          @for (privilege of one.privileges; track privilege) {
-            <span
-              class="rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-xs text-muted"
-              >{{ privilege }}</span
-            >
-          }
-        </dd>
-        <dd class="mt-2 overflow-x-auto whitespace-pre font-mono text-xs text-accent">
-          {{ one.grant }}
-        </dd>
-      </div>
+  <!-- One section per phase in the data, never two written out here. The row
+       `R30` added matched neither of the two filters this replaced and left the
+       page in silence; a phase this page has never heard of now arrives as a
+       section of its own. `site.mjs` fails the build if a row in the file is
+       not on the built page. -->
+  @for (group of groups(); track group.key) {
+    <h3 [id]="group.id">{{ group.heading }}</h3>
+    @if (group.lede) {
+      <p>{{ group.lede }}</p>
     }
-  </dl>
-
-  <h3 id="to-restore">To restore into one</h3>
-  <dl class="docs-bare mt-5 space-y-px overflow-hidden rounded-xl border border-line">
-    @for (one of toRestore(); track one.id) {
-      <div class="bg-surface p-5 sm:p-6">
-        <dt class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span class="text-base font-semibold text-text">{{ one.title }}</span>
-          <span class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">{{
-            howMany(one.applies)
-          }}</span>
-        </dt>
-        <dd class="mt-2 max-w-measure text-sm text-muted">{{ one.consequence }}</dd>
-        <dd class="mt-2 flex flex-wrap gap-1.5">
-          @for (privilege of one.privileges; track privilege) {
-            <span
-              class="rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-xs text-muted"
-              >{{ privilege }}</span
-            >
-          }
-        </dd>
-        <dd class="mt-2 overflow-x-auto whitespace-pre font-mono text-xs text-accent">
-          {{ one.grant }}
-        </dd>
-      </div>
-    }
-  </dl>
+    <dl class="docs-bare mt-5 space-y-px overflow-hidden rounded-xl border border-line">
+      @for (one of group.rows; track one.id) {
+        <div class="bg-surface p-5 sm:p-6" [id]="one.id">
+          <dt class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span class="text-base font-semibold text-text">{{ one.title }}</span>
+            <span class="font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-faint">{{
+              howMany(one.applies)
+            }}</span>
+          </dt>
+          <dd class="mt-2 max-w-measure text-sm text-muted">{{ one.consequence }}</dd>
+          <dd class="mt-2 flex flex-wrap gap-1.5">
+            @for (privilege of one.privileges; track privilege) {
+              <span
+                class="rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-xs text-muted"
+                >{{ privilege }}</span
+              >
+            }
+          </dd>
+          <dd class="mt-2 overflow-x-auto whitespace-pre font-mono text-xs text-accent">
+            {{ one.grant }}
+          </dd>
+        </div>
+      }
+    </dl>
+  }
 
   @if (waives().length) {
     <h2 id="not-needed">What {{ label(chosen()) }}'s manual asks for and sloop does not need</h2>
