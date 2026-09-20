@@ -131,7 +131,7 @@ export class Databases {
       kind: 'prompt',
       text: 'sloop db add shop --global --url postgres://app@127.0.0.1:5442/shop --test',
     },
-    { kind: 'name', tag: '  postgres', text: ' 17.9', note: ', not encrypted' },
+    { kind: 'step', mark: 'ok', text: 'postgres 17.9', note: 'not encrypted' },
     {
       kind: 'name',
       tag: 'registered shop',
@@ -170,7 +170,7 @@ export class Databases {
       kind: 'prompt',
       text: 'sloop db add sessions --global --url mysql://app@127.0.0.1:3311/sessions --test',
     },
-    { kind: 'name', tag: '  mysql', text: ' 8.4', note: ', over TLS' },
+    { kind: 'step', mark: 'ok', text: 'mysql 8.4', note: 'over TLS' },
     {
       kind: 'name',
       tag: 'registered sessions',
@@ -297,7 +297,7 @@ export class Databases {
       note: ' postgres://reports_owner@127.0.0.1:5442/reports',
     },
     { kind: 'dim', text: '  as postgres, whose password is used once and kept nowhere' },
-    { kind: 'name', tag: '  postgres', text: ' 17.9', note: ', not encrypted' },
+    { kind: 'step', mark: 'ok', text: 'postgres 17.9', note: 'not encrypted' },
     { kind: 'name', tag: 'created reports', text: '' },
     { kind: 'dim', text: '  role reports_owner created' },
     { kind: 'dim', text: '  granted USAGE, CREATE ON SCHEMA public TO reports_owner' },
@@ -341,7 +341,7 @@ export class Databases {
       text: '  postgres://app@127.0.0.1:5442/ledger',
       note: '  global',
     },
-    { kind: 'name', tag: '  postgres', text: ' 17.9', note: ', not encrypted' },
+    { kind: 'step', mark: 'ok', text: 'postgres 17.9', note: 'not encrypted' },
     { text: ' ' },
     { kind: 'prompt', text: 'sloop db test sessions --global' },
     { text: ' ' },
@@ -351,7 +351,7 @@ export class Databases {
       text: '  mysql://app@127.0.0.1:3311/sessions',
       note: '  global',
     },
-    { kind: 'name', tag: '  mysql', text: ' 8.4', note: ', over TLS' },
+    { kind: 'step', mark: 'ok', text: 'mysql 8.4', note: 'over TLS' },
   ];
 
   /** A route that cannot be resolved fails here, before anything is dumped. */
@@ -365,9 +365,9 @@ export class Databases {
       note: '  global',
     },
     {
-      kind: 'bad',
-      tag: 'error:',
-      text: ' the password command exited with 1: op read op://vault/db/password',
+      kind: 'step',
+      mark: 'bad',
+      text: 'the password command exited with 1: op read op://vault/db/password',
     },
     {
       kind: 'dim',
@@ -519,7 +519,7 @@ export class Databases {
       text: '  postgres://app@127.0.0.1:5442/shop_staging',
       note: '  project',
     },
-    { kind: 'name', tag: '  postgres', text: ' 17.9', note: ', not encrypted' },
+    { kind: 'step', mark: 'ok', text: 'postgres 17.9', note: 'not encrypted' },
     { text: ' ' },
     { kind: 'prompt', text: 'sloop db test global:shop' },
     { text: ' ' },
@@ -529,7 +529,7 @@ export class Databases {
       text: '  postgres://app@127.0.0.1:5442/shop',
       note: '  global',
     },
-    { kind: 'name', tag: '  postgres', text: ' 17.9', note: ', not encrypted' },
+    { kind: 'step', mark: 'ok', text: 'postgres 17.9', note: 'not encrypted' },
   ];
 
   /** `-C` and `SLOOP_PROJECT`, from a directory that is not the project. */

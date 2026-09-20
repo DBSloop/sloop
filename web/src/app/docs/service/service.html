@@ -59,7 +59,11 @@
     >.
   </p>
 
-  <p>Four commands need that. Five do not:</p>
+  <p>
+    Four service commands need that, and five do not — and so do
+    <a routerLink="/docs/reset"><code>reset</code></a> and <code>uninstall</code>, which take the
+    service off the machine as part of removing everything else sloop put here:
+  </p>
 
   <table>
     <thead>
@@ -79,6 +83,9 @@
           <td>
             @if (duty.elevated) {
               <strong class="text-accent">yes</strong>
+              @if (duty.only) {
+                <span class="text-faint">, {{ duty.only }}</span>
+              }
             } @else {
               <span class="text-faint">no</span>
             }

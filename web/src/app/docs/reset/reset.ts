@@ -159,6 +159,21 @@ export class Reset {
       what: 'The PostgreSQL — sometimes',
       detail: 'Only if sloop installed it. The next section is the whole of that question.',
     },
+    {
+      what: 'The background service',
+      detail:
+        'Taken off the machine before anything else goes, because it wakes on a timer and opens the store every round.',
+    },
+    {
+      what: 'Every server sloop installed',
+      detail:
+        'Each one stopped first, then its directory — a running server holds its own files open, on Windows especially.',
+    },
+    {
+      what: 'Every password sloop filed',
+      detail:
+        'Its own superuser and role, the servers it installed, your registered databases and the SSH passphrases beside them — out of the keyring, out of the encrypted file.',
+    },
   ];
 
   protected readonly stays: readonly Item[] = [
@@ -179,6 +194,11 @@ export class Reset {
       what: 'Your databases themselves',
       detail: 'Registering one never touched it, and forgetting all of them does not either.',
     },
+    {
+      what: 'Passwords sloop never held',
+      detail:
+        'A ${VAR} route or a --password-command points at a secret somebody else keeps. There is no copy here to remove, and it says so rather than pretending.',
+    },
   ];
 
   // ── The announcement ──────────────────────────────────────────────────────
@@ -188,7 +208,7 @@ export class Reset {
     { kind: 'prompt', text: 'sloop reset' },
     { kind: 'head', tag: 'This will remove:', text: '' },
     {
-      kind: 'label',
+      kind: 'fact',
       tag: '  Database',
       text: ' sloop_database and its role, on the PostgreSQL already at port 5452',
     },
@@ -199,9 +219,21 @@ export class Reset {
     { kind: 'dim', text: '  database on it is touched' },
     { kind: 'label', tag: '  Gone', text: ` ${this.path('server.toml')}` },
     { kind: 'label', tag: '  Gone', text: ` ${this.path('locks')}` },
+    { kind: 'fact', tag: '  Password', text: " postgres, the superuser of sloop's PostgreSQL" },
+    {
+      kind: 'fact',
+      tag: '  Password',
+      text: " sloop_db_admin, which owns sloop's own database",
+    },
+    { kind: 'fact', tag: '  Password', text: ' the password for shop' },
+    {
+      kind: 'dim',
+      text: '  these are forgotten wherever this machine keeps them, so the next `sloop setup`',
+    },
+    { kind: 'dim', text: '  starts with nothing left over' },
     { text: ' ' },
     { kind: 'head', tag: 'This will keep:', text: '' },
-    { kind: 'ok', tag: '  Backups', text: ` ${this.path('backups')}` },
+    { kind: 'fact', tag: '  Backups', text: ` ${this.path('backups')}` },
     {
       kind: 'dim',
       text: '  a backup is the one thing here that cannot be made again, so reset never',
@@ -224,6 +256,56 @@ export class Reset {
     },
     { kind: 'dim', text: '  hint: pass --confirm sloop_database to say it up front' },
   ]);
+
+  /**
+   * Asked before the list, before the question, before anything.
+   *
+   * **The owner's instruction, in their words:** *"even for reset and uninstall
+   * if it needs elevated administrator rights, then ask it first without
+   * proceeding"*. Taking a service off the machine is the one thing here that
+   * needs more than an ordinary account, so a run that cannot do it says so
+   * while the machine is still whole — rather than deleting the cluster and
+   * then discovering it cannot finish.
+   *
+   * The wording is `service::elevation::require` and `advice`, which is the
+   * same refusal `service install` gives, one command earlier.
+   */
+  protected readonly notElevated = computed<readonly TerminalLine[]>(() => [
+    { kind: 'prompt', text: 'sloop reset' },
+    {
+      kind: 'bad',
+      tag: 'error:',
+      text: ' changing what this machine runs at boot needs more than this account has, and',
+    },
+    { kind: 'bad', tag: '', text: `  ${this.manager()} will refuse` },
+    {
+      kind: 'dim',
+      text:
+        this.os() === 'windows'
+          ? "  hint: open a terminal with 'Run as administrator' and run it again. Nothing has"
+          : '  hint: run it again with sudo. Nothing has been changed by this run.',
+    },
+    ...(this.os() === 'windows'
+      ? [{ kind: 'dim' as const, text: '  been changed by this run.' }]
+      : []),
+  ]);
+
+  /** What this platform's service manager is called, in sloop's own words. */
+  protected readonly manager = computed(() => {
+    switch (this.os()) {
+      case 'windows':
+        return 'the Service Control Manager';
+      case 'macos':
+        return 'launchd';
+      default:
+        return 'systemd';
+    }
+  });
+
+  /** How this reader gets an elevated terminal. */
+  protected readonly elevate = computed(() =>
+    this.os() === 'windows' ? "a terminal opened with 'Run as administrator'" : 'sudo',
+  );
 
   /** A typo, caught before a socket is opened. */
   protected readonly typo: readonly TerminalLine[] = [
@@ -248,7 +330,7 @@ export class Reset {
   protected readonly guest = computed<readonly TerminalLine[]>(() => [
     { kind: 'head', tag: 'This will remove:', text: '' },
     {
-      kind: 'label',
+      kind: 'fact',
       tag: '  Database',
       text: ' sloop_database and its role, on the PostgreSQL already at port 5452',
     },
@@ -265,7 +347,7 @@ export class Reset {
   protected readonly owner = computed<readonly TerminalLine[]>(() => [
     { kind: 'head', tag: 'This will remove:', text: '' },
     {
-      kind: 'label',
+      kind: 'fact',
       tag: '  PostgreSQL',
       text: ' the whole server sloop installed, on port 5433',
     },
@@ -292,7 +374,7 @@ export class Reset {
     { kind: 'dim', text: ' template1' },
     { text: ' ' },
     { kind: 'prompt', text: 'sloop reset --confirm sloop_database' },
-    { kind: 'ok', tag: '  Dropped sloop_database and sloop_db_admin', text: '' },
+    { kind: 'label', tag: '  Dropped', text: ' sloop_database and sloop_db_admin' },
     { text: ' ' },
     { kind: 'dim', text: '# after' },
     { kind: 'prompt', text: 'psql -p 5452 -U postgres -c "select datname from pg_database"' },
@@ -350,7 +432,7 @@ export class Reset {
     return [
       { kind: 'prompt', text: 'sloop uninstall --confirm sloop_database' },
       { kind: 'dim', text: '# …the same announcement, and the same two columns, and then:' },
-      { kind: 'ok', tag: '  Dropped sloop_database and sloop_db_admin', text: '' },
+      { kind: 'label', tag: '  Dropped', text: ' sloop_database and sloop_db_admin' },
       { kind: 'label', tag: '  Removed', text: ` ${this.path('server.toml')}` },
       ...tail,
       {

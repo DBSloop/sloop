@@ -55,10 +55,19 @@
       anything without an answer.
     </p>
     <p>
-      Answer yes and it downloads, checks and unpacks; answer anything else and nothing happens at
-      all. It uses a PostgreSQL 18 already serving on 5432 if you have one. Otherwise — including on
-      the machine above, which had PostgreSQL 17 and got named and left alone — it builds a cluster
-      of its own on <strong>5433</strong>, which disturbs nothing already running.
+      Answer yes and it downloads, checks and unpacks — with sloop's own bar rather than the
+      downloader's, because three platforms have three downloaders that draw three different meters:
+    </p>
+
+    <div class="mt-7">
+      <app-terminal class="block" caption="sloop's bar, not curl's" [lines]="download" />
+    </div>
+
+    <p>
+      Answer anything else and nothing happens at all. It uses a PostgreSQL 18 already serving on
+      5432 if you have one. Otherwise — including on the machine above, which had PostgreSQL 17 and
+      got named and left alone — it builds a cluster of its own on <strong>5433</strong>, which
+      disturbs nothing already running.
     </p>
   } @else {
     <p>

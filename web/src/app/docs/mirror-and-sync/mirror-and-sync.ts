@@ -127,11 +127,7 @@ export class MirrorAndSync {
     },
     { kind: 'dim', text: '  postgres 17.9 → postgres 17.9' },
     { kind: 'dim', text: '  copying 3 tables, 10841 rows' },
-    {
-      kind: 'warn',
-      tag: '  replacing what the destination has now',
-      text: ' — 3 tables, 1001 rows',
-    },
+    { kind: 'dim', text: '  replacing what the destination has now — 3 tables, 1001 rows' },
     {
       kind: 'dim',
       text: 'dry run would replace the contents of postgres://app@127.0.0.1:5445/staging — nothing was changed',
@@ -147,11 +143,7 @@ export class MirrorAndSync {
     },
     { kind: 'dim', text: '  postgres 17.9 → postgres 17.9' },
     { kind: 'dim', text: '  copying 3 tables, 10841 rows' },
-    {
-      kind: 'warn',
-      tag: '  replacing what the destination has now',
-      text: ' — 3 tables, 1001 rows',
-    },
+    { kind: 'dim', text: '  replacing what the destination has now — 3 tables, 1001 rows' },
     {
       kind: 'name',
       tag: '?',
@@ -159,11 +151,12 @@ export class MirrorAndSync {
     },
     { kind: 'dim', text: '  cleared 3 tables' },
     { kind: 'dim', text: '  copied in 0.3s' },
+    { kind: 'step', mark: 'ok', text: 'Verified', note: 'exact count(*) on both sides' },
     { kind: 'dim', text: '  verifying — exact count(*) on both sides' },
-    { kind: 'ok', tag: '  public.audit_log   240 → 240', text: '' },
-    { kind: 'ok', tag: '  public.customers  1284 → 1284', text: '' },
-    { kind: 'ok', tag: '  public.orders     9317 → 9317', text: '' },
-    { kind: 'ok', tag: '  3 of 3 tables matched', text: '' },
+    { kind: 'dim', text: '  public.audit_log   240 → 240' },
+    { kind: 'dim', text: '  public.customers  1284 → 1284' },
+    { kind: 'dim', text: '  public.orders     9317 → 9317' },
+    { kind: 'dim', text: '  3 of 3 tables matched' },
   ];
 
   // ── sync ──────────────────────────────────────────────────────────────────
@@ -179,21 +172,19 @@ export class MirrorAndSync {
     { kind: 'dim', text: '  postgres 17.9 → postgres 17.9' },
     { kind: 'dim', text: '  merging 2 tables, parents first' },
     {
-      kind: 'warn',
-      tag: '  skipping public.audit_log',
-      text: ' — it has no primary key, so there is no way to tell which row is which',
+      kind: 'dim',
+      text: '  skipping public.audit_log — it has no primary key, so there is no way to tell which row is which',
     },
     { kind: 'dim', text: '  the destination has 3 tables' },
     {
-      kind: 'ok',
-      tag: '  public.customers',
-      text: '  1284 in, 684 new, 600 replaced, 1 kept that the source has no row for',
+      kind: 'dim',
+      text: '  public.customers  1284 in, 684 new, 600 replaced, 1 kept that the source has no row for',
     },
-    { kind: 'ok', tag: '  public.orders', text: '  9317 in, 8917 new, 400 replaced' },
+    { kind: 'dim', text: '  public.orders  9317 in, 8917 new, 400 replaced' },
     { kind: 'dim', text: '  merged in 0.3s' },
     { kind: 'dim', text: '  public.customers_id_seq now hands out 99002 next' },
     { kind: 'dim', text: '  public.orders_id_seq now hands out 9318 next' },
-    { kind: 'ok', tag: '  2 tables merged', text: ': 9601 new, 1000 replaced, 1 kept' },
+    { kind: 'dim', text: '  2 tables merged: 9601 new, 1000 replaced, 1 kept' },
   ];
 
   protected readonly rules: readonly Rule[] = [
@@ -282,20 +273,15 @@ export class MirrorAndSync {
     },
     { kind: 'dim', text: '  only 2 tables: public.customers, public.orders' },
     {
-      kind: 'warn',
-      tag: '  those tables are dropped and recreated;',
-      text: ' everything else in the destination is left',
+      kind: 'dim',
+      text: '  those tables are dropped and recreated; everything else in the destination is left',
     },
-    {
-      kind: 'warn',
-      tag: '',
-      text: '  exactly as it is, so it will not end up identical to the source',
-    },
+    { kind: 'dim', text: '  exactly as it is, so it will not end up identical to the source' },
     { kind: 'dim', text: '  postgres 17.9 → postgres 17.9' },
     { kind: 'dim', text: '  copying 2 tables, 10601 rows' },
     { kind: 'dim', text: '  cleared 2 tables' },
     { kind: 'dim', text: '  copied in 0.4s' },
-    { kind: 'ok', tag: '  2 of 2 tables matched', text: '' },
+    { kind: 'dim', text: '  2 of 2 tables matched' },
   ];
 
   protected readonly noMatch: readonly TerminalLine[] = [
@@ -321,14 +307,13 @@ export class MirrorAndSync {
     { kind: 'dim', text: '  copying 3 tables, 10841 rows' },
     { kind: 'dim', text: '  cleared 3 tables' },
     {
-      kind: 'warn',
-      tag: '--safe:',
-      text: ` dumping to ${this.tempDump()} first — it is not encrypted,`,
+      kind: 'dim',
+      text: `--safe: dumping to ${this.tempDump()} first — it is not encrypted,`,
     },
-    { kind: 'warn', tag: '', text: '  and it goes when the counts agree' },
+    { kind: 'dim', text: '  and it goes when the counts agree' },
     { kind: 'dim', text: '  dumped 66.7 KiB' },
     { kind: 'dim', text: '  copied in 0.8s' },
-    { kind: 'ok', tag: '  3 of 3 tables matched', text: '' },
+    { kind: 'dim', text: '  3 of 3 tables matched' },
   ]);
 
   // ── Making the destination ────────────────────────────────────────────────
@@ -359,7 +344,7 @@ export class MirrorAndSync {
     { kind: 'dim', text: '  copying 3 tables, 10841 rows' },
     { kind: 'dim', text: '  the destination is empty' },
     { kind: 'dim', text: '  copied in 0.3s' },
-    { kind: 'ok', tag: '  3 of 3 tables matched', text: '' },
+    { kind: 'dim', text: '  3 of 3 tables matched' },
   ];
 
   // ── The two refusals that protect you ─────────────────────────────────────

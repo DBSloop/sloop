@@ -107,9 +107,8 @@ export class BackupKey {
     { kind: 'label', tag: '  public  ', text: this.publicKey },
     { kind: 'label', tag: '  private ', text: 'the OS keyring, and on standard output below' },
     {
-      kind: 'warn',
-      tag: '  keep that line somewhere sloop cannot reach',
-      text: ' — a password manager, a safe.',
+      kind: 'dim',
+      text: '  keep that line somewhere sloop cannot reach — a password manager, a safe.',
     },
     {
       kind: 'dim',
@@ -174,7 +173,9 @@ export class BackupKey {
       { kind: 'dim', text: '# on the machine that has the backups' },
       { kind: 'prompt', text: 'sloop backup shop' },
       { kind: 'name', tag: 'shop', text: '', note: '  postgres://app@127.0.0.1:5444/shop' },
-      { kind: 'dim', text: '  postgres 17.9, 2 tables, 10601 rows' },
+      { kind: 'step', mark: 'ok', text: 'Connected', note: 'postgres 17.9, 2 tables, 10601 rows' },
+      { kind: 'step', mark: 'ok', text: 'Dumped 2 tables', note: '67.6 kB, encrypted' },
+      { kind: 'step', mark: 'ok', text: 'Checked', note: '42958e81e612' },
       {
         kind: 'dim',
         text: `  backed up to ${this.laptop()}${s}backups${s}postgres${s}shop${s}20260919T142852Z`,
@@ -248,10 +249,11 @@ export class BackupKey {
       { kind: 'dim', text: '  it is empty' },
       { kind: 'dim', text: '  loaded in 0.1s' },
       { kind: 'dim', text: '  checking it against the counts the manifest recorded' },
+      { kind: 'step', mark: 'ok', text: 'Verified', note: 'exact count(*) on both sides' },
       { kind: 'dim', text: '  verifying — exact count(*) on both sides' },
-      { kind: 'ok', tag: '  public.customers  1284 → 1284', text: '' },
-      { kind: 'ok', tag: '  public.orders     9317 → 9317', text: '' },
-      { kind: 'ok', tag: '  2 of 2 tables matched', text: '' },
+      { kind: 'dim', text: '  public.customers  1284 → 1284' },
+      { kind: 'dim', text: '  public.orders     9317 → 9317' },
+      { kind: 'dim', text: '  2 of 2 tables matched' },
     ];
   });
 

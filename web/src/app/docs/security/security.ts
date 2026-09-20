@@ -105,20 +105,13 @@ export class Security {
     },
     { kind: 'prompt', text: '    --log-file run.log' },
     {
-      kind: 'warn',
-      tag: 'note:',
-      text: ' the password came from the URL, so it was visible in `ps` and is in your shell',
+      kind: 'step',
+      mark: 'warn',
+      text: 'The password came from the URL',
+      note: 'it was visible in `ps` and is in your shell history while that',
     },
-    {
-      kind: 'warn',
-      tag: '',
-      text: '  history while that command line lives. sloop has filed it and will not write it',
-    },
-    {
-      kind: 'warn',
-      tag: '',
-      text: '  anywhere — `--password-stdin` avoids the exposure next time.',
-    },
+    { text: 'command line lives. sloop has filed it and will not write it anywhere —' },
+    { text: '--password-stdin avoids the exposure next time' },
     {
       kind: 'name',
       tag: 'registered leaky',
@@ -130,13 +123,13 @@ export class Security {
     { kind: 'prompt', text: 'cat run.log' },
     {
       kind: 'dim',
-      text: 'note: the password came from the URL, so it was visible in `ps` and is in your shell',
+      text: '▲    The password came from the URL      it was visible in `ps` and is in your shell history while that',
     },
     {
       kind: 'dim',
-      text: '  history while that command line lives. sloop has filed it and will not write it',
+      text: 'command line lives. sloop has filed it and will not write it anywhere —',
     },
-    { kind: 'dim', text: '  anywhere — `--password-stdin` avoids the exposure next time.' },
+    { kind: 'dim', text: '--password-stdin avoids the exposure next time' },
     {
       kind: 'dim',
       text: 'registered leaky in the project registry, password from the OS keyring',
@@ -187,7 +180,7 @@ export class Security {
       text: 'sloop db add awkward --url postgres://app@127.0.0.1:5449/orders \\',
     },
     { kind: 'prompt', text: '    --password-stdin --test   # piped in, never an argument' },
-    { kind: 'name', tag: '  postgres', text: ' 17.9', note: ', not encrypted' },
+    { kind: 'step', mark: 'ok', text: 'postgres 17.9', note: 'not encrypted' },
     {
       kind: 'name',
       tag: 'registered awkward',
@@ -203,6 +196,11 @@ export class Security {
       text: '  postgres://app@127.0.0.1:5449/orders',
       note: '  project',
     },
-    { kind: 'ok', tag: '  postgres 17.9', text: ', not encrypted   ← it connected' },
+    {
+      kind: 'step',
+      mark: 'ok',
+      text: 'postgres 17.9',
+      note: 'not encrypted   ← it connected',
+    },
   ];
 }

@@ -14,31 +14,180 @@ import {
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 
-/** One line of a terminal block. */
+/**
+ * A status, as the glyph and the colour that say it together.
+ *
+ * `cli/src/mark.rs`, which is the one place the CLI answers both questions at
+ * once — *"a tick that is not green and a green line with no tick are both half
+ * a signal"*. The ASCII twins that file carries are for a console with no font
+ * for these; a browser always has one.
+ */
+export type Mark = 'ok' | 'bad' | 'warn' | 'doing' | 'todo' | 'here';
+
+const GLYPH: Readonly<Record<Mark, string>> = {
+  ok: '✓',
+  bad: '✗',
+  warn: '▲',
+  doing: '●',
+  todo: '·',
+  here: '›',
+};
+
+const MARK_INK: Readonly<Record<Mark, string>> = {
+  ok: 'text-term-ok',
+  bad: 'text-term-bad',
+  warn: 'text-term-warn',
+  doing: 'text-brand',
+  todo: 'text-term-dim',
+  here: 'text-brand',
+};
+
+/** The five the CLI paints with, by the name a line asks for them under. */
+const INK: Readonly<Record<string, string>> = {
+  ok: 'text-term-ok',
+  warn: 'text-term-warn',
+  bad: 'text-term-bad',
+  brand: 'text-brand',
+  dim: 'text-term-dim',
+  text: 'text-term-text',
+};
+
+/**
+ * The column geometry, in characters, exactly as the CLI computes it.
+ *
+ * Nothing here is a design decision taken on this site: `FRAME` is
+ * `mark::FRAME_WIDTH`, so a step that has settled and one still spinning start
+ * their labels in the same column; `NOTE_AT` is `console::NOTE_AT`, measured
+ * from the label's own column; `GAP` is `paint::GAP`, what sits between two
+ * columns of a list.
+ */
+const FRAME = 3;
+const NOTE_AT = 36;
+const GAP = 3;
+
+/** The spinner, frame by frame. `mark::frames` — a dot travelling and coming back. */
+const FRAMES = ['●∙∙', '∙●∙', '∙∙●', '∙●∙'];
+
+/** The rail down the left of a result. `mark::rail`, heavy rather than light. */
+const RAIL = '┃';
+
+/** The caps of a progress bar, and the block it fills with. `mark::bar`. */
+const BAR_START = '▕';
+const BAR_END = '▏';
+const BLOCK = '█';
+
+/**
+ * The room a screen has, when a line needs a right-hand edge to sit against.
+ *
+ * Eighty-four: what an eighty-eight-column terminal leaves after `paint::INSET`
+ * at both edges, and the grid the six screens were drawn on. Only the verdict
+ * line uses it — everything else is measured from its own content.
+ */
+const COLUMNS = 84;
+
+/**
+ * One line of a terminal block.
+ *
+ * **The shape is `ui::paint::Line`'s**, which is the enum the CLI builds every
+ * screen out of — so a block here is written in the pieces the tool writes it
+ * in and none of them has to be faked with hand-counted spaces. The columns
+ * are worked out from the constants above, which are the CLI's own.
+ */
 export interface TerminalLine {
   /**
-   * How the line is coloured, matching what `cli/src/style.rs` actually paints.
+   * How the line is drawn, matching what the CLI actually paints.
    *
-   * One rule for all of them: **`tag` carries the colour, `text` is ordinary
-   * terminal text, and `note` is dim.** So a line is written in the three
-   * pieces the CLI writes it in, and none of them has to be faked.
+   * The first group is plain output, where **`tag` carries the colour, `text`
+   * is ordinary terminal text, and `note` is dim**:
    *
    * ```text
    * prompt   an accent caret, then the command in `text`
    * head     `style::heading` — the accent, bold
    * name     `style::paint`   — the accent, a value worth noticing
    * label    `style::label`   — dim, in front of a plain value
+   * fact     the same label, in front of a value in the accent
    * dim      `style::dim`     — the whole line
    * ok/warn/bad               — the three status colours
    * ```
+   *
+   * The second group is the vocabulary `R30` gave every screen, and each one
+   * lays its own columns out:
+   *
+   * ```text
+   * step     a piece of work that finished: `mark`, the past-tense `text`, and
+   *          `note` in its column — `console::settled`
+   * run      the same piece of work while it is running: the spinner's frame,
+   *          the present-tense `text`, and a `meter` or `note` beside it
+   * verdict  the headline of a result: `mark`, `text` in capitals, `tag` as the
+   *          subject in the accent, `note` in the right-hand corner
+   * row      one line of a list: `text`, the coloured `middle`, and the grey
+   *          `note` — the three columns, measured across the whole block
+   * chips    a row of short facts, each with its own mark
+   * ```
    */
-  readonly kind?: 'prompt' | 'out' | 'dim' | 'ok' | 'warn' | 'bad' | 'head' | 'name' | 'label';
+  readonly kind?:
+    | 'prompt'
+    | 'out'
+    | 'dim'
+    | 'ok'
+    | 'warn'
+    | 'bad'
+    | 'head'
+    | 'name'
+    | 'label'
+    | 'step'
+    | 'run'
+    | 'verdict'
+    | 'row'
+    | 'chips'
+    | 'trail'
+    | 'fact';
   /** For every kind but `prompt`, `dim` and `out`, the part that carries the colour. */
   readonly tag?: string;
   /** A single space renders as a blank line; an empty string would collapse. */
   readonly text: string;
   /** Trailing dim text, for the `· 1,440 readings` half of a line. */
   readonly note?: string;
+  /** Which status a `step`, a `run` or a `verdict` carries. */
+  readonly mark?: Mark;
+  /** How far in the line starts, in characters. For a screen drawn inside a header. */
+  readonly at?: number;
+  /** Draw the result rail in front of it — a `step` inside an outcome screen. */
+  readonly rail?: boolean;
+  /** A `row`'s middle column: what it does, or what it is doing now. */
+  readonly middle?: string;
+  /** Which of the six the middle column carries. Grey when it is only a description. */
+  readonly hue?: 'ok' | 'warn' | 'bad' | 'brand' | 'dim' | 'text';
+  /** A `run`'s bar, as a fraction of the work whose size is known. */
+  readonly fraction?: number;
+  /**
+   * Where in the tree a screen is, outermost first.
+   *
+   * `paint::trail`: the mark in the accent, then each crumb behind a grey
+   * chevron. Every screen below the top of the menu carries one.
+   */
+  readonly crumbs?: readonly string[];
+  /** A `chips` line's facts, each with the mark that belongs to it. */
+  readonly chips?: readonly { readonly mark: Mark; readonly text: string }[];
+  /**
+   * The wordmark column, drawn in the accent in front of whatever else the line
+   * carries.
+   *
+   * `paint::marked` builds the header as one rectangle: the block on the left,
+   * and one row of whatever sits beside it on the right. **That side-by-side is
+   * the owner's Home A** — stacked, the header took twenty rows of a
+   * twenty-four-row terminal and left the menu a keyhole to scroll through.
+   */
+  readonly lead?: string;
+  /**
+   * The highlight is on this row.
+   *
+   * `paint::chosen` strips every escape from the line and sets the whole of it
+   * in the accent, because a row already carries colours of its own and a
+   * highlight that changed only the first of them leaves half a row looking
+   * unselected.
+   */
+  readonly here?: boolean;
 }
 
 /** How long each line takes when the block is played rather than printed. */
@@ -46,6 +195,9 @@ const MS_PER_CHARACTER = 26;
 const AFTER_A_COMMAND = 320;
 const BETWEEN_OUTPUT_LINES = 90;
 const BEFORE_REPLAY_IS_OFFERED = 900;
+
+/** How long one frame of the travelling dot is on screen. `mark::FRAME_TIME`. */
+const FRAME_TIME = 120;
 
 /**
  * A terminal block, and every character in it is real HTML text.
@@ -196,6 +348,9 @@ const BEFORE_REPLAY_IS_OFFERED = 900;
               class="block whitespace-pre transition-opacity duration-2 ease-out"
               [style.opacity]="opacityOf(i)"
             >
+              @if (line.lead) {
+                <span class="text-brand">{{ line.lead }}</span>
+              }
               @switch (line.kind) {
                 @case ('prompt') {
                   <span class="select-none text-brand">$ </span>
@@ -226,6 +381,13 @@ const BEFORE_REPLAY_IS_OFFERED = 900;
                   <span class="text-term-dim">{{ line.tag }}</span>
                   <span class="text-term-text">{{ line.text }}</span>
                 }
+                <!-- A grey label in front of a value worth noticing, which is
+                     style::label and style::paint beside each other — what
+                     reset, backups list and the service screens are made of. -->
+                @case ('fact') {
+                  <span class="text-term-dim">{{ line.tag }}</span>
+                  <span class="text-brand">{{ line.text }}</span>
+                }
                 @case ('ok') {
                   <span class="text-term-ok">{{ line.tag }}</span>
                   <span class="text-term-text">{{ line.text }}</span>
@@ -238,11 +400,96 @@ const BEFORE_REPLAY_IS_OFFERED = 900;
                   <span class="text-term-bad">{{ line.tag }}</span>
                   <span class="text-term-text">{{ line.text }}</span>
                 }
+                <!-- A piece of work that finished. console::settled: the
+                     mark, as wide as a spinner frame so a settled step and a
+                     running one start their labels in the same column, then
+                     the past-tense label, then the grey note in its column. -->
+                @case ('step') {
+                  <span class="text-term-dim">{{ indent(line) }}</span>
+                  @if (line.rail) {
+                    <span [class]="ink(line)">{{ railGlyph }}</span>
+                    <span>{{ two }}</span>
+                  }
+                  <span [class]="ink(line)">{{ glyph(line) }}</span>
+                  <span class="text-term-text">{{ label(line) }}</span>
+                  @if (line.note) {
+                    <span class="text-term-dim">{{ line.note }}</span>
+                  }
+                }
+                <!-- The same work while it is still running: the travelling dot
+                     in the accent, and a bar where the size of it is known. -->
+                @case ('run') {
+                  <span class="text-term-dim">{{ indent(line) }}</span>
+                  <span class="text-brand">{{ spinner() }}</span>
+                  <span class="text-term-text">{{ label(line) }}</span>
+                  @if (line.fraction !== undefined) {
+                    <span class="text-term-dim">{{ barStart }}</span>
+                    <span class="text-brand">{{ barFill(line) }}</span>
+                    <span>{{ barEmpty(line) }}</span>
+                    <span class="text-term-dim">{{ barEnd }}</span>
+                    <span class="text-term-text">{{ percent(line) }}</span>
+                  }
+                  @if (line.note) {
+                    <span class="text-term-dim">{{ three }}{{ line.note }}</span>
+                  }
+                }
+                <!-- The headline of a result: what happened, what it happened
+                     to, and how long it took in the right-hand corner. -->
+                @case ('verdict') {
+                  <span class="text-term-dim">{{ indent(line) }}</span>
+                  <span [class]="ink(line)">{{ glyph(line) }}{{ two }}{{ line.text }}</span>
+                  <span class="text-brand">{{ three }}{{ line.tag }}</span>
+                  @if (line.note) {
+                    <span class="text-term-dim">{{ toTheRight(line) }}{{ line.note }}</span>
+                  }
+                }
+                <!-- One row of a list, in the three columns the CLI measures
+                     across the whole list: the title, the fact that matters in
+                     the colour it deserves, and the command in grey. -->
+                @case ('row') {
+                  @if (line.here) {
+                    <span class="text-brand">{{ hereGlyph }}{{ ' ' }}</span>
+                    <span>{{ under(line) }}</span>
+                  } @else {
+                    <span>{{ indent(line) }}</span>
+                  }
+                  <span [class]="line.here ? chosenInk : 'text-term-text'">{{ title(line) }}</span>
+                  @if (line.middle) {
+                    <span [class]="line.here ? chosenInk : middleInk(line)">{{
+                      middle(line)
+                    }}</span>
+                  }
+                  @if (line.note) {
+                    <span [class]="line.here ? chosenInk : 'text-term-dim'">{{ line.note }}</span>
+                  }
+                }
+                <!-- sloop  ›  Backups  ›  Back one up now. The mark carries
+                     the accent and the chevrons are grey, so the eye follows
+                     one thing rather than four. -->
+                @case ('trail') {
+                  <span class="text-term-dim">{{ indent(line) }}</span>
+                  <span class="font-semibold text-brand">sloop</span>
+                  @for (crumb of line.crumbs ?? []; track crumb) {
+                    <span class="text-term-dim">{{ chevron }}</span>
+                    <span class="text-term-text">{{ crumb }}</span>
+                  }
+                }
+                <!-- The mark and the facts, side by side. The home screen's top
+                     line: three short facts, each with its own status. -->
+                @case ('chips') {
+                  <span class="text-term-dim">{{ indent(line) }}</span>
+                  @for (chip of line.chips ?? []; track chip.text; let first = $first) {
+                    <span [class]="MARK_INK[chip.mark]"
+                      >{{ first ? '' : gap }}{{ GLYPH[chip.mark] }}</span
+                    >
+                    <span class="text-term-text">{{ ' ' }}{{ chip.text }}</span>
+                  }
+                }
                 @default {
                   <span class="text-term-text">{{ line.text }}</span>
                 }
               }
-              @if (line.note) {
+              @if (trailing(line)) {
                 <span class="text-term-dim">{{ line.note }}</span>
               }
             </span>
@@ -358,6 +605,199 @@ export class Terminal {
       : 'block min-w-max font-mono text-xs leading-relaxed sm:text-sm',
   );
 
+  // ── Drawing the vocabulary R30 gave every screen ────────────────────────
+  //
+  // Every measurement below is the CLI's own, named at the top of this file.
+  // Nothing here decides how wide a column is — `cli/src/console.rs` and
+  // `cli/src/ui/paint.rs` decided, and this reproduces it so that a block on
+  // this page and the same screen in a terminal line up character for
+  // character.
+
+  protected readonly GLYPH = GLYPH;
+  protected readonly MARK_INK = MARK_INK;
+  protected readonly railGlyph = RAIL;
+  protected readonly barStart = BAR_START;
+  protected readonly barEnd = BAR_END;
+  protected readonly gap = ' '.repeat(GAP);
+  // **Written here rather than in the template.** Angular collapses a run of
+  // whitespace inside an interpolated literal, so `{{ '   ' }}` reaches the DOM
+  // as one space — which put the download bar's rate one column from its
+  // percentage rather than three. A string from the component is left alone.
+  protected readonly two = '  ';
+  protected readonly three = '   ';
+  protected readonly chevron = '  ›  ';
+  protected readonly hereGlyph = GLYPH['here'];
+  /** What `paint::chosen` does to the line the highlight is on. */
+  protected readonly chosenInk = 'font-semibold text-brand';
+
+  /** Which frame of the travelling dot this block is showing. */
+  private readonly frame = signal(0);
+
+  protected glyph(line: TerminalLine): string {
+    return GLYPH[line.mark ?? 'ok'];
+  }
+
+  protected ink(line: TerminalLine): string {
+    return MARK_INK[line.mark ?? 'ok'];
+  }
+
+  /**
+   * How far in a line starts.
+   *
+   * A list row spends four columns before its title whether the highlight is on
+   * it or not: two for the arrow, and `paint::UNDER`'s two that step everything
+   * choosable in from it. That is the structure the owner drew, and it is what
+   * gives a list one left edge.
+   */
+  /**
+   * Whether the dim note goes on the end of the line.
+   *
+   * The plain kinds hang it there — the `· 1,440 readings` half of a line. The
+   * kinds that lay their own columns out have already drawn it in the column it
+   * belongs in, and drawing it again put every command on the home screen
+   * twice.
+   */
+  protected trailing(line: TerminalLine): boolean {
+    const own = ['step', 'run', 'verdict', 'row'];
+    return !!line.note && !own.includes(line.kind ?? '');
+  }
+
+  protected indent(line: TerminalLine): string {
+    return ' '.repeat(line.at ?? (line.kind === 'row' ? 4 : 0));
+  }
+
+  /** The same, less the two columns the arrow has already taken. */
+  protected under(line: TerminalLine): string {
+    return ' '.repeat(Math.max((line.at ?? 4) - 2, 0));
+  }
+
+  /**
+   * A settled step's label, with the note pushed into its column.
+   *
+   * `console::settled`: the mark is padded to a spinner frame's width, two
+   * columns follow it, and the note starts at `NOTE_AT` from the label — or two
+   * spaces after a label longer than that, because a wrapped line is worse than
+   * a ragged one.
+   */
+  protected label(line: TerminalLine): string {
+    // A line still running is drawn by `Plain::draw`, which puts the bar two
+    // columns after the label rather than in a column of its own: there is one
+    // of these on the screen at a time, so there is nothing for it to line up
+    // with. A settled one is `console::settled`, which has a list to line up
+    // with and so uses the column.
+    if (line.kind === 'run') {
+      return line.note || line.fraction !== undefined ? `  ${line.text}  ` : `  ${line.text}`;
+    }
+    const head = `${' '.repeat(FRAME - 1)}  ${line.text}`;
+    if (!line.note) {
+      return head;
+    }
+    return head + ' '.repeat(Math.max(NOTE_AT - line.text.length, 2));
+  }
+
+  protected spinner(): string {
+    return FRAMES[this.frame() % FRAMES.length];
+  }
+
+  /** How wide a bar is drawn. `console::meter` asks for 24 columns. */
+  private static readonly BAR = 24;
+
+  private eighths(line: TerminalLine): number {
+    const fraction = Math.min(Math.max(line.fraction ?? 0, 0), 1);
+    return Math.round(fraction * Terminal.BAR * 8);
+  }
+
+  /**
+   * The filled part, to an eighth of a column.
+   *
+   * `mark::bar`: whole blocks jump in steps of a percent and a half on a bar
+   * this wide, which on a slow download reads as a bar that has stopped.
+   */
+  protected barFill(line: TerminalLine): string {
+    const eighths = this.eighths(line);
+    const full = Math.min(Math.floor(eighths / 8), Terminal.BAR);
+    const part = eighths % 8;
+    // `mark::bar` takes the partial cell from the eighth blocks below U+2588,
+    // so the character is the CLI's rather than one chosen here.
+    const sliver = part > 0 && full < Terminal.BAR ? String.fromCodePoint(0x2580 + part) : '';
+    return BLOCK.repeat(full) + sliver;
+  }
+
+  protected barEmpty(line: TerminalLine): string {
+    const eighths = this.eighths(line);
+    const full = Math.min(Math.floor(eighths / 8), Terminal.BAR);
+    const part = eighths % 8 > 0 && full < Terminal.BAR ? 1 : 0;
+    return ' '.repeat(Terminal.BAR - full - part);
+  }
+
+  protected percent(line: TerminalLine): string {
+    const fraction = Math.min(Math.max(line.fraction ?? 0, 0), 1);
+    return `  ${Math.round(fraction * 100)}%`;
+  }
+
+  /**
+   * The space that pushes a verdict's tag to the right-hand edge.
+   *
+   * `paint::verdict` measures it against the terminal's width; a block on a page
+   * has no terminal, so it is measured against the widest line in the block and
+   * never allowed under two columns.
+   */
+  protected toTheRight(line: TerminalLine): string {
+    const used = 1 + 2 + line.text.length + 3 + (line.tag?.length ?? 0);
+    const room = Math.max(this.room(), used + (line.note?.length ?? 0) + 2);
+    return ' '.repeat(Math.max(room - used - (line.note?.length ?? 0), 2));
+  }
+
+  /**
+   * The three columns of a list, measured across every row in the block.
+   *
+   * `paint::widths`, and the reason it is measured once: a row that sized its
+   * own middle column from its own command would start it wherever that row
+   * happened to leave off, and a list of five would have five right-hand
+   * columns — *which is most of what "cluttered" looks like*.
+   */
+  private readonly columns = computed(() => {
+    let title = 0;
+    let middle = 0;
+    for (const line of this.lines()) {
+      if (line.kind !== 'row') {
+        continue;
+      }
+      title = Math.max(title, line.text.length);
+      middle = Math.max(middle, line.middle?.length ?? 0);
+    }
+    return { title, middle };
+  });
+
+  /** The widest line in the block, for the one line that needs a right edge. */
+  private room(): number {
+    const widths = this.columns();
+    const rows = widths.title + GAP + widths.middle + GAP;
+    return Math.max(COLUMNS, rows);
+  }
+
+  /**
+   * A row's title, in the column every row in the list shares.
+   *
+   * **Unless there is nothing beside it.** `paint::option`'s last branch returns
+   * the title alone — a list of six doors with nothing to their right is six
+   * words, not six words and a ragged margin of spaces.
+   */
+  protected title(line: TerminalLine): string {
+    if (!line.middle && !line.note) {
+      return line.text;
+    }
+    return line.text.padEnd(this.columns().title) + this.gap;
+  }
+
+  protected middle(line: TerminalLine): string {
+    return (line.middle ?? '').padEnd(this.columns().middle) + (line.note ? this.gap : '');
+  }
+
+  protected middleInk(line: TerminalLine): string {
+    return INK[line.hue ?? 'dim'] ?? INK['dim'];
+  }
+
   /** The lines somebody would actually type, in order. */
   protected readonly commands = computed(() =>
     this.lines()
@@ -396,6 +836,8 @@ export class Terminal {
   private readonly scroller = viewChild.required<ElementRef<HTMLElement>>('scroller');
   private timer = 0;
   private copyTimer = 0;
+  private spin = 0;
+  private watchingForSpin: IntersectionObserver | undefined;
   private watcher: ResizeObserver | undefined;
 
   /**
@@ -444,7 +886,9 @@ export class Terminal {
       const view = this.document.defaultView;
       view?.clearTimeout(this.timer);
       view?.clearTimeout(this.copyTimer);
+      view?.clearInterval(this.spin);
       this.watcher?.disconnect();
+      this.watchingForSpin?.disconnect();
     });
 
     // The block can start clipped, and can become clipped when the window
@@ -469,6 +913,34 @@ export class Terminal {
           this.watcher.observe(body);
         }
       }
+    });
+
+    // **The travelling dot turns.** A block drawing a job in flight with a
+    // spinner frozen on frame one is a screenshot of motion rather than motion,
+    // and the owner's rule 7 was that everything slow says it is working. It
+    // runs only while the block is on screen, never during prerender, and not
+    // at all under `prefers-reduced-motion` — where the dot simply rests.
+    afterNextRender(() => {
+      const view = this.document.defaultView;
+      if (!isBrowser || !view || !this.lines().some((line) => line.kind === 'run')) {
+        return;
+      }
+      if (view.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        return;
+      }
+      const turn = () => this.frame.update((at) => (at + 1) % FRAMES.length);
+      if (typeof view.IntersectionObserver !== 'function') {
+        this.spin = view.setInterval(turn, FRAME_TIME);
+        return;
+      }
+      const observer = new view.IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          view.clearInterval(this.spin);
+          this.spin = entry.isIntersecting ? view.setInterval(turn, FRAME_TIME) : 0;
+        }
+      });
+      observer.observe(this.host.nativeElement);
+      this.watchingForSpin = observer;
     });
 
     afterNextRender(() => {

@@ -129,6 +129,9 @@ export class GettingStarted {
 
   // ── 1 · setup ─────────────────────────────────────────────────────────────
 
+  /** The bar, on the one platform that downloads a server. */
+  protected readonly download = WINDOWS_DOWNLOAD;
+
   protected readonly setup = computed<readonly TerminalLine[]>(() => {
     switch (this.os()) {
       case 'windows':
@@ -160,7 +163,7 @@ export class GettingStarted {
       text: '',
       note: '  postgres://app@127.0.0.1:5441/shop  global',
     },
-    { kind: 'dim', text: '  postgres 17.9, not encrypted' },
+    { kind: 'step', mark: 'ok', text: 'postgres 17.9', note: 'not encrypted' },
   ];
 
   // ── 3 · key export ────────────────────────────────────────────────────────
@@ -175,9 +178,8 @@ export class GettingStarted {
     },
     { kind: 'label', tag: '  private ', text: 'the OS keyring, and on standard output below' },
     {
-      kind: 'warn',
-      tag: '  keep that line somewhere sloop cannot reach',
-      text: ' — a password manager, a safe.',
+      kind: 'dim',
+      text: '  keep that line somewhere sloop cannot reach — a password manager, a safe.',
     },
     {
       kind: 'dim',
@@ -192,7 +194,9 @@ export class GettingStarted {
   protected readonly firstBackup = computed<readonly TerminalLine[]>(() => [
     { kind: 'prompt', text: 'sloop backup shop --global' },
     { kind: 'name', tag: 'shop', text: '', note: '  postgres://app@127.0.0.1:5441/shop' },
-    { kind: 'dim', text: '  postgres 17.9, 2 tables, 10601 rows' },
+    { kind: 'step', mark: 'ok', text: 'Connected', note: 'postgres 17.9, 2 tables, 10601 rows' },
+    { kind: 'step', mark: 'ok', text: 'Dumped 2 tables', note: '90.5 kB, encrypted' },
+    { kind: 'step', mark: 'ok', text: 'Checked', note: '1c90608b129c' },
     { kind: 'dim', text: `  backed up to ${this.backupPath()}` },
     { kind: 'dim', text: '  88.4 KiB in 0.5s, sha256 1c90608b129c' },
     { kind: 'dim', text: '  taken 2026-09-19 18:41:14 +06:00 (2026-09-19T12:41:14Z)' },
@@ -225,15 +229,16 @@ export class GettingStarted {
       text: '  88.4 KiB of postgres 17.9, encrypted, 10601 rows, sha256 1c90608b129c',
     },
     { kind: 'dim', text: '  into shop — postgres 17.9' },
-    { kind: 'warn', tag: '  replacing what is there now', text: ' — 2 tables, 10601 rows' },
+    { kind: 'dim', text: '  replacing what is there now — 2 tables, 10601 rows' },
     { kind: 'name', tag: '?', text: ' type shop to destroy it, or anything else to stop: shop' },
     { kind: 'dim', text: '  cleared 2 tables' },
     { kind: 'dim', text: '  loaded in 0.1s' },
     { kind: 'dim', text: '  checking it against the counts the manifest recorded' },
+    { kind: 'step', mark: 'ok', text: 'Verified', note: 'exact count(*) on both sides' },
     { kind: 'dim', text: '  verifying — exact count(*) on both sides' },
-    { kind: 'ok', tag: '  public.customers  1284 → 1284', text: '' },
-    { kind: 'ok', tag: '  public.orders     9317 → 9317', text: '' },
-    { kind: 'ok', tag: '  2 of 2 tables matched', text: '' },
+    { kind: 'dim', text: '  public.customers  1284 → 1284' },
+    { kind: 'dim', text: '  public.orders     9317 → 9317' },
+    { kind: 'dim', text: '  2 of 2 tables matched' },
   ]);
 
   /** The manifest filed beside that dump, as it was written. */
@@ -307,6 +312,37 @@ const WINDOWS_SETUP: readonly TerminalLine[] = [
     text: "  The download is the system's own curl. Nothing about this machine is sent anywhere.",
   },
   { kind: 'name', tag: '?', text: ' Download and install them now? y' },
+  { kind: 'dim', text: '  …' },
+];
+
+/**
+ * What the download itself looks like, once that question is answered.
+ *
+ * **Derived from the code rather than captured**, for the same reason the block
+ * above stops where it does: photographing it means another 344 MB download on
+ * the owner's machine to show a reader something they see once. Every part is
+ * read out of `cli/src/tools/acquire.rs` — `fetching`'s label, the bar
+ * `watched` draws through `console::meter`, `rate`'s phrase beside it,
+ * `console::bytes` for the size it settles with, and the line after it.
+ *
+ * **It is sloop's bar, not curl's.** The downloader is silenced and the file is
+ * watched as it grows, against the size the checksum will be checked against —
+ * the owner's rule 6, after seeing three different downloaders draw three
+ * different meters inside a sloop screen.
+ */
+const WINDOWS_DOWNLOAD: readonly TerminalLine[] = [
+  {
+    kind: 'dim',
+    text: '  https://get.enterprisedb.com/postgresql/postgresql-18.6-1-windows-x64-binaries.zip',
+  },
+  {
+    kind: 'run',
+    text: 'Downloading',
+    fraction: 0.34,
+    note: '12.4 MB/s · 0m 22s left',
+  },
+  { kind: 'step', mark: 'ok', text: 'Downloaded', note: '344.0 MB' },
+  { kind: 'label', tag: '  Verified', text: ' SHA-256 matches' },
   { kind: 'dim', text: '  …' },
 ];
 

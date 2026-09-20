@@ -6,12 +6,16 @@
  * of them cannot part company. `docs/ANGULAR-TASK.md` says which pages there
  * are; this is that list, turned into something the site can render.
  *
- * **The groups are the CLI's own headings.** `sloop` with no arguments opens a
- * menu whose home screen reads DATABASES, BACKUPS, COPYING, READING, BACKUP
- * KEY, THIS MACHINE, THE BACKGROUND SERVICE — so somebody who learned the tool
- * from the menu finds the docs already arranged the way they think. Start here
- * and Reference are the two the menu has no equivalent of, and they are first
- * and last for the same reason they would be in a book.
+ * **The groups follow the CLI's own shape.** `sloop` with no arguments opens a
+ * menu of six doors — Databases, Backups, Copy a database, Look inside one,
+ * Background service, This machine — so somebody who learned the tool from the
+ * menu finds the docs already arranged the way they think. Start here and
+ * Reference are the two the menu has no equivalent of, and they are first and
+ * last for the same reason they would be in a book.
+ *
+ * The groups were the menu's seven all-caps headings until `R30` took those off
+ * the home screen; the tree is the same tree, and the words above it are the
+ * doors now.
  *
  * `blurb` and `covers` are written from `docs/TOTAL_FEATURE_LIST.md`, which is
  * the whole of what the CLI does. They describe a page's subject and are never
@@ -237,7 +241,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
           'service status, service start and service stop.',
           'That nothing is written to crontab, Task Scheduler or a systemd timer.',
           'A missed run caught up once and labelled late, and a collision with a manual run that exits 7 and stands aside.',
-          'Which four commands need an administrator or sudo, and that sloop asks before it does anything.',
+          'Which commands need an administrator or sudo — reset and uninstall among them — and that sloop asks before it does anything.',
         ],
       },
       {
@@ -288,7 +292,8 @@ export const DOCS_NAV: readonly DocsGroup[] = [
         blurb:
           'Put the machine back to the moment sloop was installed — and the one thing that can still be lost.',
         covers: [
-          'What reset removes and what it leaves.',
+          'What reset removes and what it leaves — the service, every server sloop installed, and every password it filed.',
+          'That it asks for an administrator at the door, before anything is destroyed.',
           'How origin decides whether a PostgreSQL is destroyed or merely left alone.',
           'That backups are never deleted. Not by reset, not by uninstall, not ever.',
           'The one thing that can still be lost: an encrypted backup needs a private key, and the Argon2id vault holding it is inside the database reset destroys.',

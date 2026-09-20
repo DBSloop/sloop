@@ -61,9 +61,8 @@ export class Ssh {
     },
     { kind: 'dim', text: '  over deploy@bastion.example.com, from the agent' },
     {
-      kind: 'warn',
-      tag: '  127.0.0.1:5432 is as bastion.example.com sees it',
-      text: ', not as this machine does',
+      kind: 'dim',
+      text: '  127.0.0.1:5432 is as bastion.example.com sees it, not as this machine does',
     },
   ];
 
@@ -88,7 +87,7 @@ export class Ssh {
       text: '  postgres://app@127.0.0.1:5432/orders through ssh://deploy@bastion.example.com:22',
       note: '  project',
     },
-    { kind: 'bad', tag: 'error:', text: ' ssh could not reach deploy@bastion.example.com' },
+    { kind: 'step', mark: 'bad', text: 'ssh could not reach deploy@bastion.example.com' },
     {
       kind: 'dim',
       text: '  hint: ssh: Could not resolve hostname bastion.example.com: Name or service not known',

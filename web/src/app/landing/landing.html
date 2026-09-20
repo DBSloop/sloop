@@ -386,52 +386,91 @@
   </section>
 
   <!-- ═══ 02 · Two surfaces ═══════════════════════════════════════════════
-       Terminal first on this one. The menu is the thing being described, and
-       putting it on the left inverts the rhythm of the section above it.
+       Reading and the six doors side by side, then the screens across the full
+       width. A home screen is eighty-six characters of padded columns and a
+       result screen is not much less; in a half-width block both scroll, and a
+       transcript somebody has to drag sideways is a transcript they do not
+       read — the same reason section 03 puts `db list` full width.
   -->
   <section class="border-b border-line" id="surfaces">
-    <div
-      class="mx-auto grid max-w-[84rem] gap-10 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-[minmax(0,1fr)_minmax(0,30rem)] lg:gap-14 lg:px-12 lg:py-28"
-    >
-      <div class="min-w-0 lg:order-last" appReveal>
-        <p class="flex items-center gap-3 font-mono text-xs text-accent">
-          <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>02
-        </p>
-        <h2 class="mt-3 max-w-[18ch] text-3xl font-semibold sm:text-4xl">
-          A menu anyone can drive. A flag a scheduler can run.
-        </h2>
-        <p class="mt-6 max-w-measure text-base text-muted">
-          <code class="font-mono text-sm text-text">sloop</code> on its own opens an interactive
-          menu, and <strong class="font-semibold text-text">every command is on it</strong> — thirty
-          of them, under seven headings, each one a flow that asks for what it needs. It
-          reimplements nothing: a screen collects exactly what a flag carries and then calls the
-          same function the flag calls, so the two surfaces cannot drift apart.
-        </p>
-        <p class="mt-4 max-w-measure text-base text-muted">
-          It runs in the alternate screen buffer rather than clearing yours, so nothing lands in
-          scrollback and quitting gives you back exactly the terminal you had.
-          <code class="font-mono text-sm text-text">← Back</code> is on every menu and
-          <code class="font-mono text-sm text-text">Esc</code> leaves any prompt. A machine that has
-          not been set up opens on Setup and nothing else.
-        </p>
-        <p class="mt-4 max-w-measure text-base text-muted">
-          And every interactive run ends by printing the flag form of what it just did — after
-          leaving the alternate screen, so the line survives in the scrollback you keep. A session
-          you worked out by hand becomes a line you can schedule.
-        </p>
+    <div class="mx-auto max-w-[84rem] px-5 py-16 sm:px-8 sm:py-20 lg:px-12 lg:py-28">
+      <div class="grid gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,28rem)] lg:gap-14">
+        <div class="min-w-0" appReveal>
+          <p class="flex items-center gap-3 font-mono text-xs text-accent">
+            <span aria-hidden="true" class="h-px w-8 bg-accent/45"></span>02
+          </p>
+          <h2 class="mt-3 max-w-[18ch] text-3xl font-semibold sm:text-4xl">
+            A menu anyone can drive. A flag a scheduler can run.
+          </h2>
+          <p class="mt-6 max-w-measure text-base text-muted">
+            <code class="font-mono text-sm text-text">sloop</code> on its own opens an interactive
+            menu, and <strong class="font-semibold text-text">every command is on it</strong> —
+            six doors on the front page, with the commands one keystroke behind the one they belong
+            to. It reimplements nothing: a screen collects exactly what a flag carries and then
+            calls the same function the flag calls, so the two surfaces cannot drift apart.
+          </p>
+          <p class="mt-4 max-w-measure text-base text-muted">
+            Typing finds a command wherever it lives.
+            <code class="font-mono text-sm text-text">mirror</code> is not written on the front
+            page, and typing it still lands on the door that holds it — every name behind a
+            door is matched, not only the six you can see.
+          </p>
+          <p class="mt-4 max-w-measure text-base text-muted">
+            <strong class="font-semibold text-text">The job runs inside the screen.</strong> Every
+            line it prints, every password it asks for and every confirmation you type is drawn in
+            the alternate buffer — sloop does not hand your terminal back until you quit, and
+            quitting gives you back exactly the terminal you had.
+            <code class="font-mono text-sm text-text">← Back</code> is on every menu and
+            <code class="font-mono text-sm text-text">Esc</code> leaves any prompt. A machine that
+            has not been set up opens on Setup and nothing else.
+          </p>
+          <p class="mt-4 max-w-measure text-base text-muted">
+            And because nothing a job prints survives that screen, every finished run lands on one
+            of its own: what it did, every step it took, and the flag form of what just ran. A
+            session you worked out by hand becomes a line you can schedule.
+          </p>
+        </div>
 
-        <div class="mt-7 max-w-measure" [appReveal]="120">
-          <app-terminal caption="after the run, in your scrollback" [lines]="equivalentSnippet" />
+        <div class="min-w-0" [appReveal]="120">
+          <p class="font-mono text-xs uppercase tracking-[0.14em] text-faint">
+            What is behind the six doors
+          </p>
+          <ol class="mt-4 grid gap-px overflow-hidden rounded-xl border border-line bg-line">
+            @for (door of doors; track door.title) {
+              <li class="bg-surface px-5 py-3">
+                <p class="flex flex-wrap items-baseline gap-x-3">
+                  <span class="text-sm font-semibold text-text">{{ door.title }}</span>
+                  <code class="font-mono text-xs text-accent">{{ door.command }}</code>
+                </p>
+                <p class="mt-1 text-sm text-muted">{{ door.holds }}</p>
+              </li>
+            }
+          </ol>
+          <p class="mt-4 max-w-measure text-sm text-faint">
+            Thirty commands under seven headings was the front page before this one, and it was a
+            list nobody read to the end of. Six doors is a page you can take in at a glance.
+          </p>
         </div>
       </div>
 
-      <div class="min-w-0 lg:order-first" [appReveal]="60">
+      <div class="mt-12" [appReveal]="60">
         <app-terminal caption="the home screen" [lines]="homeScreen" />
         <p class="mt-4 max-w-measure text-sm text-faint">
-          Every item says what it does rather than repeating its own name, and carries the command
-          that does the same thing — so the menu teaches the flags rather than hiding them. The rows
-          marked <code class="font-mono text-xs">…</code> are the rest of each heading, left out
-          here and not out of the screen.
+          The mark sits beside the facts rather than above them, so the list below it has room to
+          be a list. Every row is three columns — what it is called, what it is currently
+          doing in the colour that fact deserves, and the command that does the same thing in grey
+          on the right — and the columns are measured across the whole list rather than per
+          row.
+        </p>
+      </div>
+
+      <div class="mt-10" [appReveal]="60">
+        <app-terminal caption="where a finished job lands" [lines]="resultScreen" />
+        <p class="mt-4 max-w-measure text-sm text-faint">
+          A tick, a cross or a triangle on every status — green worked, red did not, amber
+          worked and there is something to know about it. The way out of a result is
+          <code class="font-mono text-xs">← Home</code> and nothing else is on the screen: the
+          thing it had just done used to sit there selected, and Enter on it did that thing again.
         </p>
       </div>
     </div>

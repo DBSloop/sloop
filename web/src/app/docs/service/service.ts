@@ -10,6 +10,8 @@ interface Duty {
   readonly command: string;
   readonly does: string;
   readonly elevated: boolean;
+  /** When elevation is only sometimes needed, the condition — otherwise absent. */
+  readonly only?: string;
 }
 
 /**
@@ -149,6 +151,23 @@ export class Service {
     { command: 'service schedule', does: 'back one up on a schedule', elevated: false },
     { command: 'service status', does: 'installed, running, last run, next run', elevated: false },
     { command: 'service activity', does: 'what it has recorded', elevated: false },
+    // **Not service commands, and on this table because they take the service
+    // off the machine.** reset and uninstall remove everything sloop put here,
+    // the registration included — so they ask the same question, at the door,
+    // before anything is destroyed. `commands::reset::run` calls exactly the
+    // `elevation::require` this page's refusal comes from.
+    {
+      command: 'reset',
+      does: 'puts the machine back to a fresh install',
+      elevated: true,
+      only: 'when a service is registered',
+    },
+    {
+      command: 'uninstall',
+      does: 'the same, plus the binary',
+      elevated: true,
+      only: 'when a service is registered',
+    },
   ];
 
   // ── Attaching ─────────────────────────────────────────────────────────────

@@ -73,6 +73,13 @@ interface Rule {
  * that way. A page that rounded them to `MB` would be the only place in this
  * project that says something the binary does not.
  */
+/** One door on the home screen, for the panel that says what is behind them. */
+interface Door {
+  readonly title: string;
+  readonly command: string;
+  readonly holds: string;
+}
+
 @Component({
   selector: 'app-landing',
   imports: [Depth, InstallCommand, Mark, Reveal, RouterLink, Stones, Strata, Terminal],
@@ -172,6 +179,40 @@ export class Landing {
     { flag: 'otherwise', means: 'the global registry.' },
   ];
 
+  /**
+   * The six doors, and what each one holds.
+   *
+   * `ui::screen::DOORS`, and the commands behind each are that door's `leaves`.
+   * The front page carries none of these words — it is six lines — and typing
+   * any of them still finds the door, because `Door::finds` matches on names
+   * the screen never draws.
+   */
+  protected readonly doors: readonly Door[] = [
+    {
+      title: 'Databases',
+      command: 'sloop db …',
+      holds: 'add, create, list, test, edit, rename, remove, drop',
+    },
+    {
+      title: 'Backups',
+      command: 'sloop backup …',
+      holds: 'back one up, back all up, list, prune, restore',
+    },
+    { title: 'Copy a database', command: 'sloop mirror …', holds: 'mirror, sync' },
+    { title: 'Look inside one', command: 'sloop query …', holds: 'query' },
+    {
+      title: 'Background service',
+      command: 'sloop service …',
+      holds: 'install, attach, schedule, activity, status, detach, start, stop, uninstall',
+    },
+    {
+      title: 'This machine',
+      command: 'sloop doctor',
+      holds:
+        "install a database server, open sloop's own database, doctor, export the backup key, import one",
+    },
+  ];
+
   /** Frozen at 1.0, because automation depends on them. `cli/src/exit.rs`. */
   protected readonly exitCodes: readonly ExitCode[] = [
     { code: '0', tone: 'ok', meaning: 'It worked.' },
@@ -206,47 +247,130 @@ export class Landing {
   // are faded there rather than cut short. One command each: the menu, the
   // service, and a backup.
 
-  /** `sloop` with no arguments opens the menu. These are its seven headings. */
+  /**
+   * `sloop` with no arguments opens the menu, and this is its front page.
+   *
+   * **Six doors**, in a window narrow enough that the CLI draws the titles and
+   * nothing else — `paint::option`'s last branch, where a row under about
+   * twenty-four columns of room carries its title alone. The commands behind
+   * each door are one keystroke away, and typing `mirror` here still finds the
+   * door that holds it, because `Door::finds` carries the word the screen does
+   * not draw.
+   */
   protected readonly menuSnippet: readonly TerminalLine[] = [
     { kind: 'prompt', text: 'sloop' },
-    { kind: 'head', tag: 'DATABASES', text: '' },
-    { kind: 'head', tag: 'BACKUPS', text: '' },
-    { kind: 'head', tag: 'COPYING', text: '' },
-    { kind: 'head', tag: 'READING', text: '' },
-    { kind: 'head', tag: 'BACKUP KEY', text: '' },
-    { kind: 'head', tag: 'THIS MACHINE', text: '' },
-    { kind: 'head', tag: 'THE BACKGROUND SERVICE', text: '' },
+    { kind: 'name', tag: '?', text: ' What would you like to do?' },
+    { kind: 'row', text: 'Databases', here: true },
+    { kind: 'row', text: 'Backups' },
+    { kind: 'row', text: 'Copy a database' },
+    { kind: 'row', text: 'Look inside one' },
+    { kind: 'row', text: 'Background service' },
+    { kind: 'row', text: 'This machine' },
   ];
 
   /**
-   * The same screen, with enough of its rows to show how one is drawn.
+   * The same screen with room to be itself, at the eighty-eight columns the
+   * design was drawn on.
    *
-   * Every leaf carries its title and the command that does the same thing —
-   * `ui::screen::HOME`, where each `Leaf` holds both. The `…` rows are the rest
-   * of each heading: forty items is a screen, not a figure on a web page, and
-   * a marked cut is better than an unmarked one.
+   * **The mark beside the facts, not stacked under them.** Stacked, this header
+   * took eight rows of art, a rule and three rows of facts — twenty of a
+   * twenty-four-row terminal, which left the list a five-row keyhole. Side by
+   * side they take eight rows together. The `lead` on each line is the wordmark
+   * column, exactly as `paint::marked` lays it out.
+   *
+   * **Three columns in every row**, because that is `paint::option`: the title,
+   * then the thing worth knowing in the colour it deserves — green for a thing
+   * that is working, amber for one that wants attention, grey for a phrase that
+   * is only a description — then the flag form in grey on the right. The
+   * columns are measured across the whole list rather than per row, which is
+   * most of what stops a list looking cluttered.
    */
   protected readonly homeScreen: readonly TerminalLine[] = [
     { kind: 'prompt', text: 'sloop' },
-    { kind: 'head', tag: 'DATABASES', text: '' },
-    { text: '  Tell sloop about a database   ', note: 'sloop db add <name>' },
-    { text: '  Make a new database           ', note: 'sloop db create <name>' },
-    { text: '  Delete one from the server    ', note: 'sloop db drop <name>' },
-    { kind: 'dim', text: '  …' },
-    { kind: 'head', tag: 'BACKUPS', text: '' },
-    { text: '  Back one up now               ', note: 'sloop backup <name>' },
-    { text: '  Clear out the old ones        ', note: 'sloop backups prune --keep 7' },
-    { kind: 'dim', text: '  …' },
-    { kind: 'head', tag: 'COPYING', text: '' },
+    { text: ' ' },
+    { lead: '       _', text: '' },
     {
-      text: '  Mirror, an exact copy         ',
-      note: 'sloop mirror <source> --to <destination>',
+      lead: '      | |                        ',
+      kind: 'head',
+      tag: 'sloop',
+      text: '',
+      note: '  v0.1.1',
     },
-    { kind: 'dim', text: '  …' },
-    { kind: 'head', tag: 'THE BACKGROUND SERVICE', text: '' },
-    { text: '  Run sloop in the background   ', note: 'sloop service install' },
-    { text: '  Watch a database              ', note: 'sloop service attach <name>' },
-    { kind: 'dim', text: '  …' },
+    {
+      lead: '   ___| | ___   ___  _ __        ',
+      text: 'your databases, backed up and moved about',
+    },
+    { lead: "  / __| |/ _ \\ / _ \\| '_ \\", text: '' },
+    {
+      lead: '  \\__ \\ | (_) | (_) | |_) |      ',
+      kind: 'chips',
+      text: '',
+      chips: [
+        { mark: 'ok', text: '3 databases' },
+        { mark: 'ok', text: 'last backup 2h ago' },
+      ],
+    },
+    {
+      lead: '  |___/_|\\___/ \\___/| .__/       ',
+      kind: 'chips',
+      text: '',
+      chips: [{ mark: 'ok', text: 'service running' }],
+    },
+    {
+      lead: '                    | |          ',
+      kind: 'dim',
+      text: 'C:\\Users\\you\\.sloop  ·  the global registry',
+    },
+    { lead: '                    |_|', text: '' },
+    { text: ' ' },
+    { kind: 'name', tag: '?', text: ' What would you like to do?' },
+    {
+      kind: 'row',
+      here: true,
+      text: 'Databases',
+      middle: '3 registered',
+      hue: 'ok',
+      note: 'sloop db …',
+    },
+    {
+      kind: 'row',
+      text: 'Backups',
+      middle: '12 kept · newest 2h ago',
+      hue: 'ok',
+      note: 'sloop backup …',
+    },
+    {
+      kind: 'row',
+      text: 'Copy a database',
+      middle: 'mirror exactly, or merge with sync',
+      note: 'sloop mirror …',
+    },
+    {
+      kind: 'row',
+      text: 'Look inside one',
+      middle: 'tables and rows, with no SQL to type',
+      note: 'sloop query …',
+    },
+    {
+      kind: 'row',
+      text: 'Background service',
+      middle: 'running',
+      hue: 'ok',
+      note: 'sloop service …',
+    },
+    {
+      kind: 'row',
+      text: 'This machine',
+      middle: 'servers, the backup key, and a health check',
+      note: 'sloop doctor',
+    },
+    { text: ' ' },
+    { kind: 'row', text: 'Quit', at: 2 },
+    { text: ' ' },
+    {
+      kind: 'dim',
+      text: '  ↑↓ to move, enter to choose, esc to go back, or type a few letters to filter',
+    },
   ];
 
   /** Installed, running, and coming back at boot — three separate questions. */
@@ -306,7 +430,14 @@ export class Landing {
     { text: ' ' },
     { kind: 'prompt', text: 'sloop backup shop' },
     { kind: 'name', tag: 'shop', text: '', note: '  postgres://app@db.internal:5432/orders' },
-    { kind: 'dim', text: '  postgres 17.9, TLS, 48 tables, 1284003 rows' },
+    {
+      kind: 'step',
+      mark: 'ok',
+      text: 'Connected',
+      note: 'postgres 17.9, TLS, 48 tables, 1284003 rows',
+    },
+    { kind: 'step', mark: 'ok', text: 'Dumped 48 tables', note: '432.6 MB, encrypted' },
+    { kind: 'step', mark: 'ok', text: 'Checked', note: '9f3ac1d2e8b0' },
     { kind: 'dim', text: '  backed up to backups/postgres/shop/20260919T031500Z' },
     { kind: 'dim', text: '  412.6 MiB in 12.8s, sha256 9f3ac1d2e8b0' },
     { kind: 'dim', text: '  taken 2026-09-19 09:15:00 +06:00 (20260919T031500Z)' },
@@ -330,9 +461,63 @@ export class Landing {
   ];
 
   /** What an interactive run leaves behind, which is the point of it. */
-  protected readonly equivalentSnippet: readonly TerminalLine[] = [
-    { kind: 'dim', text: '  The same thing, from a shell:' },
+  /**
+   * Where a finished job lands, and the reason there is such a screen.
+   *
+   * Nothing drawn inside the alternate buffer survives it, so what a job said
+   * while it ran is gone the moment it returns — this is what is left, and it
+   * holds the whole of it: the verdict, every step it took on a rail in the
+   * colour it settled with, and the flag form of what just ran, so a session
+   * somebody worked out by hand becomes a line they can schedule.
+   *
+   * **Its way out is `← Home`, not `← Back`**, and the list is otherwise empty:
+   * the thing it had just done used to sit there selected, so Enter on the
+   * screen saying a database had been created created another one.
+   */
+  protected readonly resultScreen: readonly TerminalLine[] = [
+    { text: ' ' },
+    { kind: 'trail', at: 2, text: '', crumbs: ['Backups', 'Back one up now'] },
+    { text: ' ' },
+    {
+      kind: 'verdict',
+      at: 2,
+      mark: 'ok',
+      text: 'DONE',
+      tag: 'Back one up now',
+      note: '4.2s',
+    },
+    { text: ' ' },
+    {
+      kind: 'step',
+      rail: true,
+      at: 2,
+      mark: 'ok',
+      text: 'Connected',
+      note: 'postgres 17.9, 2 tables, 10601 rows',
+    },
+    {
+      kind: 'step',
+      rail: true,
+      at: 2,
+      mark: 'ok',
+      text: 'Dumped 2 tables',
+      note: '67.6 kB, encrypted',
+    },
+    { kind: 'step', rail: true, at: 2, mark: 'ok', text: 'Checked', note: '9f2a1c4e77b0' },
+    {
+      kind: 'step',
+      rail: true,
+      at: 2,
+      mark: 'ok',
+      text: 'Verified',
+      note: 'exact count(*) on both sides',
+    },
+    { text: ' ' },
+    { kind: 'dim', text: '  the same thing, from a shell' },
     { kind: 'name', tag: '  sloop backup shop --yes', text: '' },
+    { text: ' ' },
+    { kind: 'name', tag: '?', text: ' That is done.' },
+    { kind: 'row', here: true, text: '← Home', at: 2 },
   ];
 
   /** A route, never a value. Not one of these phrases can hold a password. */
@@ -368,12 +553,26 @@ export class Landing {
   protected readonly backupOutput: readonly TerminalLine[] = [
     { kind: 'prompt', text: 'sloop backup shop' },
     { kind: 'name', tag: 'shop', text: '', note: '  postgres://app@db.internal:5432/orders' },
-    { kind: 'dim', text: '  postgres 17.9, TLS, 48 tables, 1284003 rows' },
+    {
+      kind: 'step',
+      mark: 'ok',
+      text: 'Connected',
+      note: 'postgres 17.9, TLS, 48 tables, 1284003 rows',
+    },
+    { kind: 'step', mark: 'ok', text: 'Dumped 48 tables', note: '432.6 MB, encrypted' },
+    { kind: 'step', mark: 'ok', text: 'Checked', note: '9f3ac1d2e8b0' },
     { kind: 'dim', text: '  backed up to backups/postgres/shop/20260919T031500Z' },
     { kind: 'dim', text: '  412.6 MiB in 12.8s, sha256 9f3ac1d2e8b0' },
     { kind: 'dim', text: '  taken 2026-09-19 09:15:00 +06:00 (20260919T031500Z)' },
     { text: ' ' },
     { kind: 'prompt', text: 'sloop mirror shop --to shopcopy --confirm shopcopy' },
+    { kind: 'dim', text: '  copied in 2.4s' },
+    {
+      kind: 'step',
+      mark: 'warn',
+      text: 'Verified',
+      note: '1 table moved — the source was live',
+    },
     { kind: 'dim', text: '  verifying — exact count(*) on both sides' },
     { kind: 'dim', text: '    orders        500 → 500' },
     { kind: 'dim', text: '    line_items   1284 → 1284' },

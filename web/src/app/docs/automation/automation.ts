@@ -239,7 +239,7 @@ export class Automation {
     { kind: 'dim', text: '  exactly' },
     { text: ' ' },
     { kind: 'prompt', text: 'sloop restore orders --confirm orders' },
-    { kind: 'ok', tag: '  3 of 3 tables matched', text: '   ← exit 0' },
+    { kind: 'dim', text: '  3 of 3 tables matched   ← exit 0' },
   ];
 
   /** The three ways of saying yes, and what each one cannot do. */
@@ -290,13 +290,13 @@ export class Automation {
       code: 1,
       tone: 'bad',
       meaning: 'Something went wrong that none of the others describe.',
-      scheduler: 'Alert. It is also what a process gets from a panic, so nothing pretends a crash was a category.',
+      scheduler:
+        'Alert. It is also what a process gets from a panic, so nothing pretends a crash was a category.',
     },
     {
       code: 2,
       tone: 'bad',
-      meaning:
-        'Bad usage, an unknown database name, or a question with no terminal to ask it at.',
+      meaning: 'Bad usage, an unknown database name, or a question with no terminal to ask it at.',
       scheduler:
         'Fix the command, not the machine. This is the code a scheduled line gets on its first morning, and the message names the flag that answers it.',
     },
@@ -450,7 +450,10 @@ export class Automation {
     },
     { kind: 'bad', tag: '    terminal to ask at",', text: '' },
     { kind: 'dim', text: '  "exit": 2,' },
-    { kind: 'dim', text: '  "hint": "run `sloop key export` once, then this run will go through",' },
+    {
+      kind: 'dim',
+      text: '  "hint": "run `sloop key export` once, then this run will go through",',
+    },
     { kind: 'dim', text: '  "ok": false' },
     { kind: 'dim', text: '}' },
   ];
@@ -462,7 +465,9 @@ export class Automation {
     { text: ' ' },
     { kind: 'prompt', text: 'cat nightly.log' },
     { kind: 'name', tag: 'orders', text: '  postgres://app@127.0.0.1:5451/orders' },
-    { kind: 'dim', text: '  postgres 17.9, 3 tables, 12752 rows' },
+    { kind: 'step', mark: 'ok', text: 'Connected', note: 'postgres 17.9, 3 tables, 12752 rows' },
+    { kind: 'step', mark: 'ok', text: 'Dumped 3 tables', note: '84.1 kB, encrypted' },
+    { kind: 'step', mark: 'ok', text: 'Checked', note: '0b2b7d79c729' },
     {
       kind: 'dim',
       text: `  backed up to ${this.path('backups', 'postgres', 'orders', '20260919T162303Z')}`,
@@ -490,16 +495,12 @@ export class Automation {
     { kind: 'prompt', text: 'sloop backup --all' },
     { kind: 'name', tag: 'archive', text: '  postgres://app@127.0.0.1:5999/archive' },
     {
-      kind: 'bad',
-      tag: 'error:',
-      text: ' archive: psql.exe failed against postgres://app@127.0.0.1:5999/archive:',
+      kind: 'step',
+      mark: 'bad',
+      text: 'archive: psql.exe failed against postgres://app@127.0.0.1:5999/archive:',
     },
-    {
-      kind: 'bad',
-      tag: '',
-      text: '  psql: error: connection to server at "127.0.0.1", port 5999 failed:',
-    },
-    { kind: 'bad', tag: '', text: '  Connection refused (0x0000274D/10061)' },
+    { text: '     psql: error: connection to server at "127.0.0.1", port 5999 failed:' },
+    { text: '     Connection refused (0x0000274D/10061)' },
     {
       kind: 'dim',
       text: '  hint: check the host, port, user and password sloop was given: `sloop db list`',
@@ -507,14 +508,18 @@ export class Automation {
     { kind: 'dim', text: '  shows them and `sloop db test <name>` tries them' },
     { text: ' ' },
     { kind: 'name', tag: 'nightly', text: '  postgres://app@127.0.0.1:5451/orders' },
-    { kind: 'dim', text: '  postgres 17.9, 3 tables, 12752 rows' },
+    { kind: 'step', mark: 'ok', text: 'Connected', note: 'postgres 17.9, 3 tables, 12752 rows' },
+    { kind: 'step', mark: 'ok', text: 'Dumped 3 tables', note: '84.0 kB, encrypted' },
+    { kind: 'step', mark: 'ok', text: 'Checked', note: '52549a64b0ee' },
     { kind: 'dim', text: '  82.0 KiB in 0.3s, sha256 52549a64b0ee' },
     { text: ' ' },
     { kind: 'name', tag: 'orders', text: '  postgres://app@127.0.0.1:5451/orders' },
-    { kind: 'dim', text: '  postgres 17.9, 3 tables, 12752 rows' },
+    { kind: 'step', mark: 'ok', text: 'Connected', note: 'postgres 17.9, 3 tables, 12752 rows' },
+    { kind: 'step', mark: 'ok', text: 'Dumped 3 tables', note: '84.1 kB, encrypted' },
+    { kind: 'step', mark: 'ok', text: 'Checked', note: 'cfd64780e06e' },
     { kind: 'dim', text: '  82.1 KiB in 0.2s, sha256 cfd64780e06e' },
     { text: ' ' },
-    { kind: 'warn', tag: 'backed up 2 of 3 — 1 failed: archive', text: '   ← exit 3' },
+    { kind: 'name', tag: 'backed up 2 of 3', text: '', note: ' — 1 failed: archive   ← exit 3' },
   ]);
 
   /** The same run, as the document a script reads instead. */

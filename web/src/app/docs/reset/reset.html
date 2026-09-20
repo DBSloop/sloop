@@ -30,6 +30,26 @@
     </p>
   </div>
 
+  <h2 id="elevation">It asks for an administrator at the door</h2>
+  <p>
+    A reset takes the <a routerLink="/docs/service">background service</a> off the machine, and
+    changing what a machine runs at boot needs more than an ordinary account. So
+    <strong>that is the first thing either command checks</strong> — before the survey, before the
+    list, before the name is typed — and a run that cannot do it stops while the machine is still
+    whole rather than deleting the cluster and then discovering it cannot finish.
+  </p>
+
+  <div class="mt-7">
+    <app-terminal class="block" caption="nothing has been changed" [lines]="notElevated()" />
+  </div>
+
+  <p>
+    Run it again from {{ elevate() }} and it carries on.
+    <strong>Only a machine with a service registered needs this</strong>: there is nothing else in a
+    reset that an ordinary account cannot do, because everything else sloop put here went under your
+    own profile in the first place.
+  </p>
+
   <h2 id="what-goes">What goes, and what stays</h2>
   <p>
     <code>sloop reset</code> surveys the machine before it does anything to it, and prints both
@@ -85,8 +105,8 @@
   <h2 id="origin">One question decides how much goes</h2>
   <p>
     <strong>Who installed the PostgreSQL.</strong> sloop wrote the answer down at
-    <a routerLink="/docs/postgres">setup</a> — <code>origin</code> in
-    <code>server.toml</code> — and reset reads it rather than guessing.
+    <a routerLink="/docs/postgres">setup</a> — <code>origin</code> in <code>server.toml</code> — and
+    reset reads it rather than guessing.
   </p>
 
   <div class="docs-bare mt-7 space-y-5">
@@ -153,8 +173,8 @@
     An encrypted backup is readable only with its <a routerLink="/docs/backup-key">private key</a>.
     On a machine with a working keyring that key lives in the keyring, which reset does not touch.
     But on a machine with no keyring — a headless Linux box — the key lives in the Argon2id vault,
-    and <strong>the vault is inside <code>sloop_database</code></strong>, which is precisely what
-    reset destroys.
+    and <strong>the vault is inside <code>sloop_database</code></strong
+    >, which is precisely what reset destroys.
   </p>
 
   <div class="docs-bare mt-7 rounded-xl border border-warn/30 bg-surface p-5 sm:p-6">
@@ -207,7 +227,9 @@
   </div>
 
   <p>
-    <strong>It will not quietly strand sloop's state behind a binary that could still remove it.</strong>
+    <strong
+      >It will not quietly strand sloop's state behind a binary that could still remove it.</strong
+    >
     A script cannot know which PostgreSQL was sloop's, so rather than guessing it stops and names
     both ways forward — the same shape rule 4 takes in the CLI, in a file with no terminal at all:
   </p>
@@ -232,11 +254,11 @@
   } @else {
     <p>
       The <code>PATH</code> block comes out of every startup file that could be holding one —
-      <code>.bashrc</code>, <code>.bash_profile</code>, <code>.profile</code>,
-      <code>.zshrc</code>, <code>.kshrc</code> and fish's <code>conf.d</code> — not only the current
-      shell's. Somebody who installed under bash and has since moved to zsh has the block in
-      <code>.bashrc</code>, and looking at <code>$SHELL</code> alone would leave it there pointing
-      at a binary that no longer exists.
+      <code>.bashrc</code>, <code>.bash_profile</code>, <code>.profile</code>, <code>.zshrc</code>,
+      <code>.kshrc</code> and fish's <code>conf.d</code> — not only the current shell's. Somebody
+      who installed under bash and has since moved to zsh has the block in <code>.bashrc</code>, and
+      looking at <code>$SHELL</code> alone would leave it there pointing at a binary that no longer
+      exists.
     </p>
   }
 

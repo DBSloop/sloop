@@ -142,7 +142,9 @@ export class Backups {
   protected readonly first = computed<readonly TerminalLine[]>(() => [
     { kind: 'prompt', text: 'sloop backup shop' },
     { kind: 'name', tag: 'shop', text: '', note: '  postgres://app@127.0.0.1:5443/shop' },
-    { kind: 'dim', text: '  postgres 17.9, 2 tables, 10601 rows' },
+    { kind: 'step', mark: 'ok', text: 'Connected', note: 'postgres 17.9, 2 tables, 10601 rows' },
+    { kind: 'step', mark: 'ok', text: 'Dumped 2 tables', note: '67.7 kB, encrypted' },
+    { kind: 'step', mark: 'ok', text: 'Checked', note: 'e68d1629c48f' },
     {
       kind: 'dim',
       text: `  backed up to ${this.path('backups', 'postgres', 'shop', '20260919T140939Z')}`,
@@ -155,7 +157,9 @@ export class Backups {
   protected readonly all = computed<readonly TerminalLine[]>(() => [
     { kind: 'prompt', text: 'sloop backup --all' },
     { kind: 'name', tag: 'archive', text: '', note: '  postgres://app@127.0.0.1:5443/archive' },
-    { kind: 'dim', text: '  postgres 17.9, 0 tables, 0 rows' },
+    { kind: 'step', mark: 'ok', text: 'Connected', note: 'postgres 17.9, 0 tables, 0 rows' },
+    { kind: 'step', mark: 'ok', text: 'Dumped 0 tables', note: '1.1 kB, encrypted' },
+    { kind: 'step', mark: 'ok', text: 'Checked', note: '77d875ac2fcb' },
     {
       kind: 'dim',
       text: `  backed up to ${this.path('backups', 'postgres', 'archive', '20260919T140947Z')}`,
@@ -164,14 +168,12 @@ export class Backups {
     { text: ' ' },
     { kind: 'name', tag: 'gone', text: '', note: '  postgres://app@127.0.0.1:5443/gone' },
     {
-      kind: 'bad',
-      tag: 'error:',
-      text: ' gone: psql.exe failed against postgres://app@127.0.0.1:5443/gone: psql: error:',
+      kind: 'step',
+      mark: 'bad',
+      text: 'gone: psql.exe failed against postgres://app@127.0.0.1:5443/gone: psql: error:',
     },
     {
-      kind: 'bad',
-      tag: '',
-      text: '  connection to server at "127.0.0.1", port 5443 failed: FATAL:  database "gone" does not exist',
+      text: '     connection to server at "127.0.0.1", port 5443 failed: FATAL:  database "gone" does not exist',
     },
     {
       kind: 'dim',
@@ -180,21 +182,27 @@ export class Backups {
     { kind: 'dim', text: '  them and `sloop db test <name>` tries them' },
     { text: ' ' },
     { kind: 'name', tag: 'ledger', text: '', note: '  postgres://app@127.0.0.1:5443/ledger' },
-    { kind: 'dim', text: '  postgres 17.9, 1 table, 4210 rows' },
+    { kind: 'step', mark: 'ok', text: 'Connected', note: 'postgres 17.9, 1 table, 4210 rows' },
+    { kind: 'step', mark: 'ok', text: 'Dumped 1 table', note: '23.2 kB, encrypted' },
+    { kind: 'step', mark: 'ok', text: 'Checked', note: 'b9726982f168' },
     { kind: 'dim', text: '  22.7 KiB in 0.2s, sha256 b9726982f168' },
     { text: ' ' },
     { kind: 'name', tag: 'shop', text: '', note: '  postgres://app@127.0.0.1:5443/shop' },
-    { kind: 'dim', text: '  postgres 17.9, 2 tables, 10601 rows' },
+    { kind: 'step', mark: 'ok', text: 'Connected', note: 'postgres 17.9, 2 tables, 10601 rows' },
+    { kind: 'step', mark: 'ok', text: 'Dumped 2 tables', note: '67.6 kB, encrypted' },
+    { kind: 'step', mark: 'ok', text: 'Checked', note: '2698a4bdaec9' },
     { kind: 'dim', text: '  66.0 KiB in 0.2s, sha256 2698a4bdaec9' },
     { text: ' ' },
-    { kind: 'warn', tag: 'backed up 3 of 4', text: ' — 1 failed: gone' },
+    { kind: 'name', tag: 'backed up 3 of 4', text: '', note: ' — 1 failed: gone' },
   ]);
 
   /** `--replace` keeps one copy at a fixed path. */
   protected readonly replace = computed<readonly TerminalLine[]>(() => [
     { kind: 'prompt', text: 'sloop backup ledger --replace' },
     { kind: 'name', tag: 'ledger', text: '', note: '  postgres://app@127.0.0.1:5443/ledger' },
-    { kind: 'dim', text: '  postgres 17.9, 1 table, 4210 rows' },
+    { kind: 'step', mark: 'ok', text: 'Connected', note: 'postgres 17.9, 1 table, 4210 rows' },
+    { kind: 'step', mark: 'ok', text: 'Dumped 1 table', note: '23.2 kB, encrypted' },
+    { kind: 'step', mark: 'ok', text: 'Checked', note: '07daf4371ce1' },
     {
       kind: 'dim',
       text: `  backed up to ${this.path('backups', 'postgres', 'ledger', 'latest')}`,
@@ -294,7 +302,7 @@ export class Backups {
     { kind: 'dim', text: '4 backups, 25.3 MiB · 1 damaged · every dump hashed' },
     { text: ' ' },
     { kind: 'prompt', text: 'echo exit $?' },
-    { kind: 'warn', tag: 'exit 6', text: '' },
+    { text: 'exit 6' },
   ];
 
   // ── Retention ─────────────────────────────────────────────────────────────
@@ -302,17 +310,17 @@ export class Backups {
   protected readonly prune: readonly TerminalLine[] = [
     { kind: 'prompt', text: 'sloop backups prune shop --keep 2 --dry-run' },
     {
-      kind: 'warn',
+      kind: 'name',
       tag: '  remove',
       text: ' 2026-09-19 20:10:18 +06:00  66.0 KiB, encrypted · 10601 rows  20260919T141018Z',
     },
     {
-      kind: 'warn',
+      kind: 'name',
       tag: '  remove',
       text: ' 2026-09-19 20:09:48 +06:00  66.0 KiB, encrypted · 10601 rows  20260919T140948Z',
     },
     {
-      kind: 'warn',
+      kind: 'name',
       tag: '  remove',
       text: ' 2026-09-19 20:09:39 +06:00  66.1 KiB, encrypted · 10601 rows  20260919T140939Z',
     },
@@ -360,15 +368,16 @@ export class Backups {
       text: '  66.0 KiB of postgres 17.9, encrypted, 10601 rows, sha256 2657e422a4af',
     },
     { kind: 'dim', text: '  into shop — postgres 17.9' },
-    { kind: 'warn', tag: '  replacing what is there now', text: ' — 2 tables, 10601 rows' },
+    { kind: 'dim', text: '  replacing what is there now — 2 tables, 10601 rows' },
     { kind: 'name', tag: '?', text: ' type shop to destroy it, or anything else to stop: shop' },
     { kind: 'dim', text: '  cleared 2 tables' },
     { kind: 'dim', text: '  loaded in 0.2s' },
     { kind: 'dim', text: '  checking it against the counts the manifest recorded' },
+    { kind: 'step', mark: 'ok', text: 'Verified', note: 'exact count(*) on both sides' },
     { kind: 'dim', text: '  verifying — exact count(*) on both sides' },
-    { kind: 'ok', tag: '  public.customers  1284 → 1284', text: '' },
-    { kind: 'ok', tag: '  public.orders     9317 → 9317', text: '' },
-    { kind: 'ok', tag: '  2 of 2 tables matched', text: '' },
+    { kind: 'dim', text: '  public.customers  1284 → 1284' },
+    { kind: 'dim', text: '  public.orders     9317 → 9317' },
+    { kind: 'dim', text: '  2 of 2 tables matched' },
   ]);
 
   protected readonly from: readonly TerminalLine[] = [
@@ -407,15 +416,19 @@ export class Backups {
     { kind: 'dim', text: '  … loaded in 0.1s' },
     { kind: 'dim', text: '  checking it against the counts the manifest recorded' },
     {
-      kind: 'warn',
-      tag: "  verifying — estimates from the engine's own statistics — not proof",
-      text: '',
+      kind: 'step',
+      mark: 'ok',
+      text: 'Verified',
+      note: "estimates from the engine's own statistics — not proof",
+    },
+    {
+      kind: 'dim',
+      text: "  verifying — estimates from the engine's own statistics — not proof",
     },
     { kind: 'dim', text: '  public.entries  4210 → 4210' },
     {
-      kind: 'warn',
-      tag: '  1 of 1 tables matched',
-      text: ' — from estimates, so this is a glance and not a proof',
+      kind: 'dim',
+      text: '  1 of 1 tables matched — from estimates, so this is a glance and not a proof',
     },
   ];
 
