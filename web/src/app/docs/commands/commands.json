@@ -1,6 +1,6 @@
 {
   "$generated": "web/tools/commands.mjs — do not edit by hand",
-  "version": "sloop 0.1.0",
+  "version": "sloop 0.1.1",
   "globalOptions": [
     {
       "short": null,
