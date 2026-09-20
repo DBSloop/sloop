@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { DocsPage } from '../docs-page';
 import { OS_LABEL, OsChoice } from '../os';
 import { Terminal, type TerminalLine } from '../../ui/terminal';
+import { CAPTURED_AT, RELEASE, RELEASE_V } from '../../version';
 
 /**
  * Installation.
@@ -25,8 +26,8 @@ import { Terminal, type TerminalLine } from '../../ui/terminal';
  * Linux install       the same round trip on ubuntu-latest, from CI run
  *                     35432962875, job "install (ubuntu-latest)" — 33 of 33
  * macOS install       the same, job "install (macos-latest)" — 33 of 33
- * by hand, Unix       run here in a shell against the real v0.1.0 release
- * by hand, Windows    run here in PowerShell against the real v0.1.0 release
+ * by hand, Unix       run here in a shell against the real release
+ * by hand, Windows    run here in PowerShell against the real release
  * removal             the uninstall half of the same round trips
  * ```
  *
@@ -168,8 +169,10 @@ export class Install {
    * what the binary ends up called.
    *
    * Run here against the real crates.io release: 1m 49s, and the `sloop` it
-   * produced reports `sloop 0.1.0`. The four hundred-odd `Compiling` lines in
-   * the middle are cut, and the cut is marked.
+   * produced reported the release `CAPTURED_AT` names. The version in the block
+   * is `RELEASE`, so the page describes what somebody installing today gets;
+   * the four hundred-odd `Compiling` lines in the middle are cut, and the cut
+   * is marked.
    */
   protected readonly withCargo = computed<readonly TerminalLine[]>(() => {
     const windows = this.os() === 'windows';
@@ -178,13 +181,13 @@ export class Install {
     return [
       { kind: 'prompt', text: 'cargo install dbsloop' },
       { text: '    Updating crates.io index' },
-      { text: '  Downloaded dbsloop v0.1.0' },
-      { text: '  Installing dbsloop v0.1.0' },
-      { text: '   Compiling dbsloop v0.1.0' },
+      { text: `  Downloaded dbsloop ${RELEASE_V}` },
+      { text: `  Installing dbsloop ${RELEASE_V}` },
+      { text: `   Compiling dbsloop ${RELEASE_V}` },
       { kind: 'dim', text: '   …' },
       { text: '    Finished `release` profile [optimized] target(s) in 1m 49s' },
       { text: `  Installing ${where}${binary}` },
-      { text: `   Installed package \`dbsloop v0.1.0\` (executable \`${binary}\`)` },
+      { text: `   Installed package \`dbsloop ${RELEASE_V}\` (executable \`${binary}\`)` },
     ];
   });
 }
@@ -199,7 +202,7 @@ const WINDOWS_INSTALL: readonly TerminalLine[] = [
   { text: '  installed C:\\Users\\you\\AppData\\Local\\Programs\\sloop\\bin\\sloop.exe' },
   { text: '  PATH entry added: %LOCALAPPDATA%\\Programs\\sloop\\bin' },
   { text: ' ' },
-  { text: 'sloop 0.1.0 is installed.' },
+  { text: `sloop ${RELEASE} is installed.` },
   { text: ' ' },
   { text: 'Restart your shell, or open a new terminal, before running sloop.' },
   { text: 'This one read its PATH when it started and will not see the new entry.' },
@@ -220,7 +223,7 @@ const LINUX_INSTALL: readonly TerminalLine[] = [
   { text: '  installed /home/you/.local/bin/sloop' },
   { text: '  PATH entry added to /home/you/.bashrc' },
   { text: ' ' },
-  { text: 'sloop 0.1.0 is installed.' },
+  { text: `sloop ${RELEASE} is installed.` },
   { text: ' ' },
   { text: 'Restart your shell, or start a new terminal, before running sloop.' },
   { text: 'A shell reads /home/you/.bashrc once, when it starts -- this one has already read it.' },
@@ -238,7 +241,7 @@ const MACOS_INSTALL: readonly TerminalLine[] = [
   { text: '  installed /Users/you/.local/bin/sloop' },
   { text: '  PATH entry added to /Users/you/.zshrc' },
   { text: ' ' },
-  { text: 'sloop 0.1.0 is installed.' },
+  { text: `sloop ${RELEASE} is installed.` },
   { text: ' ' },
   { text: 'Restart your shell, or start a new terminal, before running sloop.' },
   { text: 'A shell reads /Users/you/.zshrc once, when it starts -- this one has already read it.' },
@@ -261,7 +264,7 @@ const LINUX_BY_HAND: readonly TerminalLine[] = [
   { kind: 'prompt', text: 'tar -xzf sloop-x86_64-unknown-linux-musl.tar.gz' },
   { kind: 'prompt', text: 'install -m 755 sloop ~/.local/bin/sloop' },
   { kind: 'prompt', text: 'sloop --version' },
-  { text: 'sloop 0.1.0' },
+  { text: `sloop ${RELEASE}` },
 ];
 
 const MACOS_BY_HAND: readonly TerminalLine[] = [
@@ -276,7 +279,7 @@ const MACOS_BY_HAND: readonly TerminalLine[] = [
   { kind: 'prompt', text: 'tar -xzf sloop-aarch64-apple-darwin.tar.gz' },
   { kind: 'prompt', text: 'install -m 755 sloop ~/.local/bin/sloop' },
   { kind: 'prompt', text: 'sloop --version' },
-  { text: 'sloop 0.1.0' },
+  { text: `sloop ${RELEASE}` },
 ];
 
 const WINDOWS_BY_HAND: readonly TerminalLine[] = [
@@ -294,7 +297,7 @@ const WINDOWS_BY_HAND: readonly TerminalLine[] = [
   { kind: 'prompt', text: '$got  = (Get-FileHash $asset -Algorithm SHA256).Hash' },
   { kind: 'prompt', text: 'if ($got -ieq $want) { Expand-Archive $asset -DestinationPath . }' },
   { kind: 'prompt', text: '.\\sloop.exe --version' },
-  { text: 'sloop 0.1.0' },
+  { text: `sloop ${RELEASE}` },
 ];
 
 const WINDOWS_REMOVE: readonly TerminalLine[] = [

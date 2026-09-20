@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { DocsPage } from '../docs-page';
 import { OS_LABEL, OsChoice } from '../os';
 import { Terminal, type TerminalLine } from '../../ui/terminal';
+import { RELEASE } from '../../version';
 
 /** One exit code, for the pair of cards that tell `0` and `6` apart. */
 interface Ending {
@@ -234,7 +235,7 @@ export class Backups {
     { kind: 'prompt', text: 'cat manifest.json' },
     { text: '{' },
     { kind: 'dim', text: '  "version": 1,' },
-    { kind: 'dim', text: '  "sloop": "0.1.0",' },
+    { kind: 'dim', text: `  "sloop": "${RELEASE}",` },
     { kind: 'dim', text: '  "label": "shop",' },
     { kind: 'dim', text: '  "engine": "postgres",' },
     { kind: 'dim', text: '  "source": "postgres://app@127.0.0.1:5443/shop",' },

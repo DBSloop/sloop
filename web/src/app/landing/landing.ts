@@ -6,6 +6,7 @@ import { InstallCommand } from '../ui/install-command';
 import { Depth } from '../ui/depth';
 import { Reveal } from '../ui/reveal';
 import { Terminal, type TerminalLine } from '../ui/terminal';
+import { RELEASE_V } from '../version';
 import { Stones } from './stones';
 import { Strata } from './strata';
 
@@ -294,7 +295,7 @@ export class Landing {
       kind: 'head',
       tag: 'sloop',
       text: '',
-      note: '  v0.1.1',
+      note: `  ${RELEASE_V}`,
     },
     {
       lead: '   ___| | ___   ___  _ __        ',

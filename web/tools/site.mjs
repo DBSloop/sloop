@@ -667,6 +667,53 @@ if (unrendered.length > 0) {
   );
 }
 
+// ── 6b. One place says which sloop this is ────────────────────────────
+//
+// The site printed `0.1.0` in seventeen places while `0.1.1` was the release,
+// because every one of them was typed into a transcript by hand. They read
+// `src/app/version.ts` now, which reads the `version` the generated command
+// reference carries — and that comes from asking the binary.
+//
+// So this fails the build on a version literal anywhere else under `src/`. A
+// release becomes `npm run commands` and nothing else; forgetting it turns the
+// build red rather than leaving a number nobody notices.
+
+const versionFile = join(web, 'src', 'app', 'version.ts');
+const versionSource = readFileSync(versionFile, 'utf8');
+
+// The two numbers that are sloop's own. Everything else with dots in it —
+// `postgres 17.9`, `mysql 8.4.11` — is a fact about a database in a capture and
+// belongs exactly where it is.
+const release = JSON.parse(
+  readFileSync(join(web, 'src', 'app', 'docs', 'commands', 'commands.json'), 'utf8'),
+).version.replace(/^\D+/, '');
+const captured = versionSource.match(/CAPTURED_AT = '([^']+)'/)?.[1];
+
+if (!/^\d+\.\d+\.\d+$/.test(release) || !captured) {
+  fail(
+    'could not read which sloop this site documents',
+    `  release, from commands.json: ${release}`,
+    `  CAPTURED_AT, from version.ts: ${captured}`,
+  );
+}
+
+for (const file of sources(join(web, 'src'))) {
+  if (file === versionFile) {
+    continue;
+  }
+  const text = readFileSync(file, 'utf8');
+  const typed = [release, captured].filter((one) => text.includes(one));
+  if (typed.length > 0) {
+    fail(
+      `${file.slice(web.length + 1)} has sloop's version typed into it: ${typed.join(', ')}`,
+      '  src/app/version.ts is the one place that may hold one — RELEASE for the',
+      '  release this site documents, read from the generated command reference,',
+      '  and CAPTURED_AT for the build its transcripts were recorded on. Import',
+      '  one of those, so the next release is one command and not a hunt.',
+    );
+  }
+}
+
 // ── 7. Jekyll, and the shell nobody asked for ──────────────────────────────
 
 if (!CHECK_ONLY) {

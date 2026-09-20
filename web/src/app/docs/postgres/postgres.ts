@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { DocsPage } from '../docs-page';
 import { OS_LABEL, OsChoice } from '../os';
 import { Terminal, type TerminalLine } from '../../ui/terminal';
+import { RELEASE } from '../../version';
 
 /** One of the two things `server.toml` can say about whose server it is. */
 interface Whose {
@@ -124,7 +125,7 @@ export class Postgres {
     },
     {
       table: 'schema_migration',
-      holds: 'Which version of its own schema sloop has applied. Nine, at 0.1.0.',
+      holds: `Which version of its own schema sloop has applied. Nine, at ${RELEASE}.`,
     },
   ];
 

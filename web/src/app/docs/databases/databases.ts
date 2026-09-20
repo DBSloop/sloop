@@ -31,7 +31,8 @@ interface Step {
  *
  * **The binary matters.** `A7` was written from a `target/release` build four
  * features out of date and every transcript on it had to be recaptured. This one
- * was captured from a build of `20a6f21`, which is `sloop 0.1.0`.
+ * was captured from a build of `20a6f21`, which is the release `CAPTURED_AT`
+ * names in `src/app/version.ts`.
  *
  * ## The substitutions, named rather than hidden
  *
