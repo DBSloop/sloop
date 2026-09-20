@@ -67,11 +67,13 @@ impl Asking<'_> {
             ));
         }
 
-        let typed = rpassword::prompt_password(format!(
+        // **Through the console, like every other question this tool asks.** From a shell
+        // that is `rpassword` and nothing has changed; from the menu it is a box on the
+        // menu's own screen, because the terminal is never handed back any more.
+        let typed = crate::console::ask_hidden(&format!(
             "Password for {}@{LOOPBACK}:{}: ",
             server.superuser, server.port
-        ))
-        .map_err(|error| Failure::usage(format!("could not read the password: {error}")))?;
+        ))?;
         Ok(Secret::new(typed))
     }
 }
@@ -638,7 +640,10 @@ pub fn ask(
 
     Err(Failure::new(
         Exit::Connect,
-        format!("{} would not answer", server.url(as_who.database)),
+        format!(
+            "{} would not answer",
+            server.url_as(as_who.role, as_who.database)
+        ),
     )
     .hint(said))
 }
@@ -699,7 +704,7 @@ pub fn connects_as(
 
     Err(Failure::new(
         Exit::Connect,
-        format!("{} would not answer", server.url(database)),
+        format!("{} would not answer", server.url_as(role, database)),
     )
     .hint(said))
 }

@@ -246,16 +246,11 @@ pub(super) fn decide(
 
 /// Ask which database this is going into. `None` when nothing was named.
 fn ask_where(source: &str) -> Outcome<Option<String>> {
-    crate::report::ask(&format!(
+    let given = crate::console::ask(&format!(
         "{} {} goes into which database? ",
         style::paint("?"),
         style::paint(source)
-    ));
-
-    let mut given = String::new();
-    std::io::stdin()
-        .read_line(&mut given)
-        .map_err(|error| Failure::usage(format!("could not read the answer: {error}")))?;
+    ))?;
 
     let given = given.trim();
     Ok((!given.is_empty()).then(|| given.to_owned()))
@@ -614,12 +609,14 @@ fn copy(
         ))
     );
 
+    let counting = crate::console::step("Counting rows on both sides", "Verified");
     let comparison = verify::Comparison::of(
         mode,
         &before,
         &Side::counted(adapter.as_ref(), destination_target, mode)?
             .narrowed_to(|table| scope.covers(table)),
     );
+    verify::settled(counting, &comparison);
     for line in comparison.describe() {
         crate::say!("  {}", style::dim(&line));
     }

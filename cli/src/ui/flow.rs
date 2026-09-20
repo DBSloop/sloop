@@ -15,14 +15,15 @@
 //!
 //! **What the menu asks for, and what the command asks for.** The menu collects exactly what
 //! a flag would have carried. It never asks for a password and never asks anyone to type the
-//! name of a database they are destroying — those are the command's own prompts, they run
-//! once the alternate screen has been handed back, and they are the same prompts a person
-//! gets from the shell. One implementation of rule 3, one of rule 5.
+//! name of a database they are destroying — those stay the command's own prompts, and they
+//! are the same prompts a person gets from the shell. One implementation of rule 3, one of
+//! rule 5. What changed is only *where* they are drawn: `ui::live` puts them on the menu's
+//! own screen rather than on the terminal underneath it.
 
 use crate::exit::Exit;
 use crate::failure::Outcome;
 
-use super::screen::Item;
+use super::screen::{Item, Standing};
 
 /// Everything the menu can do, which is everything `R7`–`R16` built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,42 +287,6 @@ pub struct Step {
     pub how: How,
 }
 
-impl Step {
-    /// The heading the list is drawn under.
-    ///
-    /// **Taken from the field rather than written per question**, because a heading that is
-    /// invented at each of forty call sites is forty chances for two questions about the
-    /// same thing to sit under two different words. The field already says what the answer
-    /// is; this says it in the menu's voice.
-    #[must_use]
-    pub fn heading(&self) -> &'static str {
-        use field as f;
-        match self.field {
-            f::NAME | f::WHICH | f::SOURCE => "DATABASE",
-            f::RENAMED => "NEW NAME",
-            f::HOW => "CONNECTION",
-            f::URL => "URL",
-            f::ENGINE => "ENGINE",
-            f::HOST | f::PORT => "SERVER",
-            f::DATABASE => "ON THE SERVER",
-            f::USER => "USER",
-            f::SUPERUSER => "CREATE IT AS",
-            f::ROUTE | f::ENV | f::FROM_COMMAND => "PASSWORD",
-            f::TEST => "BEFORE SAVING",
-            f::DETAIL => "WHAT TO CHANGE",
-            f::MODE => "HOW TO KEEP IT",
-            f::CHECK => "HOW HARD TO LOOK",
-            f::WHEN => "WHICH BACKUP",
-            f::KEEP | f::OLDER | f::BROKEN | f::DRY => "WHAT TO CLEAR",
-            f::WHERE | f::TO | f::CREATE => "DESTINATION",
-            f::SCOPE | f::TABLES | f::REFERENCES => "HOW MUCH",
-            f::SAFE => "SAFETY",
-            f::OFFLINE => "HOW FAR TO LOOK",
-            _ => "CHOOSE",
-        }
-    }
-}
-
 /// The two ways of asking. Deliberately only two: they are exactly what the shell already
 /// draws, so a flow needs no new kind of screen and the scripted prompter in the tests
 /// drives a flow exactly as it drives a menu.
@@ -407,8 +372,16 @@ pub trait Doing {
     /// `None` for a label nothing is registered under.
     fn on_the_server(&self, label: &str) -> Option<String>;
 
-    /// Run it, with the terminal already handed back so the command's own output and its
-    /// own prompts land where the user can see them.
+    /// What the doors on the home screen say about the world behind them.
+    ///
+    /// **Asked when the session opens and again after every job, never per keystroke.** The
+    /// home screen is redrawn on every arrow key; a status that scanned the backup store and
+    /// asked the service control manager each time would be a directory walk and a system
+    /// call per keypress.
+    fn standing(&self) -> Standing;
+
+    /// Run it, on the live screen the menu is holding — see `ui::live`. Everything the job
+    /// prints and everything it asks goes there, and nothing reaches the terminal underneath.
     fn run(&mut self, job: Job, answers: &Answers) -> Outcome<Exit>;
 }
 

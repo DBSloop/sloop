@@ -13,6 +13,18 @@
 //!                    server, not another database, not another role.
 //! ```
 //!
+//! **And the passwords go with the state they belong to.** A reset that left sloop's own
+//! credentials in the OS keyring was not a reset: the next `sloop setup` builds a new cluster
+//! with new passwords, and a stale entry under the same key is a machine that authenticates
+//! against a server that no longer exists. That is not hypothetical — it is what the owner
+//! hit: *"password authentication failed for user"* the role sloop owns, on a machine that had been
+//! reset. See "A reset leaves nothing behind" in `docs/OWNER-DECISIONS.md`.
+//!
+//! **Except the backup key, and that is the one exception in the whole command.** The private
+//! half of the `age` keypair lives in the keyring under `backup-key:<public>`, and it is the
+//! only thing standing between a kept backup and an unreadable one. Deleting it while keeping
+//! the backups would be deleting the backups the slow way.
+//!
 //! **Backups are never deleted. Not here, not by `uninstall`, not ever.** The owner's line,
 //! and the reason is that they are the one thing on a machine that cannot be regenerated: a
 //! registry is a minute of typing and a PostgreSQL is a download, but a dump that is gone is
@@ -42,7 +54,10 @@ use crate::consent::{Consent, Destroying};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::locations::Locations;
+use crate::secret::Route;
 use crate::server::{self, Origin};
+use crate::service::mechanism::Mechanism;
+use crate::service::{elevation, manage};
 use crate::style;
 
 /// The name that has to be typed. The database that stops existing, which is the same thing
@@ -64,20 +79,66 @@ pub struct What {
     pub owns_the_server: bool,
     /// Everything under the global store that goes.
     pub going: Vec<PathBuf>,
+    /// Every secret this machine keeps for sloop, by the name it is filed under.
+    ///
+    /// **Never the backup key.** See the header: it is the one thing here whose absence
+    /// cannot be undone by running Setup again.
+    pub passwords: Vec<Kept>,
+    /// True when the registry could not be read, so the list above may be short.
+    pub some_unknown: bool,
+    /// The background service, when this machine has one registered.
+    ///
+    /// **Part of "everything sloop put here", and the only part that needs more than this
+    /// account has.** A reset that left it registered would leave the machine running sloop
+    /// at boot against a store that no longer exists.
+    pub service: Option<Mechanism>,
+    /// Every database server `sloop server install` put on this machine.
+    ///
+    /// Kept whole rather than as paths, because each one has to be stopped before its
+    /// directory can be removed — and stopping one needs its port, its binaries and its
+    /// superuser.
+    pub installed: Vec<crate::install::Installed>,
     /// Every `backups/` that stays, so the sentence about them names them.
     pub kept: Vec<PathBuf>,
+}
+
+/// One secret sloop keeps, and where it keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Kept {
+    /// What it is filed under.
+    pub key: String,
+    /// Which store it is in.
+    pub route: Route,
+    /// What it opens, for the line that names it.
+    pub what: String,
 }
 
 impl What {
     /// Has this machine anything to reset?
     #[must_use]
     pub fn anything(&self) -> bool {
-        self.server.is_some() || !self.going.is_empty()
+        self.server.is_some()
+            || !self.going.is_empty()
+            || !self.passwords.is_empty()
+            || self.service.is_some()
+            || !self.installed.is_empty()
     }
 }
 
 /// Work out what a reset would do.
 pub fn survey(global: &Path) -> Outcome<What> {
+    let service =
+        Mechanism::of_this_machine().filter(|mechanism| manage::state(*mechanism).installed());
+    surveying(global, service)
+}
+
+/// The same, told what the machine runs rather than asking it.
+///
+/// **Split out so the answer can be written down.** What a reset does to a *store* is decided
+/// by files under it; whether there is a service to remove is decided by the machine, and a
+/// test that consulted the real service control manager would pass or fail depending on
+/// whether the developer happened to have sloop installed on the machine running it.
+fn surveying(global: &Path, service: Option<Mechanism>) -> Outcome<What> {
     let record = server::record::read_server(global)?;
     let owns_the_server = record
         .as_ref()
@@ -91,6 +152,7 @@ pub fn survey(global: &Path) -> Outcome<What> {
         server::record::FILE,
         crate::registry::file::SEALED_FILE,
         crate::registry::file::FILE,
+        crate::install::record::FILE,
     ] {
         let path = global.join(name);
         if path.exists() {
@@ -110,6 +172,17 @@ pub fn survey(global: &Path) -> Outcome<What> {
         going.push(postgres);
     }
 
+    // **And every database server `sloop server install` put here.** These are not sloop's
+    // own state cluster: they are MySQL, MariaDB or another PostgreSQL that sloop downloaded
+    // and installed because somebody asked it to. A reset that left them behind would leave
+    // running servers with their data and a `servers.toml` describing them, on a machine
+    // whose whole point was that sloop had been taken off it.
+    let installed = crate::install::record::read(global).unwrap_or_default();
+    let servers = crate::install::home(global);
+    if servers.is_dir() {
+        going.push(servers);
+    }
+
     let backups = global.join("backups");
     let kept = if backups.is_dir() {
         vec![backups]
@@ -117,13 +190,119 @@ pub fn survey(global: &Path) -> Outcome<What> {
         Vec::new()
     };
 
+    let (passwords, some_unknown) = secrets(global, record.as_ref(), &installed);
+
     Ok(What {
         global: global.to_path_buf(),
         server: record,
         owns_the_server,
         going,
         kept,
+        passwords,
+        some_unknown,
+        service,
+        installed,
     })
+}
+
+/// Every secret this machine keeps for sloop, and whether that list is complete.
+///
+/// **Two of them come off the disk and the rest come out of the registry**, which is the
+/// difference that matters when something has already gone wrong. `server.toml` names the
+/// server, and the superuser's key and `sloop_db_admin`'s are derived from it — so the two
+/// that strand a machine are found even when nothing else can be. The registered databases'
+/// own passwords are in the registry, which lives in the database this is about to destroy;
+/// if it will not open, they are reported as unknown rather than silently skipped.
+fn secrets(
+    global: &Path,
+    record: Option<&server::Server>,
+    installed: &[crate::install::Installed],
+) -> (Vec<Kept>, bool) {
+    let mut found: Vec<Kept> = Vec::new();
+
+    if let Some(server) = record {
+        found.push(Kept {
+            key: server::record::credential_key_of(server),
+            route: Route::Keyring,
+            what: format!("{}, the superuser of sloop's PostgreSQL", server.superuser),
+        });
+
+        if let Ok(Some(own)) = server::record::recorded_own(global) {
+            let route = server::record::database_route(global)
+                .ok()
+                .flatten()
+                .unwrap_or(Route::Keyring);
+            found.push(Kept {
+                key: own.credential_key(server),
+                route,
+                what: format!("{}, which owns sloop's own database", own.role),
+            });
+        }
+    }
+
+    // **Every server `sloop server install` put here, and its superuser.** These are not in
+    // the registry — they are in `servers.toml`, which is on disk — so they are found whether
+    // or not the state database opens.
+    for one in installed {
+        found.push(Kept {
+            key: crate::install::credential_key(one),
+            route: Route::Keyring,
+            what: format!(
+                "{}, the superuser of the {} sloop installed",
+                one.superuser, one.engine
+            ),
+        });
+    }
+
+    // Everything the registry recorded. Best effort on purpose: a machine whose state
+    // database will not open is exactly the machine somebody is resetting.
+    let mut unknown = false;
+    match registered(global) {
+        Ok(more) => found.extend(more),
+        Err(()) => unknown = true,
+    }
+
+    // A key filed twice is a key deleted twice, which is noise on the screen and a second
+    // `NoEntry` nobody needs to read.
+    found.dedup_by(|one, other| one.key == other.key);
+    (found, unknown)
+}
+
+/// The passwords the registry recorded for the databases sloop knows about.
+///
+/// `Err(())` when the registry could not be read at all, which the caller reports rather
+/// than swallows.
+fn registered(global: &Path) -> Result<Vec<Kept>, ()> {
+    // **The global registry and nothing else.** A project registry lives beside somebody's
+    // code and is not sloop's to reach into from here; `Resolution::global_only` is the same
+    // answer the background service uses, and for the same reason — there is no working
+    // directory that means anything at this point.
+    let registries =
+        crate::registry::Registries::open(crate::registry::Resolution::global_only(), global)
+            .map_err(|_| ())?;
+
+    // **Both secrets a database can have.** Its own password, and — where it is reached over
+    // SSH — the passphrase of the key that opens the tunnel. Two entries, two keys, and a
+    // reset that forgot only the first would leave the second behind.
+    let mut found = Vec::new();
+    for (_, name, database) in registries.all() {
+        found.push(Kept {
+            key: database.credential_key(),
+            route: database.password.clone(),
+            what: format!("the password for {name}"),
+        });
+
+        if let Some(through) = database.reach.through()
+            && let Some(route) = through.secret.clone()
+        {
+            found.push(Kept {
+                key: through.server.credential_key(),
+                route,
+                what: format!("the SSH key passphrase for {name}"),
+            });
+        }
+    }
+    Ok(found)
 }
 
 /// Say what is about to happen, before anything does.
@@ -168,10 +347,67 @@ fn announce(what: &What) {
         (None, _) => crate::say!("  {}", style::dim("no server — this machine is not set up")),
     }
 
+    if let Some(mechanism) = what.service {
+        crate::say!(
+            "  {} {}",
+            style::label("Service"),
+            style::paint(&format!(
+                "the background service, registered with {}",
+                mechanism.spoken()
+            ))
+        );
+    }
+
+    for one in &what.installed {
+        crate::say!(
+            "  {} {}",
+            style::label("Server"),
+            style::paint(&format!(
+                "{} on port {}, which sloop installed",
+                one.describe(),
+                one.port
+            ))
+        );
+    }
+
     for path in &what.going {
         crate::say!("  {} {}", style::label("Gone"), path.display());
     }
 
+    for kept in &what.passwords {
+        crate::say!(
+            "  {} {}",
+            style::label("Password"),
+            style::paint(&kept.what)
+        );
+    }
+    if !what.passwords.is_empty() {
+        crate::say!(
+            "  {}",
+            style::dim(
+                "these are forgotten wherever this machine keeps them, so the next \
+                        `sloop setup` starts with nothing left over"
+            )
+        );
+    }
+    if what.some_unknown {
+        crate::say!(
+            "  {}",
+            style::dim(
+                "the registry could not be read, so a password it recorded for one of your \
+                        own databases may be left behind — `sloop db remove <name>` forgets one"
+            )
+        );
+    }
+
+    announce_what_stays(what);
+}
+
+/// The other half of the list: what a reset deliberately does not touch.
+///
+/// Its own function because [`announce`] is a list of sections and this is the section that
+/// is about a promise rather than about a path.
+fn announce_what_stays(what: &What) {
     if what.kept.is_empty() {
         return;
     }
@@ -195,9 +431,16 @@ fn announce(what: &What) {
     crate::say!(
         "  {}",
         style::dim(
-            "an encrypted backup still needs its key. If the private key was never \
-                    exported and this machine keeps secrets in the encrypted file, it goes \
-                    with the database and those backups become unreadable."
+            "the backup key is kept too — it is the only thing here that makes a kept \
+                    backup readable, so forgetting it would be deleting the backups slowly."
+        )
+    );
+    crate::say!(
+        "  {}",
+        style::dim(
+            "a machine that keeps its secrets in the encrypted file is the exception: \
+                    that file lives in the registry and goes with it, so export the key \
+                    first if those backups matter."
         )
     );
 }
@@ -206,6 +449,16 @@ fn announce(what: &What) {
 pub fn run(locations: &Locations, consent: Consent<'_>, also_the_binary: bool) -> Outcome<Exit> {
     let global = crate::registry::adopt::global(locations)?;
     let what = survey(&global)?;
+
+    // **Before the list, before the question, before anything.** The owner's instruction:
+    // *"even for reset and uninstall if it needs elevated administrator rights, then ask it
+    // first without proceeding"*. Removing a service is the one thing here that needs more
+    // than this account has, so a run that cannot do it says so while the machine is still
+    // whole — rather than deleting the cluster and then discovering it cannot finish. Same
+    // rule as `R24a`, one command earlier.
+    if let Some(mechanism) = what.service {
+        elevation::require(mechanism)?;
+    }
 
     if !what.anything() && !also_the_binary {
         crate::say!(
@@ -232,7 +485,7 @@ pub fn run(locations: &Locations, consent: Consent<'_>, also_the_binary: bool) -
         return Ok(Exit::Success);
     }
 
-    carry_out(&what)?;
+    carry_out(locations, &what)?;
 
     if also_the_binary {
         remove_the_binary();
@@ -256,13 +509,27 @@ pub fn run(locations: &Locations, consent: Consent<'_>, also_the_binary: bool) -
 /// **The database before the files.** The files are what say where the database is, so
 /// removing them first would leave a `sloop_database` nothing could find and nothing could
 /// clean up — which is the one way a reset could make more mess than it cleared.
-fn carry_out(what: &What) -> Outcome<()> {
+fn carry_out(locations: &Locations, what: &What) -> Outcome<()> {
+    // **The service before the database it reads.** It wakes on a timer and opens the store
+    // every round; leaving it running while the cluster underneath it is deleted is asking
+    // for a round that lands halfway through.
+    if let Some(mechanism) = what.service {
+        super::service::uninstall(locations, mechanism);
+    }
+
     if let Some(server) = &what.server {
         if what.owns_the_server {
             stop_the_cluster(server);
         } else {
             drop_sloops_own(server, &what.global)?;
         }
+    }
+
+    // **Every server `sloop server install` put here, stopped before its directory goes.**
+    // On Windows a running postmaster or mysqld holds its own data files open, so a delete
+    // that did not stop it first is a delete that fails halfway and leaves a tree behind.
+    for one in &what.installed {
+        stop_installed(&what.global, one);
     }
 
     for path in &what.going {
@@ -279,7 +546,136 @@ fn carry_out(what: &What) -> Outcome<()> {
         crate::say!("  {} {}", style::label("Removed"), path.display());
     }
 
+    forget_the_passwords(what);
+
     Ok(())
+}
+
+/// Forget every secret the survey named.
+///
+/// **Best effort, one at a time, and never fatal.** Everything above this line has already
+/// happened — the cluster is gone and the files are gone — so a keyring that will not answer
+/// is a line to read, not a reason to fail a reset that has already succeeded. An entry that
+/// was never there is not an error either: `os_keyring::delete` says so itself.
+///
+/// The encrypted-file route is not touched here because it has already gone: the sealed file
+/// is one of the paths in `going`, so the secrets inside it went with it.
+fn forget_the_passwords(what: &What) {
+    let mut forgotten = 0;
+    let mut never_ours = 0;
+
+    for kept in &what.passwords {
+        match &kept.route {
+            Route::Keyring => match crate::secret::os_keyring::delete(&kept.key) {
+                Ok(()) => forgotten += 1,
+                Err(failure) => crate::say!(
+                    "  {} {}",
+                    style::label("Left"),
+                    style::dim(&format!("{}: {}", kept.what, failure.message()))
+                ),
+            },
+            // The encrypted file is one of the paths already removed above, so everything
+            // inside it went with it. Counted, because it did go.
+            Route::EncryptedFile => forgotten += 1,
+            // **Nothing to delete, and saying so is the point.** `${VAR}` and a password
+            // command point at a secret somebody else keeps — sloop never held a copy, so
+            // there is no copy of it here to remove and none of sloop's business to try.
+            Route::Environment(_) | Route::Command(_) => never_ours += 1,
+        }
+    }
+
+    if forgotten > 0 {
+        crate::say!(
+            "  {} {}",
+            style::label("Forgotten"),
+            plural(forgotten, "password")
+        );
+    }
+    if never_ours > 0 {
+        crate::say!(
+            "  {} {}",
+            style::label("Left"),
+            style::dim(&format!(
+                "{} sloop never held — they come from an environment variable or a command, \
+                 and the secret itself was always somebody else's",
+                plural(never_ours, "password")
+            ))
+        );
+    }
+}
+
+/// `1 password`, `2 passwords`.
+fn plural(count: usize, what: &str) -> String {
+    if count == 1 {
+        format!("{count} {what}")
+    } else {
+        format!("{count} {what}s")
+    }
+}
+
+/// Stop a server `sloop server install` put here, so its directory can actually be deleted.
+///
+/// **Best effort, and every branch of it.** One that is already stopped, one whose binaries
+/// have gone with a half-removed install, and one whose password cannot be read back are all
+/// the same thing here: the directory goes either way, and the line that follows says so if
+/// it could not.
+fn stop_installed(global: &Path, one: &crate::install::Installed) {
+    let stopped = match one.engine {
+        // PostgreSQL ships a supervisor that knows how to ask a cluster to close its files.
+        crate::engine::Engine::Postgres => Command::new(one.bin.join("pg_ctl"))
+            .arg("-D")
+            .arg(&one.data)
+            .args(["stop", "-m", "fast", "-w"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success()),
+
+        // The MySQL family has no supervisor: the server is asked to shut down over its own
+        // protocol, as the superuser, which means the password. `MYSQL_PWD` on this child and
+        // nothing wider — rule 3, and the same route `install::mysql` uses.
+        crate::engine::Engine::Mysql | crate::engine::Engine::Mariadb => {
+            let admin = if one.engine == crate::engine::Engine::Mariadb {
+                "mariadb-admin"
+            } else {
+                "mysqladmin"
+            };
+            let Ok(password) = crate::install::record::password_for(global, one) else {
+                return said_still_running(one);
+            };
+            Command::new(one.bin.join(admin))
+                .args(["--protocol=tcp", "--host=127.0.0.1"])
+                .arg(format!("--port={}", one.port))
+                .arg(format!("--user={}", one.superuser))
+                .arg("shutdown")
+                .env("MYSQL_PWD", password.expose())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        }
+    };
+
+    if stopped {
+        crate::say!("  {} {}", style::label("Stopped"), one.describe());
+    } else {
+        said_still_running(one);
+    }
+}
+
+/// Say a server would not stop, without making it fatal.
+///
+/// The directory is removed next either way, and on Windows that is what will fail if the
+/// server really is still up — with a line naming the path, which is more use than this one.
+fn said_still_running(one: &crate::install::Installed) {
+    crate::say!(
+        "  {} {}",
+        style::label("Left"),
+        style::dim(&format!(
+            "{} would not stop — if its directory will not delete, stop it and try again",
+            one.describe()
+        ))
+    );
 }
 
 /// Stop a cluster sloop made, so its directory can actually be deleted.

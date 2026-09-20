@@ -1406,7 +1406,11 @@ UNION ALL SELECT 'pg-read-large-objects', l.total > 0, l.bad = 0,
                  l.bad||' of '||l.total||' cannot be opened' FROM lo l
 UNION ALL SELECT 'pg-create-in-database', true, has_database_privilege(current_database(),'CREATE'), ''
 UNION ALL SELECT 'pg-create-in-schemas', true, c.bad = 0, 'cannot enter or create in: '||c.names FROM nocreate c
-UNION ALL SELECT 'pg-untrusted-extensions', e.bad > 0, (SELECT super FROM me), e.names FROM ext e";
+UNION ALL SELECT 'pg-untrusted-extensions', e.bad > 0, (SELECT super FROM me), e.names FROM ext e
+UNION ALL SELECT 'pg-own-database', true,
+                 (SELECT super FROM me) OR pg_has_role(current_user, d.datdba, 'USAGE'),
+                 'owned by '||pg_get_userbyid(d.datdba)
+            FROM pg_database d WHERE d.datname = current_database()";
 
 /// Base tables, in every schema that is not the server's own.
 const TABLES_SQL: &str = "\

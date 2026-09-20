@@ -87,6 +87,22 @@ pub enum Proof {
 }
 
 impl Proof {
+    /// The exact size the archive should be, where that is known in advance.
+    ///
+    /// **Read by the progress bar as well as by the check.** A bar needs something to be a
+    /// fraction of, and the only number available before a byte has moved is the one the
+    /// download will afterwards be refused for not matching. Using that one means the bar
+    /// cannot disagree with the check.
+    #[must_use]
+    pub const fn expected_bytes(&self) -> Option<u64> {
+        match self {
+            Self::Pinned { bytes, .. } => Some(*bytes),
+            Self::Published { .. } | Self::Signed { .. } => None,
+        }
+    }
+}
+
+impl Proof {
     /// What this proof is, in the words the run prints as it happens.
     #[must_use]
     pub fn describe(&self) -> String {

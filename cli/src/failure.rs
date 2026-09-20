@@ -117,7 +117,7 @@ impl Failure {
     /// several documents on one standard output and therefore not JSON at all. There is one
     /// document per run, and it is the envelope `main` prints at the end.
     pub fn mention(&self) {
-        crate::report::problem(&format!("{} {}", style::error_prefix(), self.message));
+        crate::report::failed(&self.message, "");
         if let Some(hint) = &self.hint {
             crate::report::problem(&format!("{} {hint}", style::label("  hint:")));
         }

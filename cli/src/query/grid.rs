@@ -360,18 +360,29 @@ fn next_key() -> Outcome<Option<KeyEvent>> {
 struct Held {
     terminal: Screen,
     handed_back: bool,
+    /// Whether this grid is the one that took the alternate buffer.
+    ///
+    /// **False under the menu, and that is the whole of it.** The shell is already in the
+    /// alternate screen and hands it back itself when the session ends; a grid that entered
+    /// it again and then left would put the *menu* back on the terminal underneath, which is
+    /// the one thing the owner's first rule forbids.
+    took_the_screen: bool,
 }
 
 impl Held {
     fn take() -> Outcome<Self> {
         terminal::enable_raw_mode().map_err(|error| drawing(&error))?;
+        let took_the_screen = !crate::console::shell_is_driving();
         let mut out = std::io::stderr();
-        execute!(out, terminal::EnterAlternateScreen).map_err(|error| drawing(&error))?;
+        if took_the_screen {
+            execute!(out, terminal::EnterAlternateScreen).map_err(|error| drawing(&error))?;
+        }
         let terminal = Terminal::new(ratatui::backend::CrosstermBackend::new(out))
             .map_err(|error| drawing(&error))?;
         Ok(Self {
             terminal,
             handed_back: false,
+            took_the_screen,
         })
     }
 
@@ -381,7 +392,9 @@ impl Held {
         }
         self.handed_back = true;
         let _ = terminal::disable_raw_mode();
-        let _ = execute!(std::io::stderr(), terminal::LeaveAlternateScreen);
+        if self.took_the_screen {
+            let _ = execute!(std::io::stderr(), terminal::LeaveAlternateScreen);
+        }
         let _ = std::io::stderr().flush();
     }
 }

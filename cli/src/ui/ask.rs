@@ -27,7 +27,7 @@ use crate::failure::{Failure, Outcome};
 use crate::style::Hue;
 
 use super::paint::{self, Header};
-use super::screen::{Ask, Item, Row};
+use super::screen::{Ask, Item};
 
 /// What came back from a question.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,13 +45,13 @@ pub trait Asking {
     /// Wipe the screen and draw the header on it.
     fn frame(&mut self, header: &Header) -> Outcome<()>;
 
-    /// A list, headings and all. `at` is the row the highlight starts on, and `way_out` is
-    /// the last row — `← Back` everywhere but the root, where there is nothing behind it
-    /// and it says `Quit`. What comes back is the row that was chosen.
+    /// A list. `at` is the row the highlight starts on, and `way_out` is the last row —
+    /// `← Back` everywhere but the root, where there is nothing behind it and it says
+    /// `Quit`. What comes back is the row that was chosen, or `items.len()` for the way out.
     fn choose(
         &mut self,
         question: &str,
-        rows: &[Row],
+        items: &[Item],
         way_out: &str,
         at: usize,
     ) -> Outcome<Answer<usize>>;
@@ -70,12 +70,24 @@ pub struct Terminal {
     header: String,
 }
 
+/// How wide the screen is, or `None` if it will not say.
+pub(super) fn columns() -> Option<usize> {
+    crossterm::terminal::size()
+        .ok()
+        .map(|(columns, _)| usize::from(columns))
+}
+
+/// How tall it is, the same way.
+pub(super) fn rows() -> Option<usize> {
+    crossterm::terminal::size()
+        .ok()
+        .map(|(_, rows)| usize::from(rows))
+}
+
 impl Terminal {
     /// How wide the screen is, or `None` if it will not say.
     fn columns() -> Option<usize> {
-        crossterm::terminal::size()
-            .ok()
-            .map(|(columns, _)| usize::from(columns))
+        columns()
     }
 
     /// How many rows the list itself may use.
@@ -116,9 +128,12 @@ impl Terminal {
         let last = (screen.top + screen.height).min(screen.lines.len());
         for (at, line) in screen.lines.iter().enumerate().take(last).skip(screen.top) {
             // The arrow, and the two columns it lives in. Only a line that can be chosen
-            // ever gets one, which is the whole of "a heading is not a navigation item".
+            // ever gets one, which is the whole of "the gap is not a navigation item".
             let (lead, text) = if Some(at) == screen.here {
-                (paint::accent("› "), paint::chosen(&line.text))
+                (
+                    paint::accent(&format!("{} ", crate::mark::Mark::Here.glyph())),
+                    paint::chosen(&line.text),
+                )
             } else {
                 ("  ".to_owned(), line.text.clone())
             };
@@ -157,7 +172,7 @@ impl Terminal {
 /// goes, then the rows below the new frame cleared. There is no moment at which the screen is
 /// empty, which is the whole of the fix: `Clear(All)` followed by a redraw paints a real blank
 /// frame first, and that is what made every arrow key blink the menu.
-fn redrawn_in_place(drawn: &str, ending: &str, hide_cursor: bool) -> String {
+pub(super) fn redrawn_in_place(drawn: &str, ending: &str, hide_cursor: bool) -> String {
     let erase = ansi(crossterm::terminal::Clear(
         crossterm::terminal::ClearType::UntilNewLine,
     ));
@@ -226,13 +241,16 @@ impl Asking for Terminal {
     fn choose(
         &mut self,
         question: &str,
-        rows: &[Row],
+        items: &[Item],
         way_out: &str,
         at: usize,
     ) -> Outcome<Answer<usize>> {
-        let column = paint::column_for(rows.iter().filter_map(|row| match row {
-            Row::Item(item, _) => Some(item.title.as_str()),
-            Row::Heading(_) => None,
+        let widths = paint::widths(items.iter().map(|item| {
+            (
+                item.title.as_str(),
+                item.note.as_str(),
+                item.command.as_str(),
+            )
         }));
         let columns = Self::columns();
 
@@ -242,7 +260,7 @@ impl Asking for Terminal {
         let mut top = 0;
 
         loop {
-            let lines = lay_out(rows, way_out, &filter, column, columns);
+            let lines = lay_out(items, way_out, &filter, widths, columns);
             let reachable: Vec<usize> = (0..lines.len())
                 .filter(|line| lines[*line].picks.is_some())
                 .collect();
@@ -308,79 +326,53 @@ impl Asking for Terminal {
 
 /// One drawn line of a list, and what choosing it means.
 ///
-/// **A heading has nothing to choose, and that is the whole point of this type.** The
-/// highlight only ever moves between lines carrying a `picks`, so a heading is drawn,
-/// scrolled past and stepped over, and the arrow can no more rest on one than on the gap
-/// between two sections.
+/// **A gap has nothing to choose, and that is the whole point of this type.** The highlight
+/// only ever moves between lines carrying a `picks`, so the blank row above the way out is
+/// drawn, scrolled past and stepped over, and the arrow can no more rest on it than on the
+/// space between two words.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Drawn {
     /// The line, painted.
     text: String,
-    /// The row it stands for, or nothing when it is a heading or a gap. The way out is
-    /// `rows.len()`, which is what [`Asking::choose`] promises its caller.
+    /// The item it stands for, or nothing when it is a gap. The way out is `items.len()`,
+    /// which is what [`Asking::choose`] promises its caller.
     picks: Option<usize>,
 }
 
-/// Lay the rows out as lines, keeping only what matches `filter`.
+/// Lay the items out as lines, keeping only what matches `filter`.
 ///
-/// A section whose every item has been filtered away loses its heading too: a heading over
-/// nothing makes a narrowed list look broken.
+/// **The filter reads more than it draws.** `Item::finds` carries the names of every command
+/// behind a door, so typing `mirror` on the home screen lands on the door that holds it —
+/// which is the objection that reopened the doors the first time.
 fn lay_out(
-    rows: &[Row],
+    items: &[Item],
     way_out: &str,
     filter: &str,
-    column: usize,
+    widths: paint::Widths,
     columns: Option<usize>,
 ) -> Vec<Drawn> {
-    let wanted = |item: &Item| {
-        filter.is_empty()
-            || item.title.to_lowercase().contains(filter)
-            || item.command.to_lowercase().contains(filter)
-    };
-
     let mut lines: Vec<Drawn> = Vec::new();
-    for (at, row) in rows.iter().enumerate() {
-        match row {
-            Row::Heading(heading) => {
-                let holds = rows[at + 1..]
-                    .iter()
-                    .map_while(|row| match row {
-                        Row::Item(item, _) => Some(item),
-                        Row::Heading(_) => None,
-                    })
-                    .any(&wanted);
-                if !holds {
-                    continue;
-                }
-                if lines.iter().any(|line| line.picks.is_some()) {
-                    lines.push(Drawn::gap());
-                }
-                lines.push(Drawn {
-                    // **No inset of its own.** Every line already starts in the two
-                    // columns the arrow lives in, and `paint::option` steps an item in
-                    // from there — so a heading indented as well would sit in the same
-                    // column as the things under it, and the structure would be gone.
-                    text: paint::heading(heading),
-                    picks: None,
-                });
-            }
-            Row::Item(item, _) => {
-                if wanted(item) {
-                    lines.push(Drawn {
-                        text: paint::option(&item.title, item.beside(), column, columns),
-                        picks: Some(at),
-                    });
-                }
-            }
+    for (at, item) in items.iter().enumerate() {
+        if item.matches(filter) {
+            lines.push(Drawn {
+                text: paint::option(
+                    &item.title,
+                    &item.note,
+                    item.hue,
+                    &item.command,
+                    widths,
+                    columns,
+                ),
+                picks: Some(at),
+            });
         }
     }
 
     // The way out, always last and always reachable, set apart from the list above it.
     lines.push(Drawn::gap());
     lines.push(Drawn {
-        // At the headings’ column, because it belongs to no section.
         text: way_out.to_owned(),
-        picks: Some(rows.len()),
+        picks: Some(items.len()),
     });
     lines
 }
@@ -395,7 +387,7 @@ impl Drawn {
 }
 
 /// What a keypress means to a list.
-enum Key {
+pub(super) enum Key {
     Up,
     Down,
     Home,
@@ -418,7 +410,7 @@ enum Key {
 /// **Windows sends both halves of every keystroke.** A loop that acted on the release as
 /// well as the press would move the highlight two rows for one press of the down arrow,
 /// which on a five-item menu is a menu that skips every other thing on it.
-fn pressed() -> Outcome<Option<Key>> {
+pub(super) fn pressed() -> Outcome<Option<Key>> {
     use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
     let event = crossterm::event::read().map_err(|error| drawing(&error))?;
@@ -500,10 +492,10 @@ fn help(filter: &str) -> String {
 /// The same reason the alternate screen is a type: an early return or a panic that left the
 /// terminal in raw mode would leave a shell that does not echo what is typed at it, and the
 /// user would have to `reset` it.
-struct Raw;
+pub(super) struct Raw;
 
 impl Raw {
-    fn on() -> Outcome<Self> {
+    pub(super) fn on() -> Outcome<Self> {
         crossterm::terminal::enable_raw_mode().map_err(|error| drawing(&error))?;
         Ok(Self)
     }

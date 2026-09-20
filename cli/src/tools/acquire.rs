@@ -524,8 +524,8 @@ fn fetch_verified(release: &releases::Release, into: &Path) -> Outcome<PathBuf> 
     }
 
     let archive = workspace.join(release.file_name());
-    crate::say!("  {} {}", style::label("Downloading"), release.url());
-    download(&release.url(), &archive)?;
+    crate::note!("  {}", style::dim(&release.url()));
+    fetching(&release.url(), &archive, "Downloading", Some(release.bytes))?;
 
     verify(&archive, release).inspect_err(|_| {
         // Nothing that failed its check is left lying about to be picked up by a later run
@@ -537,10 +537,106 @@ fn fetch_verified(release: &releases::Release, into: &Path) -> Outcome<PathBuf> 
     Ok(archive)
 }
 
+/// Run the downloader, drawing how far it has got until it finishes.
+///
+/// **The file is watched, not the program.** Nothing here parses another tool's output: the
+/// three downloaders draw three different meters, all of them to a terminal the menu is
+/// holding, and none of them has a machine-readable mode worth relying on. What every one of
+/// them does have is a file on disk that grows, and that is a number this can read every
+/// tenth of a second without knowing which program is writing it.
+///
+/// Returns what it exited with and whatever it said about why, which is read back from a file
+/// rather than a pipe: a pipe nobody drains while the child runs is a download that stops
+/// when the buffer fills.
+fn watched(
+    program: &str,
+    arguments: &[String],
+    to: &Path,
+    what: &str,
+    total: Option<u64>,
+) -> std::io::Result<(std::process::ExitStatus, String)> {
+    let log = to.with_extension("sloop-download-log");
+    let said = std::fs::File::create(&log).ok();
+
+    let mut child = Command::new(program)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(said.map_or_else(Stdio::null, Stdio::from))
+        .spawn()?;
+
+    let step = crate::console::step(what, past(what));
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        let done = std::fs::metadata(to).map_or(0, |meta| meta.len());
+        step.at(done, total, &rate(done, total, started));
+        std::thread::sleep(POLL);
+    };
+
+    let landed = std::fs::metadata(to).map_or(0, |meta| meta.len());
+    if status.success() {
+        step.ok(&crate::console::bytes(landed));
+    } else {
+        step.bad("");
+    }
+
+    let complaint = std::fs::read_to_string(&log).unwrap_or_default();
+    let _ = std::fs::remove_file(&log);
+    Ok((status, complaint.trim().to_owned()))
+}
+
+/// How often the file on disk is measured.
+///
+/// **A tenth of a second**, which is a `stat` ten times a second against a download that
+/// takes minutes — and slightly faster than the spinner, so the bar never shows a number the
+/// frame beside it has already moved past.
+const POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// How fast it is going and how much longer it has, in the phrase beside the bar.
+fn rate(done: u64, total: Option<u64>, since: std::time::Instant) -> String {
+    let seconds = since.elapsed().as_secs_f64();
+    if seconds < 1.0 || done == 0 {
+        return String::new();
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let per_second = done as f64 / seconds;
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let speed = format!("{}/s", crate::console::bytes(per_second as u64));
+
+    let Some(total) = total.filter(|total| *total > done) else {
+        return speed;
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let left = (total - done) as f64 / per_second;
+    if !left.is_finite() || left > 86_400.0 {
+        return speed;
+    }
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let left = left.round() as u64;
+    format!("{speed} \u{00b7} {}m {:02}s left", left / 60, left % 60)
+}
+
+/// A present-tense label in the past tense, for the line the step settles into.
+fn past(what: &str) -> &str {
+    match what {
+        "Downloading" => "Downloaded",
+        other => other,
+    }
+}
+
 /// Ask postgresql.org what it has, and turn that into one sentence or none.
 fn index_note(workspace: &Path, release: &releases::Release) -> Option<String> {
     let index = workspace.join("versions.json");
-    download(releases::INDEX_URL, &index).ok()?;
+    fetching(
+        releases::INDEX_URL,
+        &index,
+        "Asking postgresql.org what it has",
+        None,
+    )
+    .ok()?;
     let json = std::fs::read_to_string(&index).ok()?;
     let _ = std::fs::remove_file(&index);
     releases::what_the_index_adds(&releases::read_index(&json), release)
@@ -552,6 +648,18 @@ fn index_note(workspace: &Path, release: &releases::Release) -> Option<String> {
 /// `curl`, then PowerShell's `Invoke-WebRequest`, then `wget`. There is no fourth option and
 /// there is deliberately no HTTP client in this binary to fall back on.
 pub fn download(url: &str, to: &Path) -> Outcome<()> {
+    fetching(url, to, "Downloading", None)
+}
+
+/// The same, saying what is being fetched and how big it is.
+///
+/// **Rule 6 of the owner's list** — *"it shows default curl ui of download, not a sloop
+/// custom progressbar"*. `total` is what the catalogue says the archive weighs, which is the
+/// only way to draw a bar for a download this binary is deliberately not performing itself:
+/// the file on disk is watched as it grows, and the fraction is what has landed over what was
+/// promised. A `None` total still gets a spinner and a running byte count, because the size
+/// of the thing is not always known and *"is it moving"* is most of the question.
+pub fn fetching(url: &str, to: &Path, what: &str, total: Option<u64>) -> Outcome<()> {
     let mut attempts: Vec<(&str, Vec<String>)> = Vec::new();
 
     if on_path("curl") {
@@ -560,6 +668,12 @@ pub fn download(url: &str, to: &Path) -> Outcome<()> {
             vec![
                 "--fail".to_owned(),
                 "--location".to_owned(),
+                // **Its own meter off, because sloop draws one now.** `curl` writing a
+                // progress bar to the terminal was fine when a download happened on the
+                // terminal; the menu holds the screen, and two things drawing on it is one
+                // too many. `--show-error` keeps the sentence it prints when it fails.
+                "--silent".to_owned(),
+                "--show-error".to_owned(),
                 // https and nothing else, at both ends of a redirect chain.
                 "--proto".to_owned(),
                 "=https".to_owned(),
@@ -596,6 +710,8 @@ pub fn download(url: &str, to: &Path) -> Outcome<()> {
             "wget",
             vec![
                 "--https-only".to_owned(),
+                // The same: no meter of its own. See the note on `curl` above.
+                "--no-verbose".to_owned(),
                 "--timeout".to_owned(),
                 "60".to_owned(),
                 "-O".to_owned(),
@@ -616,16 +732,12 @@ pub fn download(url: &str, to: &Path) -> Outcome<()> {
 
     let mut last = String::new();
     for (program, arguments) in attempts {
-        // Progress goes to the terminal. A third of a gigabyte with no sign of life is
-        // indistinguishable from a hang, and somebody would be right to kill it.
-        let status = Command::new(program)
-            .args(&arguments)
-            .stdin(Stdio::null())
-            .status();
-
-        match status {
-            Ok(status) if status.success() => return Ok(()),
-            Ok(status) => last = format!("{program} exited with {status}"),
+        match watched(program, &arguments, to, what, total) {
+            Ok((status, _)) if status.success() => return Ok(()),
+            Ok((status, said)) if said.is_empty() => {
+                last = format!("{program} exited with {status}");
+            }
+            Ok((_, said)) => last = format!("{program}: {said}"),
             Err(error) => last = format!("{program} would not run: {error}"),
         }
         let _ = std::fs::remove_file(to);
@@ -866,14 +978,7 @@ fn system_archiver() -> PathBuf {
 
 /// Ask a yes-or-no question. Anything that is not a yes is a no.
 fn asked(question: &str) -> Outcome<bool> {
-    crate::report::ask(&format!("{question} [y/N] "));
-
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).map_err(|error| {
-        Failure::new(Exit::Usage, format!("could not read the answer: {error}"))
-    })?;
-
-    Ok(is_yes(&answer))
+    Ok(is_yes(&crate::console::ask(&format!("{question} [y/N] "))?))
 }
 
 /// Anything that is not plainly a yes is a no.

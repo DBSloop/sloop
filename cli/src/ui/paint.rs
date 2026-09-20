@@ -18,8 +18,10 @@
 //! lets it be tested without a terminal. Every screen is built as a `String` here and only
 //! then handed to the screen.
 
+use std::fmt::Write as _;
 use std::sync::OnceLock;
 
+use crate::mark::{self, Mark};
 use crate::style::{self, Hue};
 use crate::wordmark;
 
@@ -41,9 +43,6 @@ const ASSUMED_COLUMNS: usize = 80;
 
 /// This build, under the mark.
 const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
-
-/// What sits between the version and the line beside it.
-const SEPARATOR: &str = "  ·  ";
 
 /// The column a fact's value starts in. The longest label in the tree is ten.
 const LABEL: usize = 10;
@@ -78,6 +77,36 @@ pub enum Line {
     Good(String),
     /// It did not.
     Wrong(String),
+    /// A row of status chips, each with its own mark and colour.
+    ///
+    /// **The home screen's top line.** Three short facts with a tick or a triangle in front
+    /// of each says more at a glance than three rows of label and value, and it is what the
+    /// owner picked: the mark, and the facts beside it.
+    Chips(Vec<(Mark, String)>),
+    /// The headline of an outcome: what happened, to what, and the tag on the right.
+    Verdict {
+        /// Worked, did not, or worth knowing about.
+        mark: Mark,
+        /// What happened, in capitals — `BACKED UP`.
+        what: String,
+        /// What it happened to.
+        subject: String,
+        /// The right-hand corner: how long it took, or which code it failed with.
+        tag: String,
+    },
+    /// One step of a result, on the rail down the left.
+    Step {
+        /// How that step went.
+        mark: Mark,
+        /// What it was.
+        text: String,
+        /// The detail beside it, in its own column.
+        note: String,
+    },
+    /// A line a job printed, kept as it printed it.
+    Said(String),
+    /// A command, ready to paste.
+    Command(String),
     /// Deliberate space.
     Gap,
 }
@@ -100,16 +129,6 @@ impl Line {
             label: label.to_owned(),
             value: value.to_owned(),
             hue,
-        }
-    }
-
-    /// A grey note in the value's own column, under the fact above it.
-    #[must_use]
-    pub fn under(note: &str) -> Self {
-        Self::Fact {
-            label: String::new(),
-            value: note.to_owned(),
-            hue: Hue::Dim,
         }
     }
 }
@@ -221,6 +240,15 @@ pub fn wrong(text: &str) -> String {
 ///
 /// Returns the block with no trailing newline, so the caller decides how much air sits
 /// between it and the list.
+///
+/// **The mark and the facts sit side by side, which is the owner's Home A.** Stacked, the
+/// block took eight rows of art, a rule and three rows of facts — twenty of a twenty-four-row
+/// terminal, leaving the menu a five-row keyhole to scroll thirty commands through. Beside
+/// each other they take eight rows together, and the list below has room to be a list. A
+/// terminal too narrow to hold both stacks them again rather than breaking either.
+///
+/// **And there is no hairline under it any more.** Rule 3 of the owner's list was *"need
+/// spacing"*; a rule is a line drawn where a gap would have done, and the gap reads quieter.
 #[must_use]
 pub fn frame(header: &Header, columns: Option<usize>) -> String {
     let columns = columns.unwrap_or(ASSUMED_COLUMNS);
@@ -233,31 +261,18 @@ pub fn frame(header: &Header, columns: Option<usize>) -> String {
 
     out.push(String::new());
     match header.banner {
-        Banner::Wordmark => {
-            // Inset by one rather than two: every row of the block but one begins with a
-            // space of its own, so one here puts its leftmost glyph in the same column as
-            // the text underneath. The owner's art, unchanged — see "The wordmark".
-            for line in wordmark::plain(Some(columns.saturating_sub(INSET))).lines() {
-                out.push(format!("{}{}", pad(INSET - 1), accent(line)));
-            }
-            out.push(String::new());
-            out.extend(strapline(&header.strap, measure));
-        }
+        Banner::Wordmark => out.extend(marked(header, columns, measure)),
         Banner::Word => {
             out.push(format!(
                 "{}{}",
                 pad(INSET),
                 trail(&strong("sloop"), &header.crumbs)
             ));
+            out.push(String::new());
+            for line in &header.lines {
+                out.extend(drawn(line, measure, room, INSET));
+            }
         }
-    }
-
-    out.push(String::new());
-    out.push(format!("{}{}", pad(INSET), dim(&rule(measure))));
-    out.push(String::new());
-
-    for line in &header.lines {
-        out.extend(drawn(line, measure, room));
     }
 
     // One screen, one shape: whatever a header ended with, the list below it starts after
@@ -268,49 +283,125 @@ pub fn frame(header: &Header, columns: Option<usize>) -> String {
     out.join("\n")
 }
 
-/// The version, and the one line beside it.
+/// How far the block on the right sits from the mark on the left.
+const GUTTER: usize = 5;
+
+/// The narrowest right-hand block worth having. Under this, the two stack instead.
+const BESIDE: usize = 34;
+
+/// What sits between two chips on one row.
+pub(super) const GAP: usize = 3;
+
+/// The shortest a middle column is allowed to get before it is dropped instead.
 ///
-/// **The version sits under the mark and nowhere else.** `--version` answers a script;
-/// this answers the person looking at the screen, who wants to know which build is in
-/// front of them without leaving it. The owner asked for it there — see
-/// "Colour, and the version under the wordmark" in `docs/OWNER-DECISIONS.md`.
-fn strapline(strap: &str, measure: usize) -> Vec<String> {
-    let version = format!("{}{}", pad(INSET), accent(VERSION));
-    if strap.is_empty() {
-        return vec![version];
+/// Under about this much a phrase stops being a phrase and starts being two words and an
+/// ellipsis, which says less than the space it takes.
+const SHORTEST: usize = 18;
+
+/// The wordmark, with everything else to the right of it.
+fn marked(header: &Header, columns: usize, measure: usize) -> Vec<String> {
+    let left = INSET + wordmark::COLUMNS + GUTTER;
+    let room = columns.saturating_sub(left + INSET);
+    let beside = room >= BESIDE;
+    let side_measure = if beside { room.min(MEASURE) } else { measure };
+    let side_left = if beside { left } else { INSET };
+
+    let mut side: Vec<String> = vec![
+        String::new(),
+        format!("{}{}  {}", pad(side_left), strong("sloop"), dim(VERSION)),
+    ];
+    if !header.strap.is_empty() {
+        side.extend(
+            wrap(&header.strap, side_measure)
+                .into_iter()
+                .map(|row| format!("{}{}", pad(side_left), hue(Hue::Text, &row))),
+        );
+    }
+    side.push(String::new());
+    for line in &header.lines {
+        side.extend(drawn(line, side_measure, room, side_left));
     }
 
-    // **Beside it when it fits, underneath it when it does not.** Never cut: a strapline
-    // that quietly loses its last three words on a narrow terminal is worse than one that
-    // takes a second line, and it is the kind of thing nobody notices for a year.
-    let together = VERSION.chars().count() + SEPARATOR.chars().count() + strap.chars().count();
-    if together <= measure {
-        return vec![format!(
-            "{version}{}{}",
-            dim(SEPARATOR),
-            hue(Hue::Text, strap)
-        )];
+    let art = art(columns);
+    if !beside {
+        // Stacked: the art, then everything that would have sat beside it.
+        let mut out: Vec<String> = art.iter().map(|row| art_row(row, false)).collect();
+        out.extend(side);
+        return tidied(out);
     }
 
-    let mut rows = vec![version];
-    rows.extend(
-        wrap(strap, measure)
-            .into_iter()
-            .map(|row| format!("{}{}", pad(INSET), hue(Hue::Text, &row))),
-    );
-    rows
+    // Beside: one row of art against one row of the block, and whichever runs on carries on
+    // alone. The art is eight rows and the block is rarely more, so this is usually one
+    // rectangle.
+    let filled = wordmark::COLUMNS + INSET - 1;
+    let mut out = Vec::with_capacity(art.len().max(side.len()));
+    for at in 0..art.len().max(side.len()) {
+        match (art.get(at), side.get(at)) {
+            (Some(art), Some(beside)) if beside.trim().is_empty() => {
+                out.push(art_row(art, false));
+            }
+            (Some(art), Some(beside)) => out.push(format!(
+                "{}{}{}",
+                art_row(art, true),
+                pad(left.saturating_sub(filled)),
+                beside.trim_start()
+            )),
+            (Some(art), None) => out.push(art_row(art, false)),
+            (None, Some(beside)) => out.push(beside.clone()),
+            (None, None) => break,
+        }
+    }
+    tidied(out)
 }
 
-/// One header line, as the rows it occupies.
-fn drawn(line: &Line, measure: usize, room: usize) -> Vec<String> {
+/// Take the trailing spaces off every row.
+///
+/// **The block is a rectangle and the rows beside it are not.** `wordmark::plain` pads its
+/// art to a fixed width so the two columns line up, which leaves a tail of spaces on any row
+/// with nothing to its right — invisible on screen, and exactly the kind of thing that turns
+/// up later as a diff nobody meant to make.
+fn tidied(rows: Vec<String>) -> Vec<String> {
+    rows.into_iter()
+        .map(|row| row.trim_end().to_owned())
+        .collect()
+}
+
+/// The block itself, in the accent, inset so its leftmost glyph lines up with the text.
+///
+/// Inset by one rather than two: every row of the block but one begins with a space of its
+/// own, so one here puts its leftmost glyph in the same column as the text underneath. The
+/// owner's art, unchanged — see "The wordmark".
+fn art(columns: usize) -> Vec<String> {
+    wordmark::plain(Some(columns.saturating_sub(INSET)))
+        .lines()
+        .map(|line| format!("{}{line}", pad(INSET - 1)))
+        .collect()
+}
+
+/// One row of the block, painted — trimmed when it stands alone, and kept as the rectangle
+/// it is when something sits beside it.
+///
+/// **The trimming has to happen before the colour, not after.** The block is padded so the
+/// column beside it lines up, so a row with nothing to its right ends in spaces — and those
+/// spaces are *inside* the escape, where trimming the finished line cannot reach them.
+fn art_row(row: &str, beside: bool) -> String {
+    if beside {
+        accent(row)
+    } else {
+        accent(row.trim_end())
+    }
+}
+
+/// One header line, as the rows it occupies, starting in column `left`.
+fn drawn(line: &Line, measure: usize, room: usize, left: usize) -> Vec<String> {
     match line {
         Line::Lead(text) => wrap(text, measure)
             .into_iter()
-            .map(|row| format!("{}{}", pad(INSET), hue(Hue::Text, &row)))
+            .map(|row| format!("{}{}", pad(left), hue(Hue::Text, &row)))
             .collect(),
         Line::Quiet(text) => wrap(text, measure)
             .into_iter()
-            .map(|row| format!("{}{}", pad(INSET), dim(&row)))
+            .map(|row| format!("{}{}", pad(left), dim(&row)))
             .collect(),
         Line::Fact {
             label,
@@ -320,13 +411,13 @@ fn drawn(line: &Line, measure: usize, room: usize) -> Vec<String> {
             // **Wrapped into its own column, not off the edge.** A registry path is as
             // long as somebody's home directory, and a value that ran past the right edge
             // came back around the left one in the middle of a word.
-            let column = INSET + LABEL + 2;
+            let column = left + LABEL + 2;
             wrap_value(value, room.saturating_sub(LABEL + 2))
                 .into_iter()
                 .enumerate()
                 .map(|(row, text)| {
                     let head = if row == 0 {
-                        format!("{}{}  ", pad(INSET), dim(&format!("{label:<LABEL$}")))
+                        format!("{}{}  ", pad(left), dim(&format!("{label:<LABEL$}")))
                     } else {
                         pad(column)
                     };
@@ -334,20 +425,97 @@ fn drawn(line: &Line, measure: usize, room: usize) -> Vec<String> {
                 })
                 .collect()
         }
-        Line::Good(text) => vec![format!("{}{}", pad(INSET), hue(Hue::Ok, text))],
+        Line::Good(text) => vec![format!("{}{}", pad(left), hue(Hue::Ok, text))],
         Line::Wrong(text) => wrap(text, measure.saturating_sub(7))
             .into_iter()
             .enumerate()
             .map(|(row, text)| {
                 if row == 0 {
-                    format!("{}{}", pad(INSET), wrong(&text))
+                    format!("{}{}", pad(left), wrong(&text))
                 } else {
-                    format!("{}{}", pad(INSET + 7), hue(Hue::Bad, &text))
+                    format!("{}{}", pad(left + 7), hue(Hue::Bad, &text))
                 }
             })
             .collect(),
+        Line::Chips(chips) => chips_rows(chips, room, left),
+        Line::Verdict {
+            mark,
+            what,
+            subject,
+            tag,
+        } => vec![verdict(*mark, what, subject, tag, room, left)],
+        // **Clipped, never wrapped.** A rail row that ran onto a second line would put the
+        // continuation outside the rail, which reads as the rail having ended.
+        Line::Step { mark, text, note } => {
+            let spent = 3
+                + crate::console::LABEL_AT
+                + crate::console::NOTE_AT.max(text.chars().count() + 2);
+            let over = room.saturating_sub(spent);
+            let note = if note.chars().count() > over {
+                let cut = wrap(note, over.saturating_sub(1))
+                    .into_iter()
+                    .next()
+                    .unwrap_or_default();
+                format!("{cut}\u{2026}")
+            } else {
+                note.clone()
+            };
+            vec![format!(
+                "{}{}  {}",
+                pad(left),
+                hue(mark.hue(), mark::rail()),
+                crate::console::settled(*mark, text, &note)
+            )]
+        }
+        Line::Said(text) => vec![format!("{}{text}", pad(left + 3))],
+        Line::Command(text) => vec![format!("{}{}", pad(left), accent(text))],
         Line::Gap => vec![String::new()],
     }
+}
+
+/// A row of chips, wrapped onto a second row rather than off the edge.
+fn chips_rows(chips: &[(Mark, String)], room: usize, left: usize) -> Vec<String> {
+    let mut rows: Vec<String> = Vec::new();
+    let mut row = String::new();
+    let mut width = 0;
+
+    for (mark, text) in chips {
+        let cost = Mark::WIDTH + 1 + text.chars().count() + GAP;
+        if width > 0 && width + cost > room {
+            rows.push(format!("{}{row}", pad(left)));
+            row = String::new();
+            width = 0;
+        }
+        if width > 0 {
+            row.push_str(&" ".repeat(GAP));
+        }
+        let _ = write!(
+            row,
+            "{} {}",
+            hue(mark.hue(), mark.glyph()),
+            hue(Hue::Text, text)
+        );
+        width += cost;
+    }
+    if !row.is_empty() {
+        rows.push(format!("{}{row}", pad(left)));
+    }
+    rows
+}
+
+/// The headline of an outcome: the mark, what happened, what it happened to, and the tag.
+fn verdict(mark: Mark, what: &str, subject: &str, tag: &str, room: usize, left: usize) -> String {
+    let used = Mark::WIDTH + 2 + what.chars().count() + 3 + subject.chars().count();
+    let space = room.saturating_sub(used + tag.chars().count()).max(2);
+    format!(
+        "{}{}  {}   {}{}{}",
+        pad(left),
+        hue(mark.hue(), mark.glyph()),
+        hue(mark.hue(), what),
+        accent(subject),
+        pad(space),
+        dim(tag)
+    )
 }
 
 /// `sloop › Databases`, the accent on the mark and the rest ordinary.
@@ -360,9 +528,10 @@ fn trail(mark: &str, crumbs: &[&str]) -> String {
     out
 }
 
-/// A hairline, `width` columns of it.
-fn rule(width: usize) -> String {
-    "─".repeat(width)
+/// `sloop › Backups › Back one up now`, for a screen that draws its own header.
+#[must_use]
+pub fn trail_of(crumbs: &[&str]) -> String {
+    trail(&strong("sloop"), crumbs)
 }
 
 fn pad(width: usize) -> String {
@@ -426,56 +595,133 @@ fn wrap_value(text: &str, measure: usize) -> Vec<String> {
         .collect()
 }
 
-/// How far an item sits under the heading it belongs to.
+/// How far a row sits in from the arrow beside it.
 ///
-/// **The structure the owner drew** — a heading, and the things under it stepped in from
-/// it. A heading sits where `inquire` puts it and everything beneath is inset by this.
+/// **The structure the owner drew** — the arrow in its own two columns, and everything that
+/// can be chosen stepped in from it.
 pub const UNDER: usize = 2;
 
-/// Everything a list row spends before the phrase starts: the two columns `inquire` draws
-/// its own prefix in, the step in under the heading, the two between the title and the
-/// phrase, and two more kept clear at the right edge so a full row never touches it.
-const ROW_OVERHEAD: usize = 6 + UNDER;
+/// Everything a list row spends before the title starts: the two columns the arrow lives in,
+/// the step in under it, and two kept clear at the right edge so a full row never touches it.
+const ROW_OVERHEAD: usize = 4 + UNDER;
 
-/// A menu item, padded so the phrases line up in a column of their own.
+/// How wide each column of a list is, worked out once for the whole list.
 ///
-/// `inquire` measures what it renders with an ANSI-aware counter, so the escapes in the
-/// grey half cost nothing and the list still knows how wide it is.
-#[must_use]
-pub fn option(title: &str, blurb: &str, column: usize, columns: Option<usize>) -> String {
-    let step = pad(UNDER);
-    if blurb.is_empty() {
-        return format!("{step}{title}");
-    }
+/// **Once, so the columns line up.** A row that sized itself would be a list where every
+/// row's middle column started somewhere different, which is the thing that made the old
+/// screen look cluttered even when every line on it was correct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Widths {
+    /// The longest title.
+    pub title: usize,
+    /// The longest middle column.
+    pub note: usize,
+    /// The longest command.
+    ///
+    /// **Measured across the list, not per row.** A row that sized its own middle column
+    /// from its own command would start the command wherever that row happened to leave off,
+    /// and a list of five would have five different right-hand columns — which is most of
+    /// what "cluttered" looks like.
+    pub command: usize,
+}
 
+/// The widths a list needs, given every row in it.
+#[must_use]
+pub fn widths<'a>(rows: impl Iterator<Item = (&'a str, &'a str, &'a str)>) -> Widths {
+    let mut widths = Widths::default();
+    for (title, note, command) in rows {
+        widths.title = widths.title.max(title.chars().count());
+        widths.note = widths.note.max(note.chars().count());
+        widths.command = widths.command.max(command.chars().count());
+    }
+    widths
+}
+
+/// One row of a list: what it is called, what it is doing, and the command that does it.
+///
+/// **Three columns, and the middle one carries the colour.** Rule 4 of the owner's list —
+/// *"need more rich colors"* — is answered here more than anywhere else: the title is
+/// ordinary text, the command is grey reference, and the fact between them is green when a
+/// thing is working, amber when it wants attention and grey when it is neither.
+///
+/// **The command is never the first thing dropped.** Rule 11: *"showing command in right side
+/// seems good, don't remove"*. A terminal too narrow for all three loses the middle column,
+/// and one too narrow for two loses everything but the title.
+///
+/// `inquire`'s successor draws this with an ANSI-aware counter, so the escapes in the
+/// coloured halves cost nothing and the list still knows how wide it is.
+#[must_use]
+pub fn option(
+    title: &str,
+    note: &str,
+    ink: Hue,
+    command: &str,
+    widths: Widths,
+    columns: Option<usize>,
+) -> String {
+    let step = pad(UNDER);
     let room = columns
         .unwrap_or(ASSUMED_COLUMNS)
-        .saturating_sub(column + ROW_OVERHEAD);
+        .saturating_sub(ROW_OVERHEAD);
 
-    // Under about twenty-four columns of room the phrase stops being a phrase and starts
-    // being a word per line, so the title carries the item on its own.
-    if room < 24 {
-        return format!("{step}{title}");
+    let title_column = widths.title.max(title.chars().count());
+    let note_column = widths.note.max(note.chars().count());
+    let wants = title_column + GAP + note_column + GAP + command.chars().count();
+
+    // Everything fits: three columns, each starting where every other row's does.
+    if wants <= room && !note.is_empty() && !command.is_empty() {
+        return format!(
+            "{step}{title:<title_column$}{}{}{}{}",
+            pad(GAP),
+            hue(ink, &format!("{note:<note_column$}")),
+            pad(GAP),
+            dim(command)
+        );
     }
 
-    let blurb = wrap(blurb, room).into_iter().next().unwrap_or_default();
-    format!("{step}{title:<column$}  {}", dim(&blurb))
-}
+    // **Shortened before it is dropped.** A door's row says what is behind it and a command's
+    // row says what it does; losing that entirely on an eighty-column terminal is a worse
+    // trade than losing the end of the sentence.
+    let spare = room
+        .saturating_sub(title_column + GAP + GAP + widths.command.max(command.chars().count()))
+        .min(note_column);
+    if !note.is_empty() && !command.is_empty() && spare >= SHORTEST {
+        // At a word, not mid-syllable: `dumps it, checks every row arriv` reads as a bug.
+        let shortened = wrap(note, spare).into_iter().next().unwrap_or_default();
+        return format!(
+            "{step}{title:<title_column$}{}{}{}{}",
+            pad(GAP),
+            hue(ink, &format!("{shortened:<spare$}")),
+            pad(GAP),
+            dim(command)
+        );
+    }
 
-/// A heading in a menu: the accent, with weight, and set apart from what is under it.
-///
-/// **All caps, at the owner's instruction** — *"heading will be in primary color text all
-/// caps"*. The text is upper-cased here rather than typed that way, so the source reads in
-/// sentences and the screen reads in headings.
-#[must_use]
-pub fn heading(text: &str) -> String {
-    strong(&text.to_uppercase())
-}
-
-/// The column the phrases start in: the longest title, so nothing is ragged.
-#[must_use]
-pub fn column_for<'a>(titles: impl Iterator<Item = &'a str>) -> usize {
-    titles.map(|title| title.chars().count()).max().unwrap_or(0)
+    // Two columns. The command keeps its place; the note gives way.
+    let beside = if command.is_empty() { note } else { command };
+    let beside_ink = if command.is_empty() { ink } else { Hue::Dim };
+    if beside.is_empty() {
+        return format!("{step}{title}");
+    }
+    if title_column + GAP + beside.chars().count() > room {
+        // Under about twenty-four columns of room the phrase stops being a phrase and starts
+        // being a word per line, so the title carries the row on its own.
+        if room < title_column + GAP + 24 {
+            return format!("{step}{title}");
+        }
+        let cut = room.saturating_sub(title_column + GAP);
+        let beside = wrap(beside, cut).into_iter().next().unwrap_or_default();
+        return format!(
+            "{step}{title:<title_column$}{}{}",
+            pad(GAP),
+            hue(beside_ink, &beside)
+        );
+    }
+    format!(
+        "{step}{title:<title_column$}{}{}",
+        pad(GAP),
+        hue(beside_ink, beside)
+    )
 }
 
 #[cfg(test)]

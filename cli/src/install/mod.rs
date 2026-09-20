@@ -129,7 +129,7 @@ impl Installed {
 /// is: two servers of the same engine on different ports keep different passwords, and
 /// neither can read the other's by accident.
 #[must_use]
-fn credential_key(installed: &Installed) -> String {
+pub(crate) fn credential_key(installed: &Installed) -> String {
     format!(
         "sloop-installed:{}:{}@{LOOPBACK}:{}",
         installed.engine.scheme(),
@@ -294,8 +294,13 @@ fn fetch(global: &Path, build: &Build) -> Outcome<PathBuf> {
     })?;
 
     let archive = workspace.join(&build.file_name);
-    crate::say!("  {} {}", style::label("Downloading"), build.url);
-    acquire::download(&build.url, &archive)?;
+    crate::note!("  {}", style::dim(&build.url));
+    acquire::fetching(
+        &build.url,
+        &archive,
+        "Downloading",
+        build.proof.expected_bytes(),
+    )?;
 
     crate::say!(
         "  {} against {}",

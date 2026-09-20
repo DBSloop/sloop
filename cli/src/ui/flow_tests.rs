@@ -84,6 +84,14 @@ impl Doing for Known {
         Some(format!("{label}_live"))
     }
 
+    fn standing(&self) -> crate::ui::screen::Standing {
+        crate::ui::screen::Standing {
+            databases: self.databases().len(),
+            backups: None,
+            service: None,
+        }
+    }
+
     fn databases(&self) -> Vec<String> {
         self.databases.clone()
     }

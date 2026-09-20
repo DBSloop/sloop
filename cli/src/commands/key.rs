@@ -285,8 +285,7 @@ pub fn remember(registries: &mut Registries, scope: Scope, kept: KeyKept) -> Out
 /// and it does not echo: a key pasted into a visible prompt is a key in the scrollback.
 fn read_a_key() -> Outcome<PrivateKey> {
     if std::io::stdin().is_terminal() {
-        let typed = rpassword::prompt_password("the exported key: ")
-            .map_err(|error| Failure::usage(format!("could not read the key: {error}")))?;
+        let typed = crate::console::ask_hidden("the exported key: ")?;
         return PrivateKey::parse(&typed);
     }
 

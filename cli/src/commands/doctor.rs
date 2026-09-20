@@ -181,10 +181,7 @@ fn role_as_json(name: &str, database: &Database, report: &Report) -> serde_json:
             .map(|finding| serde_json::json!({
                 "id": finding.requirement.id,
                 "title": finding.requirement.title,
-                "phase": match finding.requirement.phase {
-                    Phase::Dump => "dump",
-                    Phase::Restore => "restore",
-                },
+                "phase": finding.requirement.phase.to_string(),
                 "verdict": match finding.verdict {
                     Verdict::Held => "held",
                     Verdict::Missing(_) => "missing",

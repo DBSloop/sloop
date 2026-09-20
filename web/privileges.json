@@ -85,6 +85,20 @@
         "grant": "GRANT USAGE, CREATE ON SCHEMA public TO {role};"
       },
       {
+        "id": "pg-own-database",
+        "title": "own the database",
+        "privileges": [
+          "ownership of the database",
+          "or superuser"
+        ],
+        "consequence": "`sloop db drop` is refused with `must be owner of database`, after everything else about the run has already worked",
+        "phase": "drop",
+        "applies": {
+          "kind": "always"
+        },
+        "grant": "ALTER DATABASE {database} OWNER TO {role};"
+      },
+      {
         "id": "pg-untrusted-extensions",
         "title": "create the extensions this database uses",
         "privileges": [
@@ -262,6 +276,19 @@
           "subject": "a stored function, while the server has binary logging on and log_bin_trust_function_creators off"
         },
         "grant": "GRANT SUPER ON *.* TO {role};"
+      },
+      {
+        "id": "my-drop-database",
+        "title": "delete the database itself",
+        "privileges": [
+          "DROP on the database"
+        ],
+        "consequence": "`sloop db drop` is refused with `Access denied`, after everything else about the run has already worked",
+        "phase": "drop",
+        "applies": {
+          "kind": "always"
+        },
+        "grant": "GRANT DROP ON {database}.* TO {role};"
       }
     ],
     "waives": [
@@ -441,6 +468,19 @@
           "subject": "a stored function, while the server has binary logging on and log_bin_trust_function_creators off"
         },
         "grant": "GRANT SUPER ON *.* TO {role};"
+      },
+      {
+        "id": "my-drop-database",
+        "title": "delete the database itself",
+        "privileges": [
+          "DROP on the database"
+        ],
+        "consequence": "`sloop db drop` is refused with `Access denied`, after everything else about the run has already worked",
+        "phase": "drop",
+        "applies": {
+          "kind": "always"
+        },
+        "grant": "GRANT DROP ON {database}.* TO {role};"
       }
     ],
     "waives": [

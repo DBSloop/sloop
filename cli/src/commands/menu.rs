@@ -15,6 +15,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::backup::stamp::Stamp;
+use crate::backup::store::{self, Check};
 use crate::cli::{Fields, PasswordSource, ServiceCommand, SshFields};
 use crate::commands;
 use crate::consent::Consent;
@@ -22,8 +24,11 @@ use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
 use crate::registry::locations::Locations;
 use crate::registry::{Disk, Registries, Resolution, Scope, resolve};
+use crate::service::manage;
+use crate::service::mechanism::Mechanism;
 use crate::ssh::tunnel::Tunnels;
 use crate::ui::flow::{Answers, Doing, Job, field};
+use crate::ui::screen::Standing;
 
 /// Everything a job needs to be able to open the world again.
 pub struct Machine {
@@ -88,6 +93,40 @@ impl Machine {
             elevated: crate::service::elevation::enough() != Some(false),
             tunnels: Tunnels::new()?,
         })
+    }
+
+    /// How many backups are stored, and how long ago the newest one was taken.
+    ///
+    /// Every registry this session can see, the way `backups list` counts them.
+    fn stored(&self) -> Option<(usize, String)> {
+        let registries = self.open().ok()?;
+        let mut count = 0;
+        let mut newest: Option<Stamp> = None;
+
+        for scope in registries.resolution().search_order() {
+            let Some(root) = registries.root_in(*scope) else {
+                continue;
+            };
+            let Ok(found) = store::scan(&root, Check::Size) else {
+                continue;
+            };
+            for stored in &found.backups {
+                count += 1;
+                newest = Some(newest.map_or(stored.taken, |had: Stamp| had.max(stored.taken)));
+            }
+        }
+
+        newest.map(|newest| (count, newest.ago(Stamp::now())))
+    }
+
+    /// Whether the background service is registered with this machine, and what it is doing.
+    fn service_state() -> Option<(String, bool)> {
+        let mechanism = Mechanism::of_this_machine()?;
+        let state = manage::state(mechanism);
+        if !state.installed() {
+            return None;
+        }
+        Some((state.spoken().to_lowercase(), state.running()))
     }
 
     /// Where the registry is.
@@ -240,6 +279,26 @@ impl Doing for Machine {
                     .map(|taken| taken.to_string_lossy().into_owned())
             })
             .collect()
+    }
+
+    /// What the six doors on the home screen say.
+    ///
+    /// **Only what can be known cheaply and truthfully.** Three things are worth a door's
+    /// status line and can be had for one directory walk and one question to the machine:
+    /// how many databases are registered, how many backups are stored and how old the newest
+    /// is, and whether the background service is running. Everything else a door might have
+    /// said would need a health check to be sure of, and a status that is sometimes wrong is
+    /// worse than a phrase that is always right.
+    ///
+    /// **Nothing here can fail the menu.** Every branch falls back to saying less rather
+    /// than to an error: a registry that will not open is a home screen with a quieter line
+    /// on it, not a session that will not start.
+    fn standing(&self) -> Standing {
+        Standing {
+            databases: self.databases().len(),
+            backups: self.stored(),
+            service: Self::service_state(),
+        }
     }
 
     fn run(&mut self, job: Job, answers: &Answers) -> Outcome<Exit> {

@@ -52,6 +52,14 @@ impl Doing for Bench {
         Some(format!("{label}_live"))
     }
 
+    fn standing(&self) -> crate::ui::screen::Standing {
+        crate::ui::screen::Standing {
+            databases: self.databases().len(),
+            backups: None,
+            service: None,
+        }
+    }
+
     fn run(&mut self, _job: Job, _answers: &Answers) -> crate::failure::Outcome<crate::exit::Exit> {
         unreachable!("nothing is run here")
     }

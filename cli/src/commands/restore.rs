@@ -169,11 +169,13 @@ pub fn run(context: &Context<'_>, name: &str, from: Option<&str>) -> Outcome<Exi
         style::dim("checking it against the counts the manifest recorded")
     );
     let mode = verify::Mode::from_environment();
+    let counting = crate::console::step("Counting rows on both sides", "Verified");
     let comparison = verify::Comparison::of(
         mode,
         &Side::from_manifest(&manifest),
         &Side::counted(adapter.as_ref(), &target, mode)?,
     );
+    verify::settled(counting, &comparison);
     for line in comparison.describe() {
         crate::say!("  {}", style::dim(&line));
     }

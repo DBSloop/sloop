@@ -80,22 +80,26 @@ fn inquire_is_handed_the_projects_own_colours() {
 
 use super::{Hue, dress, ink};
 
-/// **The finding this replaced `inquire`'s list for.** The highlight moves between things
-/// that can be chosen, and a heading is not one of them — so stepping down past the last
-/// item of a section lands on the first item of the next, never on the word between them.
+/// **The highlight never lands on something that is not a choice.** There are no headings
+/// any more, but there is still the gap above the way out — and an arrow resting on a blank
+/// row is a menu that looks broken for one keystroke.
 #[test]
-fn the_highlight_steps_over_a_heading_rather_than_onto_it() {
+fn the_highlight_steps_over_the_gap_above_the_way_out() {
     use super::{Drawn, ends, lay_out, step, window};
-    use crate::ui::screen::{Item, Row};
+    use crate::ui::paint::Widths;
+    use crate::ui::screen::Item;
 
-    let rows = vec![
-        Row::Heading("ADD ONE".to_owned()),
-        Row::Item(Item::new("Tell sloop about a database", ""), 0),
-        Row::Heading("LOOK".to_owned()),
-        Row::Item(Item::new("See the ones sloop knows", ""), 1),
-        Row::Item(Item::new("Check one answers", ""), 2),
+    let items = vec![
+        Item::new("Tell sloop about a database", ""),
+        Item::new("See the ones sloop knows", ""),
+        Item::new("Check one answers", ""),
     ];
-    let lines = lay_out(&rows, "← Back", "", 30, Some(100));
+    let widths = Widths {
+        title: 30,
+        note: 0,
+        ..Widths::default()
+    };
+    let lines = lay_out(&items, "\u{2190} Back", "", widths, Some(100));
     let reachable: Vec<usize> = (0..lines.len())
         .filter(|line| lines[*line].picks.is_some())
         .collect();
@@ -103,24 +107,14 @@ fn the_highlight_steps_over_a_heading_rather_than_onto_it() {
     // Three items and the way out, and nothing else can be landed on at all.
     assert_eq!(reachable.len(), 4, "{lines:?}");
 
-    // Down from the last item of a section is the first item of the next, stepping over
-    // both the gap and the heading between them.
-    assert_eq!(
-        step(&lines, &reachable, 0, 1),
-        Some(3),
-        "it stopped at LOOK"
-    );
-    assert_eq!(
-        step(&lines, &reachable, 1, -1),
-        Some(1),
-        "and again coming back"
-    );
+    // Down from the last item is the way out, stepping over the gap between them.
+    assert_eq!(step(&lines, &reachable, 2, 1), Some(items.len()));
+    assert_eq!(step(&lines, &reachable, 3, -1), Some(2));
 
-    // The ends are items too, never headings.
-    assert_eq!(ends(&lines, &reachable, true), Some(1));
+    assert_eq!(ends(&lines, &reachable, true), Some(0));
     assert_eq!(
         ends(&lines, &reachable, false),
-        Some(rows.len()),
+        Some(items.len()),
         "the way out"
     );
 
@@ -130,7 +124,7 @@ fn the_highlight_steps_over_a_heading_rather_than_onto_it() {
 
     // A list that fits does not scroll, and one that does scrolls by as little as it can
     // — the way out is its last line, so it has to be reachable from the bottom.
-    assert_eq!(window(0, 6, lines.len(), lines.len()), 0);
+    assert_eq!(window(0, 3, lines.len(), lines.len()), 0);
     assert_eq!(
         window(0, lines.len() - 1, lines.len(), 3),
         lines.len() - 3,
@@ -140,71 +134,123 @@ fn the_highlight_steps_over_a_heading_rather_than_onto_it() {
     assert!(Drawn::gap().picks.is_none());
 }
 
-/// A filter narrows the list to what matches, and a heading whose section has been emptied
-/// goes with it — a heading over nothing makes a narrowed list look broken.
+/// A filter narrows the list to what matches, and never takes the way out with it.
 #[test]
-fn filtering_takes_an_emptied_heading_with_it() {
+fn filtering_narrows_the_list_and_never_the_way_out() {
     use super::lay_out;
-    use crate::ui::screen::{Item, Row};
+    use crate::ui::paint::Widths;
+    use crate::ui::screen::Item;
 
-    let rows = vec![
-        Row::Heading("ADD ONE".to_owned()),
-        Row::Item(Item::new("Tell sloop about a database", ""), 0),
-        Row::Heading("LOOK".to_owned()),
-        Row::Item(Item::new("See the ones sloop knows", ""), 1),
+    let items = vec![
+        Item::new("Tell sloop about a database", ""),
+        Item::new("See the ones sloop knows", ""),
     ];
 
-    let narrowed = lay_out(&rows, "← Back", "tell", 30, Some(100));
+    let narrowed = lay_out(
+        &items,
+        "\u{2190} Back",
+        "tell",
+        Widths {
+            title: 30,
+            note: 0,
+            ..Widths::default()
+        },
+        Some(100),
+    );
     let drawn: Vec<&str> = narrowed.iter().map(|line| line.text.trim()).collect();
     assert!(
         drawn.iter().any(|line| line.contains("Tell sloop")),
         "{drawn:?}"
     );
-    assert!(!drawn.iter().any(|line| line.contains("LOOK")), "{drawn:?}");
+    assert!(
+        !drawn.iter().any(|line| line.contains("See the")),
+        "{drawn:?}"
+    );
     assert!(
         drawn.iter().any(|line| line.contains("Back")),
         "the way out went with it"
     );
 }
 
-/// **A heading and the things under it never start in the same column.**
-///
-/// The step in is the whole of the structure: without it the two read as one flat run and
-/// the heading looks like another item. Every line already begins in the two columns the
-/// arrow lives in, so the heading takes no inset of its own and `paint::option` gives the
-/// item its own.
+/// **The objection that reopened the doors, answered.** A front page of six lines was tried
+/// before and put back, because `mirror` was not written on it and so could not be found by
+/// typing. A door carries the names of everything behind it in `finds`, which the filter
+/// reads and the screen never draws.
 #[test]
-fn an_item_starts_further_in_than_the_heading_above_it() {
+fn the_filter_reads_what_is_behind_a_door() {
     use super::lay_out;
-    use crate::ui::screen::{Item, Row};
+    use crate::ui::paint::Widths;
+    use crate::ui::screen::Item;
 
-    let rows = vec![
-        Row::Heading("ADD ONE".to_owned()),
-        Row::Item(Item::new("Tell sloop about a database", "sloop db add"), 0),
-    ];
-    let lines = lay_out(&rows, "← Back", "", 30, Some(100));
+    let mut door = Item::new("Copy a database", "mirror exactly, or merge");
+    door.finds = "mirror sync clone".to_owned();
+    let items = vec![Item::new("Databases", "3 registered"), door];
+
+    let narrowed = lay_out(
+        &items,
+        "\u{2190} Back",
+        "sync",
+        Widths {
+            title: 20,
+            note: 26,
+            ..Widths::default()
+        },
+        Some(100),
+    );
+    let drawn: Vec<&str> = narrowed.iter().map(|line| line.text.trim()).collect();
+    assert!(
+        drawn.iter().any(|line| line.contains("Copy a database")),
+        "typing `sync` did not find the door that holds it: {drawn:?}"
+    );
+    assert!(
+        !drawn.iter().any(|line| line.contains("Databases")),
+        "{drawn:?}"
+    );
+    assert!(
+        !narrowed.iter().any(|line| line.text.contains("clone")),
+        "the filter's own words were drawn on the screen: {drawn:?}"
+    );
+}
+
+/// **An item is stepped in from the arrow, and the way out is not.**
+///
+/// The step in is what makes a list read as a list rather than as a flat run; the way out
+/// belongs to nothing above it, so it sits back at the arrow's own column.
+#[test]
+fn an_item_is_stepped_in_and_the_way_out_is_not() {
+    use super::lay_out;
+    use crate::ui::paint::Widths;
+    use crate::ui::screen::Item;
+
+    let items = vec![Item::new("Tell sloop about a database", "sloop db add")];
+    let lines = lay_out(
+        &items,
+        "\u{2190} Back",
+        "",
+        Widths {
+            title: 30,
+            note: 12,
+            ..Widths::default()
+        },
+        Some(100),
+    );
 
     let starts = |text: &str| {
         let plain = anstream::adapter::strip_str(text).to_string();
         plain.len() - plain.trim_start().len()
     };
 
-    let heading = starts(&lines[0].text);
-    let item = starts(&lines[1].text);
+    let item = starts(&lines[0].text);
     let back = starts(&lines.last().expect("the way out is drawn").text);
 
-    assert!(
-        item > heading,
-        "a heading at {heading} and an item at {item} read as one flat run"
-    );
     assert_eq!(
-        item - heading,
+        item,
         crate::ui::paint::UNDER,
         "the step in is not the one the layout says it is"
     );
     assert_eq!(
-        back, heading,
-        "the way out belongs to no section and sits at the headings' column"
+        back, 0,
+        "the way out belongs to no group and is not stepped in"
     );
 }
 

@@ -1,6 +1,6 @@
 //! What a screen looks like, checked without a terminal to look at.
 
-use super::{Banner, Header, Line, MEASURE, VERSION, column_for, frame, option, wrap};
+use super::{Banner, Header, Line, MEASURE, VERSION, Widths, frame, option, widths, wrap};
 use crate::style::Hue;
 
 /// Strip every SGR sequence, the way a reader's eye does.
@@ -118,34 +118,84 @@ fn a_header_never_ends_in_blank_rows() {
 }
 
 #[test]
-fn a_menu_item_lines_its_phrase_up_in_a_column() {
-    let column = column_for(["Rename one", "Check one answers"].into_iter());
-    assert_eq!(column, "Check one answers".chars().count());
+fn a_menu_item_lines_its_columns_up_with_every_other_row() {
+    let rows = [
+        (
+            "Rename one",
+            "the name sloop files it under",
+            "sloop db rename",
+        ),
+        ("Check one answers", "opens a connection", "sloop db test"),
+    ];
+    let widths = widths(rows.into_iter());
+    assert_eq!(widths.title, "Check one answers".chars().count());
+    assert_eq!(widths.note, "the name sloop files it under".chars().count());
+    assert_eq!(widths.command, "sloop db rename".chars().count());
 
-    for title in ["Rename one", "Check one answers"] {
+    for (title, note, _) in rows {
         let drawn = plain(&option(
             title,
-            "the name sloop files it under",
-            column,
-            Some(100),
+            note,
+            Hue::Dim,
+            "sloop db rename",
+            widths,
+            Some(110),
         ));
         assert!(
             drawn.starts_with(&format!("{}{title}", " ".repeat(super::UNDER))),
-            "an item is not stepped in under its heading: {drawn:?}"
+            "an item is not stepped in from the arrow: {drawn:?}"
         );
         assert_eq!(
-            drawn.find("the name"),
-            Some(super::UNDER + column + 2),
-            "the phrase did not land in its column: {drawn:?}"
+            drawn.find(note),
+            Some(super::UNDER + widths.title + super::GAP),
+            "the note did not land in its column: {drawn:?}"
+        );
+        assert_eq!(
+            drawn.find("sloop db rename"),
+            Some(super::UNDER + widths.title + super::GAP + widths.note + super::GAP),
+            "the command did not land in its column: {drawn:?}"
         );
     }
+}
+
+/// **Rule 11: the command is never what gets dropped.** A terminal too narrow for three
+/// columns loses the middle one, because the command is the thing somebody is meant to be
+/// able to copy off the screen.
+#[test]
+fn a_narrow_row_drops_the_note_and_keeps_the_command() {
+    let widths = Widths {
+        title: 16,
+        note: 40,
+        ..Widths::default()
+    };
+    let drawn = plain(&option(
+        "Back one up now",
+        "dumps it and checks every row arrived",
+        Hue::Dim,
+        "sloop backup <name>",
+        widths,
+        Some(60),
+    ));
+    assert!(drawn.contains("sloop backup <name>"), "{drawn:?}");
+    assert!(!drawn.contains("dumps it"), "{drawn:?}");
 }
 
 /// A phrase that cannot fit is dropped rather than wrapped: `inquire` gives one row per
 /// item, so a phrase that overflows becomes a second item's worth of mess.
 #[test]
 fn a_narrow_menu_drops_the_phrase_rather_than_wrapping_it() {
-    let drawn = option("Rename one", "the name sloop files it under", 10, Some(30));
+    let drawn = option(
+        "Rename one",
+        "the name sloop files it under",
+        Hue::Dim,
+        "",
+        Widths {
+            title: 10,
+            note: 29,
+            ..Widths::default()
+        },
+        Some(30),
+    );
     assert_eq!(drawn.trim_start(), "Rename one");
     assert!(drawn.starts_with(&" ".repeat(super::UNDER)), "{drawn:?}");
 }
@@ -156,7 +206,13 @@ fn a_menu_item_fits_the_terminal_it_is_drawn_in() {
         let drawn = plain(&option(
             "Delete one from the server",
             "the database itself, gone for good. `sloop backup` first if you want a copy",
-            26,
+            Hue::Dim,
+            "sloop db drop <name>",
+            Widths {
+                title: 26,
+                note: 74,
+                ..Widths::default()
+            },
             Some(columns),
         ));
         // Two columns for the prefix `inquire` draws in front of every row, and the row
@@ -186,33 +242,60 @@ fn a_word_longer_than_the_measure_is_left_whole() {
     assert_eq!(wrap(long, 20), vec![long.to_owned()]);
 }
 
-/// **The owner asked for the version under the mark**, and for a reason `--version` does
-/// not cover: somebody looking at the menu should not have to leave it to find out which
-/// build is in front of them. See "Colour, and the version under the wordmark" in
-/// `docs/OWNER-DECISIONS.md`.
+/// **The owner asked for the version on the mark**, and for a reason `--version` does not
+/// cover: somebody looking at the menu should not have to leave it to find out which build is
+/// in front of them. It moved from under the block to beside it with the owner's Home A —
+/// see "Colour, and the version under the wordmark" and "The mark and the facts, side by
+/// side" in `docs/OWNER-DECISIONS.md`.
 #[test]
-fn the_version_sits_under_the_wordmark() {
+fn the_version_sits_beside_the_mark() {
     let drawn = plain(&frame(&home(), Some(100)));
-    let rows: Vec<&str> = drawn.lines().collect();
-
-    let block = rows
-        .iter()
-        .rposition(|row| row.contains("|_|"))
-        .expect("the wordmark is drawn");
-    let version = rows
-        .iter()
-        .position(|row| row.contains(VERSION))
+    let carries_it = drawn
+        .lines()
+        .find(|row| row.contains(VERSION))
         .expect("the version is drawn");
 
     assert!(
-        version > block,
-        "the version is not under the mark:\n{drawn}"
-    );
-    assert!(
-        version - block <= 2,
-        "the version drifted away from the mark:\n{drawn}"
+        carries_it.contains("sloop"),
+        "the version is not beside the word: {carries_it:?}"
     );
     assert!(VERSION.starts_with('v'), "{VERSION}");
+}
+
+/// **The whole point of Home A**: the mark and the facts share rows instead of stacking, so
+/// the list underneath has room to be a list. Twenty rows of header on a twenty-four-row
+/// terminal was the thing that made the old home screen a five-row keyhole.
+#[test]
+fn the_mark_and_the_facts_share_their_rows() {
+    let drawn = plain(&frame(&home(), Some(100)));
+    let rows: Vec<&str> = drawn.lines().collect();
+
+    let beside = rows
+        .iter()
+        .find(|row| row.contains("___|") && row.contains("backed up"))
+        .is_some();
+    assert!(beside, "nothing sits beside the mark:\n{drawn}");
+    assert!(
+        rows.len() <= 11,
+        "the header takes {} rows, which is a keyhole again:\n{drawn}",
+        rows.len()
+    );
+}
+
+/// A terminal too narrow to hold both stacks them rather than breaking either.
+#[test]
+fn a_narrow_terminal_stacks_the_mark_and_the_facts_again() {
+    let drawn = plain(&frame(&home(), Some(56)));
+    assert!(
+        !drawn
+            .lines()
+            .any(|row| row.contains("___|") && row.contains("backed up")),
+        "they are still side by side at 56 columns:\n{drawn}"
+    );
+    assert!(
+        drawn.contains("backed up"),
+        "the facts went missing:\n{drawn}"
+    );
 }
 
 /// Every deeper screen carries the word and a breadcrumb; only the top carries the block,
@@ -320,20 +403,26 @@ fn a_strapline_keeps_every_word_at_every_width() {
     }
 }
 
-/// And it still fits: beside the version on an ordinary terminal, under it on a narrow one.
+/// And it still fits: under the version on an ordinary terminal, and under it on a narrow
+/// one too — what changes with the width is whether the pair sits beside the mark or below
+/// it, never whether the strap is there.
 #[test]
-fn the_strapline_sits_beside_the_version_when_there_is_room() {
+fn the_strapline_sits_under_the_version_at_every_width() {
     let wide = plain(&frame(&home(), Some(100)));
+    let rows: Vec<&str> = wide.lines().collect();
+    let version = rows
+        .iter()
+        .position(|row| row.contains(VERSION))
+        .expect("the version is drawn");
     assert!(
-        wide.lines()
-            .any(|row| row.contains(VERSION) && row.contains("backed up")),
-        "the strapline left the version's line on a wide terminal:\n{wide}"
+        rows[version + 1].contains("backed up"),
+        "the strap is not under the version on a wide terminal:\n{wide}"
     );
 
     let narrow = plain(&frame(&home(), Some(44)));
     assert!(
-        narrow.lines().any(|row| row.trim() == VERSION),
-        "the strapline did not move under the version on a narrow one:\n{narrow}"
+        narrow.lines().any(|row| row.trim().ends_with(VERSION)),
+        "the version went missing on a narrow one:\n{narrow}"
     );
 }
 
@@ -346,13 +435,10 @@ fn a_long_value_wraps_into_its_own_column_rather_than_off_the_edge() {
         banner: Banner::Word,
         crumbs: vec!["Databases"],
         strap: String::new(),
-        lines: vec![
-            Line::fact(
-                "working in",
-                r"C:\Users\somebody\Documents\work\a-fairly-deep-project\services\orders\.sloop",
-            ),
-            Line::under("the nearest .sloop at or above the working directory"),
-        ],
+        lines: vec![Line::fact(
+            "working in",
+            r"C:\Users\somebody\Documents\work\a-fairly-deep-project\services\orders\.sloop",
+        )],
     };
 
     for columns in [40usize, 60, 80, 120] {
@@ -406,7 +492,18 @@ fn a_value_breaks_where_prose_would_overhang() {
 /// that only changed the first of them would leave half a row looking unselected.
 #[test]
 fn the_highlighted_line_is_all_one_colour() {
-    let row = option("Rename one", "sloop db rename <from> <to>", 12, Some(100));
+    let row = option(
+        "Rename one",
+        "the name sloop files it under",
+        Hue::Dim,
+        "sloop db rename <from> <to>",
+        Widths {
+            title: 12,
+            note: 29,
+            ..Widths::default()
+        },
+        Some(110),
+    );
     let lit = super::chosen(&row);
 
     assert_eq!(

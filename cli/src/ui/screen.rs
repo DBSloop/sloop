@@ -22,7 +22,10 @@ use crate::commands::init::Initialised;
 use crate::failure::{Failure, Outcome};
 
 use super::flow::{Answers, Doing, How, Job, Next, Step};
+use super::live::Told;
 use super::paint::{Banner, Header, Line};
+use crate::exit::Exit;
+use crate::mark::Mark;
 use crate::style::Hue;
 
 /// Where the render loop goes after a screen has been answered.
@@ -49,6 +52,23 @@ pub enum Flow {
     Quit,
 }
 
+/// What the doors on the home screen say about the world behind them.
+///
+/// **Worked out once and kept, never per keystroke.** The home screen is redrawn on every
+/// arrow key, and a status that scanned the backup store or asked the service control
+/// manager each time would be a directory walk and a system call per keypress. It is taken
+/// when the session opens and again after every job, which is exactly when it can have
+/// changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Standing {
+    /// How many databases this registry holds.
+    pub databases: usize,
+    /// How many backups are stored, and how long ago the newest was taken.
+    pub backups: Option<(usize, String)>,
+    /// What the background service is doing, and whether that is a good thing.
+    pub service: Option<(String, bool)>,
+}
+
 /// Everything a screen needs to know about the world outside it.
 ///
 /// Plain owned data on purpose. A screen that held a `&Registries` would make the whole
@@ -68,8 +88,8 @@ pub struct Shell {
     pub working_in: String,
     /// Why that one and not the other, in a phrase.
     pub found_by: String,
-    /// How many databases it holds.
-    pub holds: usize,
+    /// What the doors say, as of the last time anything could have changed it.
+    pub standing: Standing,
     /// True when there is nothing registered anywhere and no project above the cwd.
     pub fresh: bool,
     /// Whether this machine has been through Setup.
@@ -144,8 +164,56 @@ pub enum Screen {
         /// Where the highlight is.
         cursor: usize,
     },
-    /// The wordmark, and everything sloop can do.
+    /// The wordmark, and the six doors.
     Home {
+        /// Where the highlight is.
+        cursor: usize,
+    },
+    /// What is behind one door.
+    Door {
+        /// Which one, indexing [`DOORS`].
+        door: usize,
+        /// Where the highlight is.
+        cursor: usize,
+    },
+    /// A job that finished, and what it did.
+    ///
+    /// **The screen the user actually reads.** Nothing drawn inside the alternate buffer
+    /// survives it, so the live screen a job ran on is gone the moment it returns — this is
+    /// what is left, and it holds the whole transcript rather than a summary of it.
+    Done {
+        /// Which command it was.
+        leaf: Leaf,
+        /// Every step it took and every line it printed.
+        told: Vec<Told>,
+        /// The flag form of what just ran, so a session done by hand becomes a line somebody
+        /// can schedule. `R20`, moved onto the screen now that there is no scrollback to
+        /// print it into.
+        same: Option<String>,
+        /// How long it took.
+        took: String,
+        /// Where the highlight is.
+        cursor: usize,
+    },
+    /// A job that did not work, and the ways out of it.
+    ///
+    /// **The owner's rule 9.** A failure used to leave one sentence on the flow screen and
+    /// no way forward but running the same answers again. This keeps the answers, says what
+    /// happened, and offers the three things somebody actually wants: try it again, change
+    /// what you said, or go back.
+    Failed {
+        /// Which command it was.
+        leaf: Leaf,
+        /// What was answered, so that trying again does not mean typing it again.
+        answers: Box<Answers>,
+        /// Every step it took, up to the one that did not.
+        told: Vec<Told>,
+        /// What went wrong, in one sentence.
+        said: String,
+        /// What to do about it, when the failure named something.
+        hint: Option<String>,
+        /// The code it would have exited with.
+        exit: Exit,
         /// Where the highlight is.
         cursor: usize,
     },
@@ -174,110 +242,69 @@ pub enum Face {
     Ask(Ask),
 }
 
-/// A list of things to pick from, under headings. The way out is added by the loop, never
-/// by a screen — which is how *"`← Back` on every menu"* stays true of a menu nobody has
-/// looked at yet.
+/// A list of things to pick from. The way out is added by the loop, never by a screen —
+/// which is how *"`← Back` on every menu"* stays true of a menu nobody has looked at yet.
+///
+/// **No headings, and none of the structure that carried them.** The owner's rule 2:
+/// *"headings are looking bad needs to remove though i asked to add"*. What the headings were
+/// for — thirty commands on one screen needing somewhere to belong — is answered by the
+/// doors instead, so a list is now a list. See `docs/OWNER-DECISIONS.md`, "Headings out,
+/// doors in".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Menu {
     /// The line above the list.
     pub question: String,
-    /// The headings, and what is under each. At least one, and often more.
-    pub sections: Vec<Section>,
-}
-
-/// A heading and the things under it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Section {
-    /// All caps, in the accent. A row nobody can choose.
-    pub heading: String,
-    /// What is under it.
+    /// What is on it, in the order it is drawn.
     pub items: Vec<Item>,
 }
 
-/// One drawn line of a menu: a heading, or something that can be chosen.
-///
-/// **Flattened here rather than by the renderer**, so there is one answer to "what is on
-/// row seven" and the loop, the painter and the tests all read it from the same place.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Row {
-    /// A heading. Choosing it is not a thing that can happen — see [`Menu::rows`].
-    Heading(String),
-    /// An item, and which item it is counting only items.
-    Item(Item, usize),
-}
-
 impl Menu {
-    /// One section, for the screens that have nothing to group.
+    /// A list, and the line above it.
     #[must_use]
-    pub fn under(heading: &str, question: &str, items: Vec<Item>) -> Self {
+    pub fn of(question: &str, items: Vec<Item>) -> Self {
         Self {
             question: question.to_owned(),
-            sections: vec![Section {
-                heading: heading.to_owned(),
-                items,
-            }],
+            items,
         }
-    }
-
-    /// The rows as they are drawn, headings and all.
-    ///
-    /// Every item carries its own index among items, so nothing downstream has to count
-    /// headings to work out what was chosen — which is the one arithmetic mistake that
-    /// would silently run the wrong command.
-    #[must_use]
-    pub fn rows(&self) -> Vec<Row> {
-        let mut rows = Vec::new();
-        let mut chosen = 0;
-        for section in &self.sections {
-            if section.items.is_empty() {
-                continue;
-            }
-            rows.push(Row::Heading(section.heading.clone()));
-            for item in &section.items {
-                rows.push(Row::Item(item.clone(), chosen));
-                chosen += 1;
-            }
-        }
-        rows
-    }
-
-    /// How many things can actually be chosen, headings not counted.
-    ///
-    /// Only the tests ask: the loop works in rows, because a row is what the cursor sits
-    /// on. This is how a test says "this page offers nothing" without counting headings.
-    #[cfg(test)]
-    #[must_use]
-    pub fn choices(&self) -> usize {
-        self.sections
-            .iter()
-            .map(|section| section.items.len())
-            .sum()
     }
 }
 
-/// One line in a list.
+/// One line in a list: what it is called, what it is doing, and the command that does it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
     /// What it is called.
     pub title: String,
-    /// What it does, in one phrase. Shown when there is no command to show instead.
-    pub blurb: String,
+    /// The middle column: what it does, or what it is currently doing.
+    pub note: String,
+    /// Which colour that carries. Green for a thing that is working, amber for one that
+    /// wants attention, grey for a phrase that is only a description.
+    pub hue: Hue,
     /// The flag form that does the same thing, for the items that are commands.
     ///
     /// **The owner asked for it beside every one of them** — *"each task show the command
-    /// that how it can be done by command"*. It is reference and never an instruction: the
-    /// menu does the whole job, and this is how the same job is written into a crontab.
+    /// that how it can be done by command"*, and again in rule 11, *"showing command in right
+    /// side seems good, don't remove"*. It is reference and never an instruction: the menu
+    /// does the whole job, and this is how the same job is written into a crontab.
     pub command: String,
+    /// Words the filter matches on that are not drawn anywhere.
+    ///
+    /// **This is what makes the doors safe.** A front page of six lines was tried before and
+    /// reopened, because `mirror` was not written on it and so could not be found by eye or
+    /// by typing. The door that holds `mirror` carries the word here, so typing it still
+    /// lands on the right row.
+    pub finds: String,
 }
 
 impl Item {
     /// Something to pick, with a phrase saying what it means.
     #[must_use]
-    pub fn new(title: &str, blurb: &str) -> Self {
+    pub fn new(title: &str, note: &str) -> Self {
         Self {
             title: title.to_owned(),
-            blurb: blurb.to_owned(),
+            note: note.to_owned(),
+            hue: Hue::Dim,
             command: String::new(),
+            finds: String::new(),
         }
     }
 
@@ -286,19 +313,32 @@ impl Item {
     pub fn doing(leaf: Leaf) -> Self {
         Self {
             title: leaf.title.to_owned(),
-            blurb: leaf.blurb.to_owned(),
+            note: leaf.blurb.to_owned(),
+            hue: Hue::Dim,
             command: leaf.command.to_owned(),
+            finds: String::new(),
         }
     }
 
-    /// What is drawn to the right of the title.
+    /// A door, with what is behind it said in the colour it deserves.
     #[must_use]
-    pub fn beside(&self) -> &str {
-        if self.command.is_empty() {
-            &self.blurb
-        } else {
-            &self.command
+    fn door(door: &Door, note: String, hue: Hue) -> Self {
+        Self {
+            title: door.title.to_owned(),
+            note,
+            hue,
+            command: door.command.to_owned(),
+            finds: door.finds.to_owned(),
         }
+    }
+
+    /// Everything the filter is allowed to match on.
+    #[must_use]
+    pub fn matches(&self, looking_for: &str) -> bool {
+        looking_for.is_empty()
+            || self.title.to_lowercase().contains(looking_for)
+            || self.command.to_lowercase().contains(looking_for)
+            || self.finds.to_lowercase().contains(looking_for)
     }
 }
 
@@ -340,9 +380,6 @@ pub struct Leaf {
     /// hand.
     pub run_it: &'static str,
 }
-
-/// A heading, and the commands under it.
-struct Shelf(&'static str, &'static [Leaf]);
 
 /// **Every command sloop has, on one screen, under the heading it belongs to.**
 ///
@@ -408,306 +445,539 @@ const SETUP: Leaf = Leaf {
     run_it: "Set it up",
 };
 
-const HOME: &[Shelf] = &[
-    Shelf(
-        "DATABASES",
-        &[
-            Leaf {
-                title: "Tell sloop about a database",
-                blurb: "it already exists on a server; this gives sloop the way in",
-                command: "sloop db add <name>",
-                job: Job::DbAdd,
-                under: "Databases",
-                run_it: "Register it",
-            },
-            Leaf {
-                title: "Make a new database",
-                blurb: "creates the database and its user on the server, then registers it",
-                command: "sloop db create <name>",
-                job: Job::DbCreate,
-                under: "Databases",
-                run_it: "Make it",
-            },
-            Leaf {
-                title: "See the ones sloop knows",
-                blurb: "every database in this registry, and where its password comes from",
-                command: "sloop db list",
-                job: Job::DbList,
-                under: "Databases",
-                run_it: "Show them",
-            },
-            Leaf {
-                title: "Check one answers",
-                blurb: "opens a connection and says what came back",
-                command: "sloop db test <name>",
-                job: Job::DbTest,
-                under: "Databases",
-                run_it: "Try it",
-            },
-            Leaf {
-                title: "Change one's details",
-                blurb: "host, port, user, database, password",
-                command: "sloop db edit <name>",
-                job: Job::DbEdit,
-                under: "Databases",
-                run_it: "Save the change",
-            },
-            Leaf {
-                title: "Rename one",
-                blurb: "the name sloop files it under — the server's own name is unchanged",
-                command: "sloop db rename <from> <to>",
-                job: Job::DbRename,
-                under: "Databases",
-                run_it: "Rename it",
-            },
-            Leaf {
-                title: "Make sloop forget one",
-                blurb: "removes it from this registry. The database itself is untouched",
-                command: "sloop db remove <name>",
-                job: Job::DbRemove,
-                under: "Databases",
-                run_it: "Forget it",
-            },
-            Leaf {
-                title: "Delete one from the server",
-                blurb: "the database itself, gone for good. `sloop backup` first if you want a copy",
-                command: "sloop db drop <name>",
-                job: Job::DbDrop,
-                under: "Databases",
-                run_it: "Delete it from the server",
-            },
-        ],
-    ),
-    Shelf(
-        "BACKUPS",
-        &[
-            Leaf {
-                title: "Back one up now",
-                blurb: "dumps it, checks every row arrived, and writes a manifest beside it",
-                command: "sloop backup <name>",
-                job: Job::Backup,
-                under: "Backups",
-                run_it: "Back it up",
-            },
-            Leaf {
-                title: "Back up every one of them",
-                blurb: "carries on past a failure and says at the end which ones failed",
-                command: "sloop backup --all",
-                job: Job::BackupAll,
-                under: "Backups",
-                run_it: "Back them all up",
-            },
-            Leaf {
-                title: "See the backups I have",
-                blurb: "what was taken, when, how big, and whether it still checks out",
-                command: "sloop backups list",
-                job: Job::BackupsList,
-                under: "Backups",
-                run_it: "Show them",
-            },
-            Leaf {
-                title: "Clear out the old ones",
-                blurb: "keeps the most recent, deletes the rest",
-                command: "sloop backups prune --keep 7",
-                job: Job::BackupsPrune,
-                under: "Backups",
-                run_it: "Clear them out",
-            },
-            Leaf {
-                title: "Put a backup back",
-                blurb: "restores a database from one of them",
-                command: "sloop restore <name>",
-                job: Job::Restore,
-                under: "Backups",
-                run_it: "Put it back",
-            },
-        ],
-    ),
-    Shelf(
-        "COPYING",
-        &[
-            Leaf {
-                title: "Mirror, an exact copy",
-                blurb: "the destination ends up identical. Anything only it had is gone",
-                command: "sloop mirror <source> --to <destination>",
-                job: Job::Mirror,
-                under: "Copying",
-                run_it: "Mirror it",
-            },
-            Leaf {
-                title: "Sync, a merge",
-                blurb: "rows are added and replaced. Rows only the destination has are kept",
-                command: "sloop sync <source> --to <destination>",
-                job: Job::Sync,
-                under: "Copying",
-                run_it: "Merge it",
-            },
-        ],
-    ),
-    Shelf(
-        "READING",
-        &[Leaf {
-            title: "Look inside a database",
-            blurb: "pick a table and tick the columns — no SQL, and nothing it runs can write",
-            command: "sloop query <name>",
-            job: Job::Query,
-            under: "Reading",
-            run_it: "Open it",
-        }],
-    ),
-    Shelf(
-        "BACKUP KEY",
-        &[
-            Leaf {
-                title: "Export the key",
-                blurb: "copy it somewhere safe. Without it, no backup can ever be opened",
-                command: "sloop key export",
-                job: Job::KeyExport,
-                under: "Backup key",
-                run_it: "Export the key",
-            },
-            Leaf {
-                title: "Import a key",
-                blurb: "bring one in from another machine",
-                command: "sloop key import",
-                job: Job::KeyImport,
-                under: "Backup key",
-                run_it: "Import a key",
-            },
-        ],
-    ),
-    Shelf(
-        "THIS MACHINE",
-        &[
-            Leaf {
-                title: "Install a database server",
-                blurb: "picks an engine and a version, then downloads, installs and starts it",
-                command: "sloop server install",
-                job: Job::ServerInstall,
-                under: "This machine",
-                run_it: "Choose one to install",
-            },
-            Leaf {
-                title: "Open sloop's own database",
-                blurb: "where sloop keeps its state, for psql, DataGrip or anything else",
-                command: "sloop server connection",
-                job: Job::ServerConnection,
-                under: "This machine",
-                run_it: "Show me",
-            },
-            Leaf {
-                title: "Check my setup",
-                blurb: "what sloop can find on this machine, and what it cannot",
-                command: "sloop doctor",
-                job: Job::Doctor,
-                under: "This machine",
-                run_it: "Check this machine",
-            },
-        ],
-    ),
-    // **`R23a`: a shelf of its own rather than four more rows under `THIS MACHINE`.** That
-    // heading had four items and the service has nine; eleven rows under one word is a list
-    // nobody reads to the end of, and the service is a different subject from *what is
-    // installed here* anyway. The order is the order somebody does them in: install it,
-    // give it a database, put that database on a schedule, then ask what it has been doing.
-    Shelf(
-        "THE BACKGROUND SERVICE",
-        &[
-            Leaf {
-                title: "Run sloop in the background",
-                blurb: "registers it with this machine so it starts at boot. Needs an \
-                        administrator or sudo",
-                command: "sloop service install",
-                job: Job::ServiceInstall,
-                under: "The background service",
-                run_it: "Register it",
-            },
-            Leaf {
-                title: "Watch a database",
-                blurb: "the service reads it every round. Picked up without a restart",
-                command: "sloop service attach <name>",
-                job: Job::ServiceAttach,
-                under: "The background service",
-                run_it: "Watch it",
-            },
-            Leaf {
-                title: "Back one up on a schedule",
-                blurb: "sloop runs the backup and the pruning. No cron line, no scheduled task",
-                command: "sloop service schedule <name> --every 1d --keep 7",
-                job: Job::ServiceSchedule,
-                under: "The background service",
-                run_it: "Set the schedule",
-            },
-            Leaf {
-                title: "What my databases have been doing",
-                blurb: "rows in, rows out and size, by day, week and month",
-                command: "sloop service activity",
-                job: Job::ServiceActivity,
-                under: "The background service",
-                run_it: "Show me",
-            },
-            Leaf {
-                title: "Is it running?",
-                blurb: "installed, running, when it last ran and when it runs next",
-                command: "sloop service status",
-                job: Job::ServiceStatus,
-                under: "The background service",
-                run_it: "Show me",
-            },
-            Leaf {
-                title: "Stop watching one",
-                blurb: "everything already recorded about it stays",
-                command: "sloop service detach <name>",
-                job: Job::ServiceDetach,
-                under: "The background service",
-                run_it: "Stop watching it",
-            },
-            Leaf {
-                title: "Start it now",
-                blurb: "rather than waiting for the next boot",
-                command: "sloop service start",
-                job: Job::ServiceStart,
-                under: "The background service",
-                run_it: "Start it",
-            },
-            Leaf {
-                title: "Stop it now",
-                blurb: "it still starts again at the next boot",
-                command: "sloop service stop",
-                job: Job::ServiceStop,
-                under: "The background service",
-                run_it: "Stop it",
-            },
-            Leaf {
-                title: "Take it off this machine",
-                blurb: "stops it and removes it. Nothing it recorded is deleted. Needs an \
-                        administrator or sudo",
-                command: "sloop service uninstall",
-                job: Job::ServiceUninstall,
-                under: "The background service",
-                run_it: "Take it off",
-            },
-        ],
-    ),
-];
-
-/// The command at `index`, counting commands and not headings.
-fn leaf_at(index: usize) -> Option<Leaf> {
-    HOME.iter()
-        .flat_map(|Shelf(_, leaves)| leaves.iter())
-        .nth(index)
-        .copied()
+/// One door on the home screen, and the commands behind it.
+///
+/// **Six of them, which is the owner's rule 12** — *"home screen shows a lot of items, which
+/// can go inside sub menus"*. Thirty commands under seven headings was a list nobody read to
+/// the end of; six doors is a front page somebody can take in at a glance, and the commands
+/// are one keystroke behind whichever one they belong to.
+///
+/// **And the objection that removed the doors last time is answered by [`Door::finds`].** A
+/// front page of six lines was tried before and reopened, because the word `mirror` was not
+/// on it and neither the eye nor the type-to-filter could find it. The filter now matches
+/// every command name behind a door as well as the door's own title, so typing `mirror` on
+/// the home screen still lands on the one that does it. See "Headings out, doors in" in
+/// `docs/OWNER-DECISIONS.md`.
+struct Door {
+    /// What the door is called.
+    title: &'static str,
+    /// The family's flag form, for the right-hand column.
+    command: &'static str,
+    /// The crumb for the screen behind it.
+    crumb: &'static str,
+    /// The line above the list behind it.
+    question: &'static str,
+    /// Every word the filter should match on beyond the title. Never drawn.
+    finds: &'static str,
+    /// What the middle column says when there is no live fact to put there.
+    blurb: &'static str,
+    /// The commands.
+    leaves: &'static [Leaf],
 }
 
-/// The home screen as sections.
-fn home_sections() -> Vec<Section> {
-    HOME.iter()
-        .map(|Shelf(heading, leaves)| Section {
-            heading: (*heading).to_owned(),
-            items: leaves.iter().copied().map(Item::doing).collect(),
+const DATABASES_LEAVES: &[Leaf] = &[
+    Leaf {
+        title: "Tell sloop about a database",
+        blurb: "it already exists on a server; this gives sloop the way in",
+        command: "sloop db add <name>",
+        job: Job::DbAdd,
+        under: "Databases",
+        run_it: "Register it",
+    },
+    Leaf {
+        title: "Make a new database",
+        blurb: "creates the database and its user on the server, then registers it",
+        command: "sloop db create <name>",
+        job: Job::DbCreate,
+        under: "Databases",
+        run_it: "Make it",
+    },
+    Leaf {
+        title: "See the ones sloop knows",
+        blurb: "every database in this registry, and where its password comes from",
+        command: "sloop db list",
+        job: Job::DbList,
+        under: "Databases",
+        run_it: "Show them",
+    },
+    Leaf {
+        title: "Check one answers",
+        blurb: "opens a connection and says what came back",
+        command: "sloop db test <name>",
+        job: Job::DbTest,
+        under: "Databases",
+        run_it: "Try it",
+    },
+    Leaf {
+        title: "Change one's details",
+        blurb: "host, port, user, database, password",
+        command: "sloop db edit <name>",
+        job: Job::DbEdit,
+        under: "Databases",
+        run_it: "Save the change",
+    },
+    Leaf {
+        title: "Rename one",
+        blurb: "the name sloop files it under — the server's own name is unchanged",
+        command: "sloop db rename <from> <to>",
+        job: Job::DbRename,
+        under: "Databases",
+        run_it: "Rename it",
+    },
+    Leaf {
+        title: "Make sloop forget one",
+        blurb: "removes it from this registry. The database itself is untouched",
+        command: "sloop db remove <name>",
+        job: Job::DbRemove,
+        under: "Databases",
+        run_it: "Forget it",
+    },
+    Leaf {
+        title: "Delete one from the server",
+        blurb: "the database itself, gone for good. `sloop backup` first if you want a copy",
+        command: "sloop db drop <name>",
+        job: Job::DbDrop,
+        under: "Databases",
+        run_it: "Delete it from the server",
+    },
+];
+
+const BACKUPS_LEAVES: &[Leaf] = &[
+    Leaf {
+        title: "Back one up now",
+        blurb: "dumps it, checks every row arrived, and writes a manifest beside it",
+        command: "sloop backup <name>",
+        job: Job::Backup,
+        under: "Backups",
+        run_it: "Back it up",
+    },
+    Leaf {
+        title: "Back up every one of them",
+        blurb: "carries on past a failure and says at the end which ones failed",
+        command: "sloop backup --all",
+        job: Job::BackupAll,
+        under: "Backups",
+        run_it: "Back them all up",
+    },
+    Leaf {
+        title: "See the backups I have",
+        blurb: "what was taken, when, how big, and whether it still checks out",
+        command: "sloop backups list",
+        job: Job::BackupsList,
+        under: "Backups",
+        run_it: "Show them",
+    },
+    Leaf {
+        title: "Clear out the old ones",
+        blurb: "keeps the most recent, deletes the rest",
+        command: "sloop backups prune --keep 7",
+        job: Job::BackupsPrune,
+        under: "Backups",
+        run_it: "Clear them out",
+    },
+    Leaf {
+        title: "Put a backup back",
+        blurb: "restores a database from one of them",
+        command: "sloop restore <name>",
+        job: Job::Restore,
+        under: "Backups",
+        run_it: "Put it back",
+    },
+];
+
+const COPY_LEAVES: &[Leaf] = &[
+    Leaf {
+        title: "Mirror, an exact copy",
+        blurb: "the destination ends up identical. Anything only it had is gone",
+        command: "sloop mirror <source> --to <destination>",
+        job: Job::Mirror,
+        under: "Copying",
+        run_it: "Mirror it",
+    },
+    Leaf {
+        title: "Sync, a merge",
+        blurb: "rows are added and replaced. Rows only the destination has are kept",
+        command: "sloop sync <source> --to <destination>",
+        job: Job::Sync,
+        under: "Copying",
+        run_it: "Merge it",
+    },
+];
+
+const READ_LEAVES: &[Leaf] = &[Leaf {
+    title: "Look inside a database",
+    blurb: "pick a table and tick the columns — no SQL, and nothing it runs can write",
+    command: "sloop query <name>",
+    job: Job::Query,
+    under: "Reading",
+    run_it: "Open it",
+}];
+
+const SERVICE_LEAVES: &[Leaf] = &[
+    Leaf {
+        title: "Run sloop in the background",
+        blurb: "registers it with this machine so it starts at boot. Needs an \
+                        administrator or sudo",
+        command: "sloop service install",
+        job: Job::ServiceInstall,
+        under: "The background service",
+        run_it: "Register it",
+    },
+    Leaf {
+        title: "Watch a database",
+        blurb: "the service reads it every round. Picked up without a restart",
+        command: "sloop service attach <name>",
+        job: Job::ServiceAttach,
+        under: "The background service",
+        run_it: "Watch it",
+    },
+    Leaf {
+        title: "Back one up on a schedule",
+        blurb: "sloop runs the backup and the pruning. No cron line, no scheduled task",
+        command: "sloop service schedule <name> --every 1d --keep 7",
+        job: Job::ServiceSchedule,
+        under: "The background service",
+        run_it: "Set the schedule",
+    },
+    Leaf {
+        title: "What my databases have been doing",
+        blurb: "rows in, rows out and size, by day, week and month",
+        command: "sloop service activity",
+        job: Job::ServiceActivity,
+        under: "The background service",
+        run_it: "Show me",
+    },
+    Leaf {
+        title: "Is it running?",
+        blurb: "installed, running, when it last ran and when it runs next",
+        command: "sloop service status",
+        job: Job::ServiceStatus,
+        under: "The background service",
+        run_it: "Show me",
+    },
+    Leaf {
+        title: "Stop watching one",
+        blurb: "everything already recorded about it stays",
+        command: "sloop service detach <name>",
+        job: Job::ServiceDetach,
+        under: "The background service",
+        run_it: "Stop watching it",
+    },
+    Leaf {
+        title: "Start it now",
+        blurb: "rather than waiting for the next boot",
+        command: "sloop service start",
+        job: Job::ServiceStart,
+        under: "The background service",
+        run_it: "Start it",
+    },
+    Leaf {
+        title: "Stop it now",
+        blurb: "it still starts again at the next boot",
+        command: "sloop service stop",
+        job: Job::ServiceStop,
+        under: "The background service",
+        run_it: "Stop it",
+    },
+    Leaf {
+        title: "Take it off this machine",
+        blurb: "stops it and removes it. Nothing it recorded is deleted. Needs an \
+                        administrator or sudo",
+        command: "sloop service uninstall",
+        job: Job::ServiceUninstall,
+        under: "The background service",
+        run_it: "Take it off",
+    },
+];
+
+const MACHINE_LEAVES: &[Leaf] = &[
+    Leaf {
+        title: "Install a database server",
+        blurb: "picks an engine and a version, then downloads, installs and starts it",
+        command: "sloop server install",
+        job: Job::ServerInstall,
+        under: "This machine",
+        run_it: "Choose one to install",
+    },
+    Leaf {
+        title: "Open sloop's own database",
+        blurb: "where sloop keeps its state, for psql, DataGrip or anything else",
+        command: "sloop server connection",
+        job: Job::ServerConnection,
+        under: "This machine",
+        run_it: "Show me",
+    },
+    Leaf {
+        title: "Check my setup",
+        blurb: "what sloop can find on this machine, and what it cannot",
+        command: "sloop doctor",
+        job: Job::Doctor,
+        under: "This machine",
+        run_it: "Check this machine",
+    },
+    Leaf {
+        title: "Export the key",
+        blurb: "copy it somewhere safe. Without it, no backup can ever be opened",
+        command: "sloop key export",
+        job: Job::KeyExport,
+        under: "This machine",
+        run_it: "Export the key",
+    },
+    Leaf {
+        title: "Import a key",
+        blurb: "bring one in from another machine",
+        command: "sloop key import",
+        job: Job::KeyImport,
+        under: "This machine",
+        run_it: "Import a key",
+    },
+];
+
+/// **Every door, and every command behind it.**
+///
+/// **It stays a table on purpose.** Restructuring this menu again is editing the rows below,
+/// not touching the loop that draws them — which is what makes the next reshuffle cheap.
+///
+/// Registering comes first because you cannot back up a database sloop has never heard of;
+/// copying comes after both because it needs two.
+const DOORS: &[Door] = &[
+    Door {
+        title: "Databases",
+        blurb: "add one, check one, change one",
+        command: "sloop db …",
+        crumb: "Databases",
+        question: "What about your databases?",
+        finds: "add create register list test check edit rename remove forget drop delete",
+        leaves: DATABASES_LEAVES,
+    },
+    Door {
+        title: "Backups",
+        blurb: "take one, put one back, clear the old ones",
+        command: "sloop backup …",
+        crumb: "Backups",
+        question: "What about your backups?",
+        finds: "back up all list restore put back prune clear out old",
+        leaves: BACKUPS_LEAVES,
+    },
+    Door {
+        title: "Copy a database",
+        blurb: "mirror exactly, or merge with sync",
+        command: "sloop mirror …",
+        crumb: "Copying",
+        question: "Which way of copying?",
+        finds: "mirror sync copy clone merge exact duplicate move",
+        leaves: COPY_LEAVES,
+    },
+    Door {
+        title: "Look inside one",
+        blurb: "tables and rows, with no SQL to type",
+        command: "sloop query …",
+        crumb: "Reading",
+        question: "Which database?",
+        finds: "query read look inside tables rows columns select",
+        leaves: READ_LEAVES,
+    },
+    Door {
+        title: "Background service",
+        blurb: "watch, schedule, and what it has been doing",
+        command: "sloop service …",
+        crumb: "The background service",
+        question: "What about the background service?",
+        finds: "service install watch attach detach schedule activity status start stop uninstall daemon",
+        leaves: SERVICE_LEAVES,
+    },
+    Door {
+        title: "This machine",
+        blurb: "servers, the backup key, and a health check",
+        command: "sloop doctor",
+        crumb: "This machine",
+        question: "What about this machine?",
+        finds: "server install postgres mysql mariadb connection doctor health key export import",
+        leaves: MACHINE_LEAVES,
+    },
+];
+
+/// What sits above the box a new project's directory is typed into.
+fn new_project_lines(trouble: Option<&str>) -> Vec<Line> {
+    let mut lines = vec![Line::Quiet(
+        "A .sloop folder is created here, and it ignores itself — git never sees it.".to_owned(),
+    )];
+    if let Some(trouble) = trouble {
+        lines.push(Line::Gap);
+        lines.push(Line::Wrong(trouble.to_owned()));
+    }
+    lines
+}
+
+/// What `init` just did.
+fn started_lines(report: &Initialised, shell: &Shell) -> Vec<Line> {
+    vec![
+        Line::Good(if report.existed {
+            "There was already a project here.".to_owned()
+        } else {
+            "Project created.".to_owned()
+        }),
+        Line::Gap,
+        Line::fact("registry", &report.registry.display().to_string()),
+        Line::fact("global", &shell.global.display().to_string()),
+    ]
+}
+
+/// What a job that finished says, above its choices.
+///
+/// **One screen for two outcomes.** A result with nothing amber in it is a tick and a green
+/// rail; one with a single amber row in it is the same screen with that row in amber and the
+/// headline changed to say so — which is the owner's Warning C, a result that worked with
+/// something to know rather than a different kind of screen.
+fn done_lines(leaf: &Leaf, told: &[Told], same: Option<&str>, took: &str) -> Vec<Line> {
+    let warned = told.iter().any(|said| said.mark == Mark::Warn);
+    let mut lines = vec![
+        Line::Verdict {
+            mark: if warned { Mark::Warn } else { Mark::Ok },
+            what: if warned { "DONE, WITH A NOTE" } else { "DONE" }.to_owned(),
+            subject: leaf.title.to_owned(),
+            tag: took.to_owned(),
+        },
+        Line::Gap,
+    ];
+    lines.extend(rail(told));
+    if let Some(same) = same {
+        lines.push(Line::Gap);
+        lines.push(Line::Quiet("the same thing, from a shell".to_owned()));
+        lines.push(Line::Command(same.to_owned()));
+    }
+    lines
+}
+
+/// What a job that did not work says, above the ways out of it.
+fn failed_lines(
+    leaf: &Leaf,
+    told: &[Told],
+    said: &str,
+    hint: Option<&str>,
+    exit: Exit,
+) -> Vec<Line> {
+    let mut lines = vec![
+        Line::Verdict {
+            mark: Mark::Bad,
+            what: "DID NOT WORK".to_owned(),
+            subject: leaf.title.to_owned(),
+            tag: format!("exit {}", exit.code()),
+        },
+        Line::Gap,
+    ];
+    lines.extend(rail(told));
+    lines.push(Line::Gap);
+    lines.push(Line::told("it said", said, Hue::Bad));
+    if let Some(hint) = hint {
+        lines.push(Line::told("try", hint, Hue::Text));
+    }
+    lines
+}
+
+/// The steps a job took, as the rail down the left of an outcome.
+///
+/// **The job's own words, not a summary of them.** Every marked step goes on the rail in the
+/// colour it settled with — which is what makes the warning screen a result that worked with
+/// one amber row in it rather than a different screen altogether.
+fn rail(told: &[Told]) -> Vec<Line> {
+    let steps: Vec<Line> = told
+        .iter()
+        .filter(|said| said.is_a_step())
+        .map(|said| Line::Step {
+            mark: said.mark,
+            text: said.text.clone(),
+            note: said.note.clone(),
+        })
+        .collect();
+    if !steps.is_empty() {
+        return steps;
+    }
+
+    // A job that settled no steps still said something, and an outcome screen with nothing
+    // on it is worse than one carrying the last few lines it printed.
+    let said: Vec<&Told> = told
+        .iter()
+        .filter(|said| !said.text.trim().is_empty())
+        .collect();
+    said.iter()
+        .skip(said.len().saturating_sub(LAST_FEW))
+        .map(|said| Line::Said(said.text.clone()))
+        .collect()
+}
+
+/// How many of a job's own lines an outcome shows when it settled no steps of its own.
+const LAST_FEW: usize = 8;
+
+/// The door at `index`.
+fn door_at(index: usize) -> Option<&'static Door> {
+    DOORS.get(index)
+}
+
+/// The command at `index` behind door `door`.
+fn leaf_in(door: usize, index: usize) -> Option<Leaf> {
+    DOORS.get(door)?.leaves.get(index).copied()
+}
+
+/// The six doors, as the rows of the home screen.
+fn door_items(standing: &Standing) -> Vec<Item> {
+    DOORS
+        .iter()
+        .enumerate()
+        .map(|(at, door)| {
+            let (note, mark) = door_note(at, door, standing);
+            Item::door(door, note, mark.hue())
         })
         .collect()
 }
+
+/// What one door says it is holding, and in which colour.
+///
+/// **Only what can be known cheaply and truthfully.** A door whose status would need a
+/// health check to work out says what it is for instead — a status that is sometimes wrong
+/// is worse than a phrase that is always right.
+fn door_note(at: usize, door: &Door, standing: &Standing) -> (String, Mark) {
+    match at {
+        0 => match standing.databases {
+            0 => ("nothing registered yet".to_owned(), Mark::Warn),
+            1 => ("1 registered".to_owned(), Mark::Ok),
+            many => (format!("{many} registered"), Mark::Ok),
+        },
+        1 => match &standing.backups {
+            None => ("none taken yet".to_owned(), Mark::Warn),
+            Some((1, when)) => (format!("1 kept · {when}"), Mark::Ok),
+            Some((many, when)) => (format!("{many} kept · newest {when}"), Mark::Ok),
+        },
+        4 => match &standing.service {
+            None => ("not registered with this machine".to_owned(), Mark::Todo),
+            Some((what, true)) => (what.clone(), Mark::Ok),
+            Some((what, false)) => (what.clone(), Mark::Warn),
+        },
+        _ => (door.blurb.to_owned(), Mark::Todo),
+    }
+}
+
+/// The chips along the top of the home screen.
+fn chips(standing: &Standing) -> Vec<(Mark, String)> {
+    let mut chips = vec![match standing.databases {
+        0 => (Mark::Warn, "no databases yet".to_owned()),
+        1 => (Mark::Ok, "1 database".to_owned()),
+        many => (Mark::Ok, format!("{many} databases")),
+    }];
+
+    chips.push(match &standing.backups {
+        None => (Mark::Warn, "no backups".to_owned()),
+        Some((_, when)) => (Mark::Ok, format!("last backup {when}")),
+    });
+
+    match &standing.service {
+        None => chips.push((Mark::Todo, "no background service".to_owned())),
+        Some((what, true)) => chips.push((Mark::Ok, format!("service {what}"))),
+        Some((what, false)) => chips.push((Mark::Warn, format!("service {what}"))),
+    }
+    chips
+}
+
 impl Screen {
     /// Where the highlight sits, so that coming back puts it where it was.
     #[must_use]
@@ -717,6 +987,9 @@ impl Screen {
             | Self::FirstRun { cursor }
             | Self::Started { cursor, .. }
             | Self::Home { cursor }
+            | Self::Door { cursor, .. }
+            | Self::Done { cursor, .. }
+            | Self::Failed { cursor, .. }
             | Self::Doing { cursor, .. } => *cursor,
             Self::NewProject { .. } => 0,
         }
@@ -729,6 +1002,9 @@ impl Screen {
             | Self::FirstRun { cursor }
             | Self::Started { cursor, .. }
             | Self::Home { cursor }
+            | Self::Door { cursor, .. }
+            | Self::Done { cursor, .. }
+            | Self::Failed { cursor, .. }
             | Self::Doing { cursor, .. } => *cursor = index,
             Self::NewProject { .. } => {}
         }
@@ -772,32 +1048,15 @@ impl Screen {
         }
     }
 
-    /// The same flow with its last run's complaint on it, so a failure is read on the
-    /// screen that caused it rather than scrolling past in the terminal underneath.
+    /// Is this the screen a finished job leaves behind?
+    ///
+    /// **It is the one place the way out is `Home` rather than `← Back`.** The owner's
+    /// reason: *"in outcome screen show Home instead of Back. more understandable and user
+    /// friendly"*. A result is the end of something, not a step in the middle of it, and
+    /// backing out of it one door at a time is walking back up a path nobody is on any more.
     #[must_use]
-    pub fn troubled(self, said: String) -> Self {
-        match self {
-            // **Setup is re-runnable, so a failure stays on it.** Every step it takes asks
-            // before it acts — the role only when there is no such role, the database only
-            // when there is no such database — so running it again after a failure carries on
-            // from wherever it stopped rather than making a mess.
-            Self::Setup { cursor, .. } => Self::Setup {
-                cursor,
-                trouble: Some(said),
-            },
-            Self::Doing {
-                leaf,
-                answers,
-                cursor,
-                ..
-            } => Self::Doing {
-                leaf,
-                answers,
-                cursor,
-                trouble: Some(said),
-            },
-            other => other,
-        }
+    pub const fn is_an_outcome(&self) -> bool {
+        matches!(self, Self::Done { .. } | Self::Failed { .. })
     }
 
     /// The breadcrumb, deepest part last.
@@ -807,7 +1066,12 @@ impl Screen {
             Self::Setup { .. } | Self::FirstRun { .. } | Self::Home { .. } => Vec::new(),
             Self::NewProject { .. } => vec!["New project"],
             Self::Started { .. } => vec!["New project", "Done"],
-            Self::Doing { leaf, .. } => vec![leaf.under, leaf.title],
+            Self::Door { door, .. } => {
+                door_at(*door).map_or_else(Vec::new, |door| vec![door.crumb])
+            }
+            Self::Doing { leaf, .. } | Self::Done { leaf, .. } | Self::Failed { leaf, .. } => {
+                vec![leaf.under, leaf.title]
+            }
         }
     }
 
@@ -824,37 +1088,18 @@ impl Screen {
                 lines: vec![Line::told("machine", "nothing registered yet", Hue::Warn)],
             },
 
-            Self::NewProject { at: _, trouble } => {
-                let mut lines = vec![Line::Quiet(
-                    "A .sloop folder is created here, and it ignores itself — git never sees it."
-                        .to_owned(),
-                )];
-                if let Some(trouble) = trouble {
-                    lines.push(Line::Gap);
-                    lines.push(Line::Wrong(trouble.clone()));
-                }
-                Header {
-                    banner: Banner::Word,
-                    crumbs: self.crumbs(),
-                    strap: String::new(),
-                    lines,
-                }
-            }
+            Self::NewProject { at: _, trouble } => Header {
+                banner: Banner::Word,
+                crumbs: self.crumbs(),
+                strap: String::new(),
+                lines: new_project_lines(trouble.as_deref()),
+            },
 
             Self::Started { report, .. } => Header {
                 banner: Banner::Word,
                 crumbs: self.crumbs(),
                 strap: String::new(),
-                lines: vec![
-                    Line::Good(if report.existed {
-                        "There was already a project here.".to_owned()
-                    } else {
-                        "Project created.".to_owned()
-                    }),
-                    Line::Gap,
-                    Line::fact("registry", &report.registry.display().to_string()),
-                    Line::fact("global", &shell.global.display().to_string()),
-                ],
+                lines: started_lines(report, shell),
             },
 
             Self::Home { .. } => Header {
@@ -862,14 +1107,54 @@ impl Screen {
                 crumbs: Vec::new(),
                 strap: "your databases, backed up and moved about".to_owned(),
                 lines: vec![
-                    Line::fact("working in", &shell.working_in),
-                    Line::under(&shell.found_by),
-                    match shell.holds {
-                        0 => Line::told("registered", "nothing yet", Hue::Warn),
-                        1 => Line::told("registered", "1 database", Hue::Ok),
-                        many => Line::told("registered", &format!("{many} databases"), Hue::Ok),
-                    },
+                    Line::Chips(chips(&shell.standing)),
+                    Line::Quiet(format!(
+                        "{}  \u{00b7}  {}",
+                        shell.working_in, shell.found_by
+                    )),
                 ],
+            },
+
+            Self::Door { door, .. } => Header {
+                banner: Banner::Word,
+                crumbs: self.crumbs(),
+                strap: String::new(),
+                lines: door_at(*door).map_or_else(Vec::new, |open| {
+                    // A chip rather than a fact: the crumb above already names the door, and
+                    // a label repeating it would be the word twice on two lines.
+                    let (note, mark) = door_note(*door, open, &shell.standing);
+                    vec![Line::Chips(vec![(mark, note)])]
+                }),
+            },
+
+            // **The screen that is read after a job, and the reason there is one.** Nothing
+            // drawn inside the alternate buffer survives it, so what the job said on the live
+            // screen is gone the moment it returns. This is what is left.
+            Self::Done {
+                leaf,
+                told,
+                same,
+                took,
+                ..
+            } => Header {
+                banner: Banner::Word,
+                crumbs: self.crumbs(),
+                strap: String::new(),
+                lines: done_lines(leaf, told, same.as_deref(), took),
+            },
+
+            Self::Failed {
+                leaf,
+                told,
+                said,
+                hint,
+                exit,
+                ..
+            } => Header {
+                banner: Banner::Word,
+                crumbs: self.crumbs(),
+                strap: String::new(),
+                lines: failed_lines(leaf, told, said, hint.as_deref(), *exit),
             },
 
             Self::Doing {
@@ -909,10 +1194,9 @@ impl Screen {
 
     /// The list, or the box.
     #[must_use]
-    pub fn face(&self, world: &dyn Doing) -> Face {
+    pub fn face(&self, standing: &Standing, world: &dyn Doing) -> Face {
         match self {
-            Self::Setup { trouble, .. } => Face::Menu(Menu::under(
-                "SET UP",
+            Self::Setup { trouble, .. } => Face::Menu(Menu::of(
                 if trouble.is_some() {
                     "Try again — nothing that already worked is done twice."
                 } else {
@@ -929,8 +1213,7 @@ impl Screen {
                 )],
             )),
 
-            Self::FirstRun { .. } => Face::Menu(Menu::under(
-                "GET STARTED",
+            Self::FirstRun { .. } => Face::Menu(Menu::of(
                 "Let's start a project.",
                 vec![Item::new(
                     "Start a project here",
@@ -944,8 +1227,7 @@ impl Screen {
                 help: "Enter accepts it. Esc goes back.".to_owned(),
             }),
 
-            Self::Started { .. } => Face::Menu(Menu::under(
-                "WHAT NEXT",
+            Self::Started { .. } => Face::Menu(Menu::of(
                 "That is the hard part done.",
                 vec![Item::new(
                     "Go to the menu",
@@ -953,19 +1235,43 @@ impl Screen {
                 )],
             )),
 
-            Self::Home { .. } => Face::Menu(Menu {
-                question: "What would you like to do?".to_owned(),
-                sections: home_sections(),
-            }),
+            Self::Home { .. } => {
+                Face::Menu(Menu::of("What would you like to do?", door_items(standing)))
+            }
+
+            Self::Door { door, .. } => Face::Menu(Menu::of(
+                door_at(*door).map_or("What would you like to do?", |door| door.question),
+                door_at(*door).map_or_else(Vec::new, |door| {
+                    door.leaves.iter().copied().map(Item::doing).collect()
+                }),
+            )),
+
+            // **Nothing on it but the way out, and that is deliberate.** A result used to
+            // carry the thing it had just done, highlighted — so Enter on the screen saying a
+            // database had been created created another one. The owner's words: *"the option
+            // like create db, or setup sloop still available there, and selected, means
+            // pressing enter will reexecute the same thing"*. An empty list leaves the cursor
+            // on `← Home`, which is the only thing there is to do here.
+            Self::Done { .. } => Face::Menu(Menu::of("That is done.", Vec::new())),
+
+            // **The owner's rule 9**, in three rows: a failure used to leave one sentence and
+            // no way forward but running the same answers again.
+            Self::Failed { .. } => Face::Menu(Menu::of(
+                "What now?",
+                vec![
+                    Item::new(
+                        "Try it again",
+                        "with the same answers — nothing was changed",
+                    ),
+                    Item::new("Change an answer", "back one question, the rest kept"),
+                ],
+            )),
 
             Self::Doing { leaf, answers, .. } => match leaf.job.next(answers, world) {
                 Next::Ask(step) => {
-                    let heading = step.heading();
                     let Step { question, how, .. } = *step;
                     match how {
-                        How::Pick { items, .. } => {
-                            Face::Menu(Menu::under(heading, &question, items))
-                        }
+                        How::Pick { items, .. } => Face::Menu(Menu::of(&question, items)),
                         How::Type { initial, help, .. } => Face::Ask(Ask {
                             question,
                             initial,
@@ -976,19 +1282,17 @@ impl Screen {
                 // Nothing left to ask: one item, and choosing it runs the job. Never run
                 // straight off the last answer — a flow that fires the moment its last
                 // question is answered is a flow nobody can read back before it happens.
-                Next::Ready => Face::Menu(Menu::under(
-                    "READY",
+                // **Its own sentence, not its title.** *"Delete one from the server"* has to
+                // become *"Delete it"*, and the last thing somebody reads before a database
+                // stops existing is worth writing by hand — see `Leaf::run_it`.
+                Next::Ready => Face::Menu(Menu::of(
                     "Everything it needs has been answered.",
                     vec![Item {
                         title: leaf.run_it.to_owned(),
-                        blurb: leaf.blurb.to_owned(),
-                        command: leaf.command.to_owned(),
+                        ..Item::doing(*leaf)
                     }],
                 )),
-                Next::Blocked(_) => Face::Menu(Menu {
-                    question: "Not from here.".to_owned(),
-                    sections: Vec::new(),
-                }),
+                Next::Blocked(_) => Face::Menu(Menu::of("Not from here.", Vec::new())),
             },
         }
     }
@@ -1010,9 +1314,47 @@ impl Screen {
                 at: shell.cwd.display().to_string(),
                 trouble: None,
             }),
-            Self::Started { .. } => Flow::Home,
-            Self::Home { .. } => {
-                leaf_at(index).map_or(Flow::Stay, |leaf| Flow::To(Self::opening(leaf)))
+
+            Self::Home { .. } => match door_at(index) {
+                None => Flow::Stay,
+                // **A door with one command behind it is that command.** A submenu of one
+                // is a keystroke that asks nothing, which is the thing the doors were meant
+                // to stop.
+                Some(door) if door.leaves.len() == 1 => door
+                    .leaves
+                    .first()
+                    .copied()
+                    .map_or(Flow::Stay, |leaf| Flow::To(Self::opening(leaf))),
+                Some(_) => Flow::To(Self::Door {
+                    door: index,
+                    cursor: 0,
+                }),
+            },
+
+            Self::Door { door, .. } => {
+                leaf_in(*door, index).map_or(Flow::Stay, |leaf| Flow::To(Self::opening(leaf)))
+            }
+
+            // **Two screens with one answer: the top of the tree.** `Started` has just made a
+            // registry and a result has nothing on it that can be chosen at all — the way out
+            // the loop adds is the whole of what a result offers.
+            Self::Started { .. } | Self::Done { .. } => Flow::Home,
+
+            // **Rule 9, and the whole point of this screen.** Nothing here goes home on its
+            // own: one row runs it again as it stands, the other steps back into the flow
+            // with the last answer dropped and every other one kept.
+            Self::Failed { leaf, answers, .. } => {
+                if index == 0 {
+                    return Flow::Run(*leaf, answers.clone());
+                }
+                let mut answers = answers.clone();
+                answers.undo();
+                Flow::Same(Self::Doing {
+                    leaf: *leaf,
+                    answers,
+                    cursor: 0,
+                    trouble: None,
+                })
             }
 
             Self::Doing { leaf, answers, .. } => match leaf.job.next(answers, world) {

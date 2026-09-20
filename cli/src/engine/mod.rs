@@ -693,7 +693,12 @@ pub trait Adapter {
         let started = std::time::Instant::now();
         let existed = to.exists();
 
-        let outcome = (|| -> Outcome<()> {
+        // **Here rather than in each adapter, for the same reason the rest of this method is
+        // here**: "put a dump in a file" is one job whichever engine produced it, and a
+        // spinner written three times is a spinner that reads three ways. Every command that
+        // dumps to a file — `mirror --safe` among them — gets it from this one line.
+        let step = crate::console::step("Dumping", "Dumped");
+        let outcome = crate::console::watching(&step, to, || {
             let file = std::fs::File::create(to).map_err(|error| {
                 Failure::new(
                     Exit::Dump,
@@ -708,9 +713,10 @@ pub trait Adapter {
                     format!("could not finish writing {}: {error}", to.display()),
                 )
             })
-        })();
+        });
 
         if let Err(failure) = outcome {
+            step.bad("");
             // Only a file this call created. A failure that leaves a short dump behind is
             // a failure somebody restores from six months later.
             if !existed {
@@ -743,6 +749,7 @@ pub trait Adapter {
             ));
         }
 
+        step.ok(&crate::console::bytes(bytes));
         Ok(DumpSummary {
             path: to.to_path_buf(),
             bytes,

@@ -31,8 +31,10 @@ use std::io::Write as _;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
+use crate::console::{self, Kind};
 use crate::exit::Exit;
 use crate::failure::{Failure, Outcome};
+use crate::mark::Mark;
 
 /// What the global flags said, once the command line has been read.
 ///
@@ -125,7 +127,7 @@ pub fn is_quiet() -> bool {
 pub fn say(line: &str) {
     log(line);
     if talking() {
-        anstream::println!("{line}");
+        console::current().line(Kind::Out, line);
     }
 }
 
@@ -147,7 +149,7 @@ pub fn ask(line: &str) {
 pub fn note(line: &str) {
     log(line);
     if talking() {
-        anstream::eprintln!("{line}");
+        console::current().line(Kind::Err, line);
     }
 }
 
@@ -163,7 +165,7 @@ pub fn note(line: &str) {
 /// Standard error, so a `--json` consumer's stdout is still nothing but the document.
 pub fn notice(line: &str) {
     log(line);
-    anstream::eprintln!("{line}");
+    console::current().line(Kind::Loud, line);
 }
 
 /// Something that went wrong, on standard error.
@@ -173,7 +175,7 @@ pub fn notice(line: &str) {
 /// that fails silently.
 pub fn problem(line: &str) {
     log(line);
-    anstream::eprintln!("{line}");
+    console::current().line(Kind::Loud, line);
 }
 
 /// A line carrying a real secret, on standard error, and **never written to a log**.
@@ -183,7 +185,44 @@ pub fn problem(line: &str) {
 /// no logging in it, rather than to be scrubbed by [`redact`] and hoped about.
 pub fn secret(line: &str) {
     if !is_quiet() {
-        anstream::eprintln!("{line}");
+        console::current().line(Kind::Loud, line);
+    }
+}
+
+/// A piece of work that finished, with the tick in front of it.
+///
+/// **Rule 5 of the owner's list — *"need tick, cross and other icons for status"* — and it
+/// is one function rather than a convention.** `label` is what was done, in the past tense;
+/// `note` is the detail beside it, in its own column, or empty. Commentary, so `--quiet`
+/// silences it.
+pub fn worked(label: &str, note: &str) {
+    note_line(Mark::Ok, label, note, false);
+}
+
+/// The same, for something that worked with a thing to know about it.
+///
+/// **Never silenced.** A backup taken off a live source is still a backup, and the sentence
+/// saying so is the difference between a copy somebody trusts and one they should not.
+pub fn caution(label: &str, note: &str) {
+    note_line(Mark::Warn, label, note, true);
+}
+
+/// The same, for something that did not work.
+///
+/// Never silenced, for the reason [`problem`] is not: a scheduled run that fails quietly is
+/// a run nobody finds out about.
+pub fn failed(label: &str, note: &str) {
+    note_line(Mark::Bad, label, note, true);
+}
+
+/// One marked line, logged and then printed if this run is printing.
+fn note_line(mark: Mark, label: &str, note: &str, always: bool) {
+    let line = console::settled(mark, label, note);
+    log(&line);
+    if always {
+        console::current().line(Kind::Loud, &line);
+    } else if talking() {
+        console::current().line(Kind::Err, &line);
     }
 }
 

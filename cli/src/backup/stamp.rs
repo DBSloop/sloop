@@ -58,6 +58,31 @@ impl Stamp {
         self.seconds
     }
 
+    /// How long ago this was, in the words somebody glancing at a menu wants.
+    ///
+    /// **Rounded down, and coarse on purpose.** A home screen saying *"last backup 2h ago"*
+    /// answers the question being asked; one saying *"1h 58m 12s ago"* makes the reader do
+    /// the rounding themselves. `backups list` still prints the exact local time — this is
+    /// the glance, not the record.
+    ///
+    /// `now` is passed in rather than read so that the arithmetic can be tested against a
+    /// known clock.
+    #[must_use]
+    pub fn ago(self, now: Self) -> String {
+        let seconds = now.seconds.saturating_sub(self.seconds);
+        // A backup dated in the future is a clock that moved, not a thing to do maths on.
+        if seconds < 0 {
+            return "just now".to_owned();
+        }
+        match seconds {
+            0..60 => "just now".to_owned(),
+            60..3_600 => format!("{}m ago", seconds / 60),
+            3_600..86_400 => format!("{}h ago", seconds / 3_600),
+            86_400..604_800 => format!("{}d ago", seconds / 86_400),
+            other => format!("{}w ago", other / 604_800),
+        }
+    }
+
     /// Read a directory name back into the moment it stands for.
     ///
     /// Exactly the shape [`Stamp::utc_path`] writes — `20260916T031500Z` — and nothing

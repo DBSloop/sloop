@@ -212,7 +212,12 @@ fn install(
 }
 
 /// Take it off, and say what would not go.
-fn uninstall(locations: &Locations, mechanism: Mechanism) -> Exit {
+/// Take the service off this machine.
+///
+/// `pub(super)` for `reset`, which has to do exactly this and must not do it differently:
+/// a reset that removed the registration but left the copied credentials behind would be
+/// the same half-cleared machine this command exists to avoid.
+pub(super) fn uninstall(locations: &Locations, mechanism: Mechanism) -> Exit {
     if !manage::state(mechanism).installed() {
         crate::say!(
             "{}",

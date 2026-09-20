@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::survey;
+use super::{What, surveying};
 
 /// A global store on disk, thrown away when it goes out of scope.
 struct Store(PathBuf);
@@ -46,6 +46,25 @@ impl Store {
         .expect("writing the record");
     }
 
+    /// The same, with the `[database]` block a machine that has finished Setup carries.
+    ///
+    /// **Separate because the two states are different.** A record without it is a Setup that
+    /// got as far as the cluster; one with it is a machine that has sloop's own database, and
+    /// therefore a second password to forget.
+    fn set_up_with_a_database(&self, origin: &str) {
+        self.set_up_as(origin);
+        let mut record = std::fs::read_to_string(self.0.join("server.toml")).expect("readable");
+        record.push_str(
+            "
+[database]
+name = \"sloop_database\"
+role = \"sloop_db_admin\"
+             password = \"keyring\"
+",
+        );
+        std::fs::write(self.0.join("server.toml"), record).expect("writing the record");
+    }
+
     fn put(&self, relative: &str, what: &str) {
         let path = self.0.join(relative);
         if let Some(parent) = path.parent() {
@@ -70,7 +89,7 @@ fn a_postgresql_sloop_installed_is_sloops_to_remove_and_one_it_found_is_not() {
     store.set_up_as("sloop");
     std::fs::create_dir_all(store.path().join("postgres").join("data")).expect("creatable");
 
-    let sloops = survey(store.path()).expect("a survey reads a record");
+    let sloops = surveying(store.path(), None).expect("a survey reads a record");
     assert!(sloops.owns_the_server);
     assert!(
         sloops.going.iter().any(|path| path.ends_with("postgres")),
@@ -80,7 +99,7 @@ fn a_postgresql_sloop_installed_is_sloops_to_remove_and_one_it_found_is_not() {
 
     // The same store, the same directory on disk, and the opposite answer.
     store.set_up_as("machine");
-    let guest = survey(store.path()).expect("a survey reads a record");
+    let guest = surveying(store.path(), None).expect("a survey reads a record");
     assert!(!guest.owns_the_server);
     assert!(
         !guest.going.iter().any(|path| path.ends_with("postgres")),
@@ -102,7 +121,7 @@ fn backups_are_kept_and_said_out_loud() {
     store.put("secrets.sealed", "SLOOPSEC");
     store.put("projects/demo", "/work/demo");
 
-    let what = survey(store.path()).expect("a survey reads a record");
+    let what = surveying(store.path(), None).expect("a survey reads a record");
 
     assert_eq!(
         what.kept,
@@ -132,7 +151,7 @@ fn the_stores_own_state_goes_and_nothing_else_does() {
     // own state into a directory somebody else shares with it.
     store.put("notes.txt", "mine");
 
-    let what = survey(store.path()).expect("a survey reads a record");
+    let what = surveying(store.path(), None).expect("a survey reads a record");
     let going: Vec<String> = what
         .going
         .iter()
@@ -159,7 +178,7 @@ fn the_stores_own_state_goes_and_nothing_else_does() {
 fn a_machine_with_nothing_on_it_has_nothing_to_reset() {
     let store = Store::new("nothing");
 
-    let what = survey(store.path()).expect("a survey of an empty store is fine");
+    let what = surveying(store.path(), None).expect("a survey of an empty store is fine");
     assert!(what.server.is_none());
     assert!(!what.anything());
     assert!(what.going.is_empty());
@@ -171,7 +190,126 @@ fn a_machine_that_only_has_backups_keeps_them_and_resets_nothing() {
     let store = Store::new("only-backups");
     store.put("backups/postgres/orders/20260916T031500Z/dump", "…");
 
-    let what = survey(store.path()).expect("a survey is fine");
+    let what = surveying(store.path(), None).expect("a survey is fine");
     assert!(!what.anything(), "there is no state to remove");
     assert_eq!(what.kept, vec![store.path().join("backups")]);
+}
+
+/// **A reset that left a password behind was not a reset.**
+///
+/// The owner's report, and the reason this test exists: a machine that had been reset still
+/// held `sloop_db_admin`'s password in the keyring, so the next `sloop setup` built a new
+/// cluster and every command afterwards authenticated against a server that no longer
+/// existed — *"password authentication failed"* for the role sloop owns, on a machine whose
+/// whole point was that it had been wiped.
+///
+/// The two named here are the two that strand a machine, and both are derived from
+/// `server.toml` rather than from the registry — so they are found even when nothing else on
+/// the machine can be.
+#[test]
+fn a_reset_forgets_the_passwords_that_would_outlive_the_server() {
+    let store = Store::new("passwords");
+    store.set_up_with_a_database("sloop");
+
+    let what = surveying(store.path(), None).expect("a survey reads a record");
+    let named: Vec<&str> = what
+        .passwords
+        .iter()
+        .map(|kept| kept.key.as_str())
+        .collect();
+
+    assert!(
+        named.iter().any(|key| key.contains("postgres")),
+        "the superuser's password should go: {named:?}"
+    );
+    assert!(
+        named.iter().any(|key| key.contains("sloop_db_admin")),
+        "sloop_db_admin's password should go: {named:?}"
+    );
+    assert!(
+        what.anything(),
+        "a machine with passwords to forget has something to reset"
+    );
+}
+
+/// **And the one it must not forget.** The private half of the backup keypair is filed under
+/// `backup-key:<public>`, and it is the only thing standing between a kept backup and an
+/// unreadable one. Deleting it while keeping the backups would be deleting the backups the
+/// slow way — so nothing named here may ever carry that prefix.
+#[test]
+fn a_reset_never_forgets_the_backup_key() {
+    let store = Store::new("backup-key");
+    store.set_up_as("sloop");
+    store.put(
+        "backups/postgres/orders/20260916T031500Z/manifest.json",
+        "{}",
+    );
+
+    let what = surveying(store.path(), None).expect("a survey reads a record");
+
+    for kept in &what.passwords {
+        assert!(
+            !kept.key.starts_with("backup-key:"),
+            "reset would have forgotten a backup key: {}",
+            kept.key
+        );
+    }
+}
+
+/// A key named twice is a key deleted twice, which is a second `NoEntry` nobody needs to read.
+#[test]
+fn no_password_is_named_more_than_once() {
+    let store = Store::new("dedup");
+    store.set_up_as("sloop");
+
+    let what = surveying(store.path(), None).expect("a survey reads a record");
+    let mut keys: Vec<&str> = what
+        .passwords
+        .iter()
+        .map(|kept| kept.key.as_str())
+        .collect();
+    let before = keys.len();
+    keys.sort_unstable();
+    keys.dedup();
+    assert_eq!(before, keys.len(), "a key was named twice: {keys:?}");
+}
+
+/// **A machine whose only sloop left is the background service still has something to reset.**
+///
+/// The owner's rule that reset clears everything sloop put here includes the registration
+/// that runs it at boot — and a machine with no store, no cluster and no passwords can still
+/// have one, which is exactly the machine that would otherwise be told there is nothing to do
+/// while sloop kept starting every morning against a store that is gone.
+#[test]
+fn a_registered_service_is_something_to_reset_on_its_own() {
+    let bare = What {
+        global: std::path::PathBuf::from("/nowhere"),
+        server: None,
+        owns_the_server: false,
+        going: Vec::new(),
+        kept: Vec::new(),
+        passwords: Vec::new(),
+        some_unknown: false,
+        service: None,
+        installed: Vec::new(),
+    };
+    assert!(
+        !bare.anything(),
+        "a machine with nothing on it has nothing to reset"
+    );
+
+    let with_a_service = What {
+        service: crate::service::mechanism::Mechanism::of_this_machine(),
+        ..bare
+    };
+    // Every platform this runs on has one of the three mechanisms, so this is not a
+    // conditional assertion — it is the whole point of the field.
+    assert!(
+        with_a_service.service.is_some(),
+        "this machine has no service mechanism at all"
+    );
+    assert!(
+        with_a_service.anything(),
+        "a registered service is something to reset"
+    );
 }

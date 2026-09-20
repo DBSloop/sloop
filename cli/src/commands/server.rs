@@ -17,7 +17,7 @@
 //! will prove it, how big it is, where it will go and which port it will take — because the
 //! last thing somebody reads before four hundred megabytes starts moving should say all five.
 
-use std::io::{BufRead as _, IsTerminal as _, Write as _};
+use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 
 use crate::engine::Engine;
@@ -532,9 +532,7 @@ fn report(installed: &install::Installed) {
 /// Ask for a number between 1 and `how_many`, and keep asking until it is one.
 fn ask_a_number(what: &str, how_many: usize) -> Outcome<usize> {
     loop {
-        crate::report::ask(&format!("{what} [1-{how_many}]: "));
-
-        let line = read_a_line()?;
+        let line = read_a_line(&format!("{what} [1-{how_many}]: "))?;
         let typed = line.trim();
         if typed.is_empty() {
             return Err(
@@ -552,21 +550,14 @@ fn ask_a_number(what: &str, how_many: usize) -> Outcome<usize> {
 
 /// Ask a yes-or-no question. Anything that is not a yes is a no.
 fn confirmed(question: &str) -> Outcome<bool> {
-    crate::report::ask(&format!("{question} [y/N] "));
-    Ok(acquire::is_yes(&read_a_line()?))
+    Ok(acquire::is_yes(&read_a_line(&format!(
+        "{question} [y/N] "
+    ))?))
 }
 
-/// One line from the terminal.
-fn read_a_line() -> Outcome<String> {
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .map_err(|error| {
-            Failure::new(Exit::Usage, format!("could not read the answer: {error}"))
-        })?;
-    let _ = std::io::stdout().flush();
-    Ok(line)
+/// One line from whoever is being asked.
+fn read_a_line(prompt: &str) -> Outcome<String> {
+    crate::console::ask(prompt)
 }
 
 #[cfg(test)]

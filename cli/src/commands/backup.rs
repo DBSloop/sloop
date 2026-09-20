@@ -365,20 +365,24 @@ fn one(
     let adapter = inventory.adapter_for(database.engine);
 
     let started = Instant::now();
-    let server = adapter.probe(&target)?;
+
+    // **Rule 7 of the owner's list, and the first place it is felt.** Reaching a server and
+    // counting every row in it is the part of a backup that happens before anything visibly
+    // moves, and on a large database it is the longest silence in the run.
+    let reaching = crate::console::step(&format!("Connecting to {name}"), "Connected");
+    let server = adapter
+        .probe(&target)
+        .inspect_err(|_| reaching.saying("Connecting"))?;
     let counts = adapter.row_counts(&target)?;
     let rows: u64 = counts.iter().map(|count| count.rows).sum();
-    crate::say!(
-        "  {}",
-        style::dim(&format!(
-            "{} {}{}, {}, {}",
-            server.engine,
-            server.version,
-            if server.tls { ", TLS" } else { "" },
-            plural(u64::try_from(counts.len()).unwrap_or(u64::MAX), "table"),
-            plural(rows, "row"),
-        ))
-    );
+    reaching.ok(&format!(
+        "{} {}{}, {}, {}",
+        server.engine,
+        server.version,
+        if server.tls { ", TLS" } else { "" },
+        plural(u64::try_from(counts.len()).unwrap_or(u64::MAX), "table"),
+        plural(rows, "row"),
+    ));
 
     // **Everything above this is a read.** The server has been reached, the key has been
     // found and the rows have been counted; a rehearsal stops before the first directory is
@@ -571,14 +575,31 @@ fn write_everything(
     let plain = dump_file(writing.directory);
     let dumping = Instant::now();
 
+    // **The one long wait in a backup, and now it says so.** There is no content length for
+    // a dump, so the bar has nothing to be a fraction of — what it has is the file, growing,
+    // which `console::watching` reads every tenth of a second.
+    let writing_it = crate::console::step(
+        &format!("Dumping {}", writing.label),
+        &format!(
+            "Dumped {}",
+            plural(
+                u64::try_from(writing.counts.len()).unwrap_or(u64::MAX),
+                "table"
+            )
+        ),
+    );
+
     // **Encrypted on the way out, not afterwards.** The dump program's output goes through
     // the age writer and lands as ciphertext; there is no moment where the plaintext exists
     // on disk, and no second pass over a file that may be a hundred gigabytes.
     let file = match writing.sealed_to {
         Some(recipient) => {
             let sealed = crypt::sealed_name(&plain);
-            crypt::sealed_to(&sealed, recipient, |sink| {
-                adapter.dump_into(target, sink, &[])
+            let target_file = sealed.clone();
+            crate::console::watching(&writing_it, &target_file, || {
+                crypt::sealed_to(&sealed, recipient, |sink| {
+                    adapter.dump_into(target, sink, &[])
+                })
             })?;
             sealed
         }
@@ -605,9 +626,22 @@ fn write_everything(
         ));
     }
 
+    writing_it.ok(&format!(
+        "{}{}",
+        crate::console::bytes(bytes),
+        if writing.sealed_to.is_some() {
+            ", encrypted"
+        } else {
+            ""
+        }
+    ));
+
     // The checksum is of what is actually on the disk, encrypted or not, so `backups list`
-    // can tell an intact backup from a corrupted one without needing the key.
+    // can tell an intact backup from a corrupted one without needing the key. It reads every
+    // byte of it, which on a large dump is its own wait.
+    let checking = crate::console::step("Checking the dump", "Checked");
     let sha256 = manifest::checksum(&file)?;
+    checking.ok(&sha256.chars().take(12).collect::<String>());
     let written = file.file_name().unwrap_or_default().to_string_lossy();
 
     let manifest = Manifest::of(Described {
@@ -725,10 +759,7 @@ fn keep_a_copy_first(context: &mut Context<'_>, scope: Scope, public: &PublicKey
     );
     let _ = std::io::Write::flush(&mut std::io::stderr());
 
-    let mut answer = String::new();
-    std::io::stdin()
-        .read_line(&mut answer)
-        .map_err(|error| Failure::usage(format!("could not read the answer: {error}")))?;
+    let answer = crate::console::ask("")?;
 
     if answer.trim() != "decline" {
         return Err(Failure::new(

@@ -154,10 +154,18 @@ impl Server {
     /// How a connection to it is spelled, with no password anywhere in it.
     #[must_use]
     pub fn url(&self, database: &str) -> String {
-        format!(
-            "postgres://{}@{LOOPBACK}:{}/{database}",
-            self.superuser, self.port
-        )
+        self.url_as(&self.superuser, database)
+    }
+
+    /// The same, for a connection made as somebody other than the superuser.
+    ///
+    /// **Because an error that names the wrong role sends somebody after the wrong thing.**
+    /// `db remove` failed with `postgres://postgres@127.0.0.1:5433/sloop_database would not
+    /// answer` over `sloop_db_admin`'s password, and the first question it raised was whether
+    /// sloop had used the wrong account — which it had not. The message had.
+    #[must_use]
+    pub fn url_as(&self, role: &str, database: &str) -> String {
+        format!("postgres://{role}@{LOOPBACK}:{}/{database}", self.port)
     }
 }
 

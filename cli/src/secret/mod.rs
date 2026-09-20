@@ -404,17 +404,15 @@ pub fn generated_password() -> Outcome<String> {
 /// they are the same question about the same kind of value, and a second copy of it is a
 /// second place for the two prompts to drift apart.
 pub fn typed_twice(what: &str) -> Outcome<Option<Secret>> {
-    let typed = rpassword::prompt_password(format!(
+    let typed = crate::console::ask_hidden(&format!(
         "? Password for {what} [press Enter to have one generated]: "
-    ))
-    .map_err(|error| Failure::usage(format!("could not read the password: {error}")))?;
+    ))?;
 
     if typed.is_empty() {
         return Ok(None);
     }
 
-    let again = rpassword::prompt_password("? And again, to be sure: ")
-        .map_err(|error| Failure::usage(format!("could not read the password: {error}")))?;
+    let again = crate::console::ask_hidden("? And again, to be sure: ")?;
 
     if again != typed {
         return Err(Failure::usage("those two passwords are not the same").hint(

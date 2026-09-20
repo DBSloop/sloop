@@ -45,6 +45,15 @@ pub enum Phase {
     Dump,
     /// Writing the destination — `restore`, and the destination half of `mirror`.
     Restore,
+    /// Destroying the database.
+    ///
+    /// **A third phase, added because the second one did not cover it.** `doctor` asked
+    /// whether a role could back a database up and whether it could restore into one, and
+    /// answered `0` on a role that could do neither of the things `db drop` needs — so the
+    /// refusal turned up at the moment the database was meant to stop existing, which is the
+    /// worst possible moment to find out. The owner asked for it after hitting exactly that:
+    /// *"must be owner of database ..."*, on a role `doctor` had just passed.
+    Drop,
 }
 
 impl Phase {
@@ -54,18 +63,20 @@ impl Phase {
         match self {
             Self::Dump => "to back this database up",
             Self::Restore => "to restore into it",
+            Self::Drop => "to delete it from the server",
         }
     }
 }
 
-/// Every phase, for the places that report both.
-pub const PHASES: [Phase; 2] = [Phase::Dump, Phase::Restore];
+/// Every phase, for the places that report all of them.
+pub const PHASES: [Phase; 3] = [Phase::Dump, Phase::Restore, Phase::Drop];
 
 impl fmt::Display for Phase {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Dump => "dump",
             Self::Restore => "restore",
+            Self::Drop => "drop",
         })
     }
 }
@@ -364,6 +375,18 @@ const POSTGRES: &[Requirement] = &[
         grant: "GRANT USAGE, CREATE ON SCHEMA public TO {role};",
     },
     Requirement {
+        id: "pg-own-database",
+        title: "own the database",
+        // Ownership, not a grant: PostgreSQL has no `GRANT DROP`. A role may drop a database
+        // when it owns it or when it is a superuser, and nothing else will do.
+        privileges: &["ownership of the database", "or superuser"],
+        consequence: "`sloop db drop` is refused with `must be owner of database`, after \
+                      everything else about the run has already worked",
+        phase: Phase::Drop,
+        applies: Applies::Always,
+        grant: "ALTER DATABASE {database} OWNER TO {role};",
+    },
+    Requirement {
         id: "pg-untrusted-extensions",
         title: "create the extensions this database uses",
         privileges: &["superuser"],
@@ -522,6 +545,19 @@ const MYSQL: &[Requirement] = &[
         ),
         grant: "GRANT SUPER ON *.* TO {role};",
     },
+    Requirement {
+        id: "my-drop-database",
+        title: "delete the database itself",
+        // The same `DROP` the restore row asks for, at the database level rather than the
+        // table level — MySQL spells both the same way, and holding it on the tables is not
+        // holding it on the schema that contains them.
+        privileges: &["DROP on the database"],
+        consequence: "`sloop db drop` is refused with `Access denied`, after everything \
+                      else about the run has already worked",
+        phase: Phase::Drop,
+        applies: Applies::Always,
+        grant: "GRANT DROP ON {database}.* TO {role};",
+    },
 ];
 
 /// MariaDB's minimum.
@@ -556,6 +592,7 @@ const MARIADB: &[Requirement] = &[
     MYSQL[8],
     MYSQL[9],
     MYSQL[10],
+    MYSQL[11],
 ];
 
 /// Where `web/` reads the table from, relative to `cli/`.

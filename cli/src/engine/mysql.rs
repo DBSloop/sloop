@@ -1622,6 +1622,7 @@ const MYSQL_NEEDS: &[(&str, Needs)] = &[
             Need::Here("LOCK TABLES"),
         ]],
     ),
+    ("my-drop-database", &[&[Need::Here("DROP")]]),
     ("my-create-view", &[&[Need::Here("CREATE VIEW")]]),
     ("my-trigger-restore", &[&[Need::Here("TRIGGER")]]),
     (

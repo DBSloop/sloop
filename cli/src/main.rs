@@ -9,12 +9,14 @@ mod backup;
 mod cli;
 mod commands;
 mod consent;
+mod console;
 mod crypt;
 mod engine;
 mod exit;
 mod failure;
 mod install;
 mod lock;
+mod mark;
 mod pathentry;
 mod query;
 mod registry;
@@ -211,7 +213,14 @@ fn menu(cli: &Cli, locations: &Locations) -> Outcome<Exit> {
         // project has already started, and so has somebody standing in a fresh project.
         fresh: resolution.registry_dir().is_none() && holds == 0,
         set_up,
-        holds,
+        // **Taken once, here, rather than worked out by the screen that shows it.** A door's
+        // status is a directory scan and a question for the service control manager; the home
+        // screen redraws on every keypress, and neither belongs in that loop.
+        standing: if set_up {
+            ui::flow::Doing::standing(&machine)
+        } else {
+            ui::screen::Standing::default()
+        },
         cwd: machine.cwd().to_path_buf(),
         global: global.clone(),
     };

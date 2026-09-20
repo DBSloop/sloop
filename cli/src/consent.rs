@@ -112,12 +112,7 @@ impl<'a> Consent<'a> {
             .hint(format!("pass {flag} to answer it up front")));
         }
 
-        crate::report::ask(&format!("{} {question} ", style::paint("?")));
-
-        let mut answer = String::new();
-        std::io::stdin()
-            .read_line(&mut answer)
-            .map_err(|error| Failure::usage(format!("could not read the answer: {error}")))?;
+        let answer = crate::console::ask(&format!("{} {question} ", style::paint("?")))?;
 
         Ok(matches!(
             answer.trim().to_ascii_lowercase().as_str(),
@@ -138,21 +133,20 @@ impl<'a> Consent<'a> {
             return Ok(Consented::ByFlag);
         }
 
-        crate::report::ask(&format!(
+        // **Rule 5, and the route it is asked by is the only thing that changed.** From a
+        // shell this is `report::ask` and a line from standard input, exactly as it was;
+        // from the menu it is a box on the menu's own screen. The comparison below is the
+        // same comparison either way.
+        let given = crate::console::ask(&format!(
             "{} type {} to destroy it, or anything else to stop: ",
             style::paint("?"),
             style::paint(destroying.named)
-        ));
+        ))?;
 
-        let mut given = String::new();
-        std::io::stdin()
-            .read_line(&mut given)
-            .map_err(|error| Failure::usage(format!("could not read the answer: {error}")))?;
-
-        // Only the line ending comes off. A name with a trailing space is a name somebody
-        // would have to type a trailing space for, and trimming would quietly accept a
-        // different name than the one on the server.
-        if given.trim_end_matches(['\n', '\r']) == destroying.named {
+        // Only the line ending comes off, and the console has already taken it. A name with
+        // a trailing space is a name somebody would have to type a trailing space for, and
+        // trimming would quietly accept a different name than the one on the server.
+        if given == destroying.named {
             Ok(Consented::AtTheTerminal)
         } else {
             Ok(Consented::Declined)

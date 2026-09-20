@@ -496,9 +496,36 @@ pub fn against(
     destination: &Target<'_>,
 ) -> Outcome<Comparison> {
     let mode = Mode::from_environment();
+    // **The slowest honest thing this tool does.** An exact `count(*)` over every table on
+    // both sides of a copy is minutes on a large database, and until now it happened in
+    // silence. Rule 7 of the owner's list.
+    let counting = crate::console::step("Counting rows on both sides", "Verified");
     let counted = Side::counted(adapter, source, mode)?;
     let landed = Side::counted(adapter, destination, mode)?;
-    Ok(Comparison::of(mode, &counted, &landed))
+    let comparison = Comparison::of(mode, &counted, &landed);
+    settled(counting, &comparison);
+    Ok(comparison)
+}
+
+/// Settle the counting step with what the comparison found.
+///
+/// **Three outcomes, three marks, and the middle one is the interesting one.** A copy whose
+/// counts disagree is a failure; one where they agree exactly is a tick; one where the source
+/// moved underneath the copy worked *and* there is something to know about it, which is the
+/// amber the owner asked for — see "A result that worked, with something to know" in
+/// `docs/OWNER-DECISIONS.md`.
+pub fn settled(counting: crate::console::Step, comparison: &Comparison) {
+    let drifted = comparison.drifted().count();
+    if !comparison.landed() {
+        counting.bad("the counts do not agree");
+    } else if drifted > 0 {
+        counting.warn(&format!(
+            "{drifted} table{} moved — the source was live",
+            if drifted == 1 { "" } else { "s" }
+        ));
+    } else {
+        counting.ok(comparison.mode.describe());
+    }
 }
 
 /// Print a comparison, accent on the headline and the detail dimmed under it.

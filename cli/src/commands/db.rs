@@ -462,16 +462,11 @@ pub fn name_it(label: &str, database: Option<&str>, role: Option<&str>) -> Outco
 /// cannot see is the defect this exists to fix, so the answer is either what they typed or
 /// what they could read while deciding not to type anything.
 fn ask_for(question: &str, default: &str) -> Outcome<String> {
-    crate::report::ask(&format!(
+    let given = crate::console::ask(&format!(
         "{} {question} {} ",
         style::paint("?"),
         style::dim(&format!("[{default}]"))
-    ));
-
-    let mut given = String::new();
-    std::io::stdin()
-        .read_line(&mut given)
-        .map_err(|error| Failure::usage(format!("could not read the answer: {error}")))?;
+    ))?;
 
     answer_or_default(&given, default)
 }
@@ -726,8 +721,7 @@ fn superuser_password(
         ));
     }
 
-    let typed = rpassword::prompt_password(format!("Password for {superuser}@{host}:{port}: "))
-        .map_err(|error| Failure::usage(format!("could not read the password: {error}")))?;
+    let typed = crate::console::ask_hidden(&format!("Password for {superuser}@{host}:{port}: "))?;
     Ok(Secret::new(typed))
 }
 
@@ -1536,13 +1530,13 @@ fn secret_for(
     if let Some(secret) = from_url {
         // Said plainly rather than refused. See the module comment: by the time this
         // runs, that password has already been in `ps` and is already in the history.
-        crate::note!(
-            "{}",
-            style::dim(
-                "note: the password came from the URL, so it was visible in `ps` and is in \
-                 your shell history while that command line lives. sloop has filed it and \
-                 will not write it anywhere — `--password-stdin` avoids the exposure next time."
-            )
+        // **Amber, because this worked and there is something to know about it.** Rule 4 of
+        // the owner's list, and the one case in `db add` that deserves it.
+        crate::report::caution(
+            "The password came from the URL",
+            "it was visible in `ps` and is in your shell history while that command line \
+             lives. sloop has filed it and will not write it anywhere — --password-stdin \
+             avoids the exposure next time",
         );
         return Ok(Some(secret));
     }
@@ -1551,8 +1545,7 @@ fn secret_for(
         from_stdin()?
     } else if std::io::stdin().is_terminal() {
         let typed =
-            rpassword::prompt_password(format!("Password for {}: ", database.credential_key()))
-                .map_err(|error| Failure::usage(format!("could not read the password: {error}")))?;
+            crate::console::ask_hidden(&format!("Password for {}: ", database.credential_key()))?;
         Secret::new(typed)
     } else {
         // Rule 4, and the flag is named because an error that does not say what to do
@@ -1649,8 +1642,7 @@ fn ssh_secret_for(
     let secret = if chosen.ssh_passphrase_stdin {
         from_stdin()?
     } else if std::io::stdin().is_terminal() {
-        let typed = rpassword::prompt_password(format!("Passphrase for {asking_for}: "))
-            .map_err(|error| Failure::usage(format!("could not read the passphrase: {error}")))?;
+        let typed = crate::console::ask_hidden(&format!("Passphrase for {asking_for}: "))?;
         Secret::new(typed)
     } else {
         // Rule 4. The flag that would have answered it is named, and so is the way to
@@ -1849,11 +1841,12 @@ fn announce_server(server: &crate::engine::ServerInfo, through: Option<&str>) {
         (false, false) => ", not encrypted",
     };
 
-    crate::say!(
-        "  {} {}{}",
-        style::paint(&format!("{}", server.engine)),
-        server.version,
-        style::dim(how)
+    // **A tick rather than a bullet.** Rule 5 of the owner's list: the thing that answered
+    // is a thing that worked, and a screen full of green ticks reads at a glance in a way a
+    // screen full of coloured nouns does not.
+    crate::report::worked(
+        &format!("{} {}", server.engine, server.version),
+        how.trim_start_matches(", "),
     );
 
     if over_ssh && server.tls {

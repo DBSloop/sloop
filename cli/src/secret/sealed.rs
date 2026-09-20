@@ -518,24 +518,12 @@ fn passphrase(confirm: bool) -> Outcome<Zeroizing<String>> {
         )));
     }
 
-    let first = Zeroizing::new(
-        rpassword::prompt_password("Passphrase for the encrypted password file: ").map_err(
-            |error| {
-                Failure::new(
-                    Exit::Usage,
-                    format!("could not read the passphrase: {error}"),
-                )
-            },
-        )?,
-    );
+    let first = Zeroizing::new(crate::console::ask_hidden(
+        "Passphrase for the encrypted password file: ",
+    )?);
 
     if confirm {
-        let again = Zeroizing::new(rpassword::prompt_password("Again: ").map_err(|error| {
-            Failure::new(
-                Exit::Usage,
-                format!("could not read the passphrase: {error}"),
-            )
-        })?);
+        let again = Zeroizing::new(crate::console::ask_hidden("Again: ")?);
         if first.as_str() != again.as_str() {
             return Err(
                 Failure::new(Exit::Usage, "the two passphrases were different")
