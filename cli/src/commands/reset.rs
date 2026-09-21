@@ -148,9 +148,19 @@ fn surveying(global: &Path, service: Option<Mechanism>) -> Outcome<What> {
     // "the whole directory", because `backups/` lives in there too and must not be swept up
     // by a glob somebody adds to later.
     let mut going = Vec::new();
+
+    // **The service's key file, even when no service is registered.** `R34`: a `service
+    // install` that failed half way leaves one behind, and nothing else on this path would
+    // ever look at it.
+    let key_file = crate::service::key::path();
+    if key_file.exists() {
+        going.push(key_file);
+    }
+
     for name in [
         server::record::FILE,
         crate::registry::file::SEALED_FILE,
+        crate::registry::file::SERVICE_SEALED_FILE,
         crate::registry::file::FILE,
         crate::install::record::FILE,
     ] {
@@ -539,16 +549,51 @@ fn carry_out(locations: &Locations, what: &What) -> Outcome<()> {
             std::fs::remove_file(path)
         };
 
-        outcome.map_err(|error| {
-            Failure::usage(format!("could not remove {}: {error}", path.display()))
-                .hint("remove it by hand — everything else has already gone")
-        })?;
+        // **Already gone is done, not failed.** Two steps on this path can own the same
+        // file: `service uninstall` removes the key file, and so does the sweep below it for
+        // the case where no service was ever registered. Treating the second one as an error
+        // aborted the whole reset and left the cluster, the record and both sealed files
+        // exactly where they were — a half-removed machine, from a command that had already
+        // said what it was going to do.
+        match outcome {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            outcome => outcome.map_err(|error| {
+                Failure::usage(format!("could not remove {}: {error}", path.display()))
+                    .hint("remove it by hand — everything else has already gone")
+            })?,
+        }
         crate::say!("  {} {}", style::label("Removed"), path.display());
     }
 
+    prune_empty_directories(what);
     forget_the_passwords(what);
 
     Ok(())
+}
+
+/// Take the directories away too, once nothing sloop put in them is left.
+///
+/// **`R34`: "it should clean totally" means the folders as well.** Every path above is a file
+/// or a directory sloop made, and removing them one by one leaves `/etc/sloop` holding
+/// nothing and the store holding nothing -- two empty directories that read, to anybody
+/// looking, as sloop still being on the machine.
+///
+/// **Only when empty, and that is the whole safety of it.** `backups/` lives in the store and
+/// is never deleted, so a store that still has one is a store that stays. `remove_dir`
+/// refuses a directory with anything in it, so the check and the removal are the same call
+/// and nothing can slip between them.
+fn prune_empty_directories(what: &What) {
+    for directory in [
+        crate::service::key::path().parent().map(Path::to_path_buf),
+        Some(what.global.clone()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if std::fs::remove_dir(&directory).is_ok() {
+            crate::say!("  {} {}", style::label("Removed"), directory.display());
+        }
+    }
 }
 
 /// Forget every secret the survey named.

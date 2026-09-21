@@ -37,9 +37,33 @@ pub fn path() -> PathBuf {
 
 /// Write a new passphrase, readable by the service account and by nobody else.
 ///
+/// A key file, and whether this run is the one that made it.
+///
+/// **`made` is what lets a failed install undo itself.** `R34`: `install` writes the key
+/// before the step that copies the passwords, and that step is the one that used to fail on a
+/// server. What it left behind was a key file nothing owned — no unit was registered, so
+/// `service uninstall` said there was no service and `reset` never looked at it — and the
+/// next attempt reused its passphrase and failed the same way. A key this run did not make is
+/// left exactly as it was: it may be opening a store for a daemon that is running right now.
+#[derive(Debug, Clone)]
+pub struct Written {
+    /// Where it is.
+    pub path: PathBuf,
+    /// True when this run created it, and so may remove it again.
+    pub made: bool,
+}
+
+/// Remove a key file this run made, after something later went wrong.
+pub fn unmake(written: &Written) {
+    if !written.made {
+        return;
+    }
+    let _ = std::fs::remove_file(&written.path);
+}
+
 /// **Already there is left alone.** Rewriting it would lock the daemon out of the store it was
 /// already opening, so re-running `install` keeps the passphrase that is working.
-pub fn write(account: Option<&str>) -> Outcome<PathBuf> {
+pub fn write(account: Option<&str>) -> Outcome<Written> {
     let path = path();
     if path.exists() {
         crate::say!(
@@ -47,7 +71,7 @@ pub fn write(account: Option<&str>) -> Outcome<PathBuf> {
             style::label("Key"),
             style::dim(&format!("{} is already there, kept", path.display()))
         );
-        return Ok(path);
+        return Ok(Written { path, made: false });
     }
 
     if let Some(parent) = path.parent() {
@@ -74,7 +98,7 @@ pub fn write(account: Option<&str>) -> Outcome<PathBuf> {
 
     restrict(&path, account)?;
     crate::say!("  {} {}", style::label("Key"), path.display());
-    Ok(path)
+    Ok(Written { path, made: true })
 }
 
 /// Take the file away again.

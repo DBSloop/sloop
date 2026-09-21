@@ -342,6 +342,28 @@ fn wait_until(mut settled: impl FnMut() -> bool) -> bool {
 ///
 /// A service runs as another account and cannot read the keyring an interactive session used,
 /// so `sloop service install` seals a copy of sloop's own two passwords into the encrypted
+/// The person's store is untouched beside the daemon's, under its own passphrase.
+///
+/// **The assertion that would have caught `R34` before a server did.** Both files exist at
+/// once, sealed under two different passphrases; putting the daemon's copies in the person's
+/// file only ever appeared to work because a machine with a keyring never writes that file.
+fn the_two_stores_are_not_one(global: &std::path::Path, daemon: &std::path::Path) {
+    let theirs = global.join(crate::registry::file::SEALED_FILE);
+    assert_ne!(
+        theirs, daemon,
+        "the daemon must not share the person's file"
+    );
+
+    if !theirs.is_file() {
+        return;
+    }
+    let bytes = std::fs::read(&theirs).expect("readable");
+    assert!(
+        crate::secret::sealed::open_for_test(&bytes, "a passphrase the unit points at").is_err(),
+        "the daemon's passphrase opens the person's store, so they are the same file"
+    );
+}
+
 /// store under the key file's passphrase. This runs the real function against a real store and
 /// opens what it wrote.
 ///
@@ -384,10 +406,15 @@ fn the_service_gets_a_copy_of_both_passwords_that_its_key_file_opens() {
             super::credentials::copy_for_the_service(&global, &key_file).expect("the copy is made");
         assert_eq!(copied, super::credentials::Copied::Both);
 
-        // Both keys are in the store, and the key file's passphrase is what opens it — with
-        // the CRLF an editor leaves on the end taken off, which is the whole reason that
-        // trim exists.
-        let sealed = global.join(crate::registry::file::SEALED_FILE);
+        // Both keys are in the daemon's own file, and the key file's passphrase is what
+        // opens it — with the CRLF an editor leaves on the end taken off, which is the whole
+        // reason that trim exists.
+        //
+        // **`R34`: its own file, not the one beside it.** The store the person set up is
+        // sealed under the passphrase they typed, and one file cannot carry two. On a machine
+        // with a keyring the store was never written at all, which is why putting the copies
+        // in it appeared to work everywhere it was tried.
+        let sealed = global.join(crate::registry::file::SERVICE_SEALED_FILE);
         let bytes = std::fs::read(&sealed).expect("the sealed store was written");
         let entries =
             crate::secret::sealed::open_for_test(&bytes, "a passphrase the unit points at")
@@ -431,6 +458,8 @@ fn the_service_gets_a_copy_of_both_passwords_that_its_key_file_opens() {
             crate::secret::sealed::open_for_test(&bytes, "not the passphrase").is_err(),
             "the store opened under a passphrase that is not its own"
         );
+
+        the_two_stores_are_not_one(&global, &sealed);
 
         // Uninstalling takes the copies out again, and leaves the store readable.
         assert_eq!(

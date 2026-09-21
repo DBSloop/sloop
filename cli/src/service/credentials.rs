@@ -62,7 +62,11 @@ pub fn copy_for_the_service(store: &Path, key_file: &Path) -> Outcome<Copied> {
     };
 
     let passphrase = read_passphrase(key_file)?;
-    let vault = sealed::Vault::File(&store.join(crate::registry::file::SEALED_FILE));
+    // **The daemon's file, not the person's.** See `registry::file::SERVICE_SEALED_FILE`:
+    // these are sealed under the key file's passphrase, and the store beside them is sealed
+    // under the one somebody typed.
+    let path = store.join(crate::registry::file::SERVICE_SEALED_FILE);
+    let vault = sealed::Vault::File(&path);
 
     // The superuser first: it is what starts the cluster, so a daemon that has only the other
     // one gets further and still fails.
@@ -89,7 +93,7 @@ pub fn copy_for_the_service(store: &Path, key_file: &Path) -> Outcome<Copied> {
 /// thing that turns up in a security review two years later. Best effort and named in the
 /// report, the same way the key file itself is.
 pub fn remove_the_copies(store: &Path, key_file: &Path) -> Option<String> {
-    let path = store.join(crate::registry::file::SEALED_FILE);
+    let path = store.join(crate::registry::file::SERVICE_SEALED_FILE);
     if !path.is_file() || !key_file.is_file() {
         return None;
     }
@@ -99,9 +103,10 @@ pub fn remove_the_copies(store: &Path, key_file: &Path) -> Option<String> {
     };
     let vault = sealed::Vault::File(&path);
 
-    // **Only the two this module put there.** A headless machine keeps every password in this
-    // file, and emptying it because a service was removed would take a registry's worth of
-    // credentials with it.
+    // **Only the two this module put there, even though the file is its own.** `R34` gave the
+    // daemon a file of its own, so deleting it outright would be correct today — and would
+    // stop being correct the moment anything else is ever copied into it. Taking out what was
+    // put in cannot become wrong later.
     let Ok(Some(ready)) = record::reopen(store) else {
         return None;
     };

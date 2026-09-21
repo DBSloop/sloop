@@ -165,16 +165,25 @@ fn install(
         style::dim(&format!("with {}", mechanism.spoken()))
     );
 
-    let key_file = key::write(account.as_deref())?;
+    let written = key::write(account.as_deref())?;
+    let key_file = written.path.clone();
 
     // **Before the unit, because it is the half that actually makes the service work.** A
     // service runs as another account and cannot read the keyring this session can; this is
     // the one moment both are true, so the copy is made now or never. See
     // `service::credentials`.
-    credentials::announce(
-        credentials::copy_for_the_service(&store, &key_file)?,
-        &store,
-    );
+    //
+    // **And a failure here takes the key file with it.** Nothing else owns one: no unit has
+    // been registered yet, so `uninstall` would find no service to remove and leave a file
+    // behind whose passphrase the next attempt would reuse. `R34`.
+    let copied = match credentials::copy_for_the_service(&store, &key_file) {
+        Ok(copied) => copied,
+        Err(why) => {
+            key::unmake(&written);
+            return Err(why);
+        }
+    };
+    credentials::announce(copied, &store);
 
     let definition = Definition {
         program,

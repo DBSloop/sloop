@@ -125,6 +125,23 @@ impl Vault<'static> {
 }
 
 impl Vault<'_> {
+    /// Where `sloop service install` keeps its copy of what this vault holds.
+    ///
+    /// **Beside it, under a different passphrase** — see
+    /// `registry::file::SERVICE_SEALED_FILE`. `None` for a vault that is rows in sloop's own
+    /// database: the daemon reaches those with the two passwords this file holds, so there is
+    /// nothing to copy and nowhere to copy it to.
+    #[must_use]
+    pub fn beside_it_for_the_service(&self) -> Option<std::path::PathBuf> {
+        match self {
+            Self::File(path) => Some(
+                path.parent()?
+                    .join(crate::registry::file::SERVICE_SEALED_FILE),
+            ),
+            Self::Rows(_) => None,
+        }
+    }
+
     /// The bytes as they stand, or empty where there is no store yet.
     fn bytes(&self) -> Outcome<Vec<u8>> {
         match self {

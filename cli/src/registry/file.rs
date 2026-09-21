@@ -29,6 +29,17 @@ pub const FILE: &str = "registry.toml";
 /// The encrypted password file, beside the registry it belongs to.
 pub const SEALED_FILE: &str = "secrets.sealed";
 
+/// The daemon's own copy of those passwords, sealed under its own passphrase.
+///
+/// **Two files, because there are two passphrases and one file cannot have both.** The store
+/// above is sealed under whatever the person who set the machine up typed;
+/// `/etc/sloop/service.key` holds a generated one that only the daemon can read. `R34`: on a
+/// desktop this never mattered, because the keyring answers and `secrets.sealed` is never
+/// written at all — so `service install` created it fresh under the key file's passphrase and
+/// nobody noticed the two were different. On a server there is no keyring, the file is
+/// already there under the person's passphrase, and the second one cannot open it.
+pub const SERVICE_SEALED_FILE: &str = "service.sealed";
+
 /// Bumped only when the shape below changes in a way an older sloop could misread.
 const VERSION: u32 = 1;
 

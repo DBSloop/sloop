@@ -258,7 +258,14 @@ fn the_services_copy(lookup: &Lookup<'_>, why: Failure) -> Outcome<Secret> {
         return Err(why);
     }
 
-    sealed::get(lookup.vault, lookup.key).map_err(|second| {
+    // **The daemon's own file, not the one beside it.** `R34`: the two are sealed under
+    // different passphrases, and the daemon only has the one in its key file.
+    let Some(path) = lookup.vault.beside_it_for_the_service() else {
+        return Err(why);
+    };
+    let ours = sealed::Vault::File(&path);
+
+    sealed::get(&ours, lookup.key).map_err(|second| {
         second.hint(
             "this is running as a service, so the keyring is not readable and the copy              `sloop service install` makes was not there either. Run `sloop service install`              again, as the user whose keyring holds it.",
         )
