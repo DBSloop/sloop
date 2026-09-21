@@ -626,12 +626,6 @@ pub(crate) fn passphrase_without_a_terminal() -> Outcome<Zeroizing<String>> {
     passphrase(false)
 }
 
-/// Put a passphrase in [`ASKED`], as a run that had a terminal would have.
-#[cfg(test)]
-pub(crate) fn remember_for_test(passphrase: &str) {
-    let _ = ASKED.set(Zeroizing::new(passphrase.to_owned()));
-}
-
 #[cfg(test)]
 pub(crate) fn round_trip(
     entries: &[(String, Secret)],

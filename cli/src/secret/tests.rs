@@ -210,21 +210,27 @@ fn the_encrypted_file_notices_an_edited_header() {
     assert!(super::sealed::open_for_test(&flipped, "passphrase").is_err());
 }
 
-/// Rule 4 where it actually bites, and `R32` in the same test on purpose.
+/// Rule 4, where it actually bites. A test process has no terminal, which is exactly the
+/// situation a scheduled job is in.
 ///
-/// **One test, because what it is asserting about is process-wide.** The passphrase a run
-/// has already been given is remembered for that process, so a second test setting it would
-/// decide whether the first one still sees a machine with nothing to go on. The two halves
-/// have to run in this order, and the only way to guarantee an order is to be one test.
+/// **`R32`'s half of this is not asserted here, and that is deliberate.** What a run has
+/// already been asked for is remembered for the whole process, so a test that set it would
+/// be deciding, for every other test in this binary, whether this machine can keep a secret
+/// at all — `server::tests::this_machine_can_keep_a_secret` asks exactly that question by
+/// calling `keep_somewhere`, and on a Linux runner with no keyring the answer is what makes
+/// a dozen cluster tests skip rather than run against a machine that cannot hold a password.
+/// Setting it from here turned that gate green and took the build red with it.
+///
+/// It is measured instead, on the platform it matters on: `sloop db list` on a headless
+/// Debian box as root printed two prompts with the released `0.1.3` and one with `R32`. See
+/// the entry.
 #[test]
-fn it_asks_once_a_run_and_never_again() {
+fn with_no_terminal_it_names_the_variable_instead_of_stopping_to_ask() {
     assert!(
         std::env::var_os("SLOOP_PASSPHRASE").is_none(),
         "this test needs SLOOP_PASSPHRASE unset"
     );
 
-    // Before anything has been asked: a test process has no terminal, which is exactly the
-    // situation a scheduled job is in, so it names the variable rather than stopping.
     let failure = super::sealed::passphrase_without_a_terminal().unwrap_err();
 
     assert_eq!(failure.exit().code(), 2);
@@ -234,15 +240,6 @@ fn it_asks_once_a_run_and_never_again() {
             .is_some_and(|hint| hint.contains("SLOOP_PASSPHRASE")),
         "it has to name the way out: {failure:?}"
     );
-
-    // `R32`: once a run has been given one, every later lookup uses it. This is the whole
-    // fix, and the shape of the bug is what it rules out -- `Store::open` unseals twice and
-    // the menu opens the store more than once, which was seven prompts before one screen.
-    super::sealed::remember_for_test("the one this run was given");
-
-    let again = super::sealed::passphrase_without_a_terminal()
-        .expect("a run that has already been asked does not need a terminal to be asked again");
-    assert_eq!(&*again, "the one this run was given");
 }
 
 #[test]
