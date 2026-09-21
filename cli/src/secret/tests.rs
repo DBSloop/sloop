@@ -210,15 +210,21 @@ fn the_encrypted_file_notices_an_edited_header() {
     assert!(super::sealed::open_for_test(&flipped, "passphrase").is_err());
 }
 
-/// Rule 4, where it actually bites. A test process has no terminal, which is exactly the
-/// situation a scheduled job is in.
+/// Rule 4 where it actually bites, and `R32` in the same test on purpose.
+///
+/// **One test, because what it is asserting about is process-wide.** The passphrase a run
+/// has already been given is remembered for that process, so a second test setting it would
+/// decide whether the first one still sees a machine with nothing to go on. The two halves
+/// have to run in this order, and the only way to guarantee an order is to be one test.
 #[test]
-fn with_no_terminal_it_names_the_variable_instead_of_stopping_to_ask() {
+fn it_asks_once_a_run_and_never_again() {
     assert!(
         std::env::var_os("SLOOP_PASSPHRASE").is_none(),
         "this test needs SLOOP_PASSPHRASE unset"
     );
 
+    // Before anything has been asked: a test process has no terminal, which is exactly the
+    // situation a scheduled job is in, so it names the variable rather than stopping.
     let failure = super::sealed::passphrase_without_a_terminal().unwrap_err();
 
     assert_eq!(failure.exit().code(), 2);
@@ -228,6 +234,15 @@ fn with_no_terminal_it_names_the_variable_instead_of_stopping_to_ask() {
             .is_some_and(|hint| hint.contains("SLOOP_PASSPHRASE")),
         "it has to name the way out: {failure:?}"
     );
+
+    // `R32`: once a run has been given one, every later lookup uses it. This is the whole
+    // fix, and the shape of the bug is what it rules out -- `Store::open` unseals twice and
+    // the menu opens the store more than once, which was seven prompts before one screen.
+    super::sealed::remember_for_test("the one this run was given");
+
+    let again = super::sealed::passphrase_without_a_terminal()
+        .expect("a run that has already been asked does not need a terminal to be asked again");
+    assert_eq!(&*again, "the one this run was given");
 }
 
 #[test]

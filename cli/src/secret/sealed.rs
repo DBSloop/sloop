@@ -12,6 +12,7 @@
 
 use std::io::IsTerminal;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
@@ -493,6 +494,22 @@ fn random(buffer: &mut [u8]) -> Outcome<()> {
     })
 }
 
+/// The passphrase this run is using, once it has one.
+///
+/// **One prompt per run, and `R32` exists because there were seven.** Nothing about opening
+/// this file is per-lookup — the same passphrase opens the same file every time — but every
+/// lookup used to ask again from scratch. `Store::open` alone unseals twice, once for the
+/// cluster superuser and once for `sloop_db_admin`, and the menu opens the store more than
+/// once while working out what to draw. The owner counted seven prompts before the first
+/// screen appeared, with nothing said in between, so it read as the tool rejecting every
+/// answer rather than asking a new question each time.
+///
+/// **What was typed, not what turned out to be right.** Remembering only a passphrase that
+/// opened the file would leave a wrong one asking again per lookup, which is the same seven
+/// prompts wearing a different hat. A run gets one answer; if it was wrong, the failure is
+/// reported and the next run asks again.
+static ASKED: OnceLock<Zeroizing<String>> = OnceLock::new();
+
 /// Get the passphrase that unlocks the file.
 ///
 /// The variable first, so a scheduled run works. Otherwise a prompt — but only when there
@@ -511,6 +528,13 @@ fn passphrase(confirm: bool) -> Outcome<Zeroizing<String>> {
     // [`PASSPHRASE_FILE_VAR`].
     if let Some(from_a_file) = from_the_file()? {
         return Ok(from_a_file);
+    }
+
+    // **Already asked, so not asked again** — see [`ASKED`]. This sits below the variable and
+    // the key file because those two are what a service is told, and a service that was given
+    // one has nothing to remember.
+    if let Some(asked) = ASKED.get() {
+        return Ok(asked.clone());
     }
 
     if !std::io::stdin().is_terminal() {
@@ -547,6 +571,7 @@ fn passphrase(confirm: bool) -> Outcome<Zeroizing<String>> {
         );
     }
 
+    let _ = ASKED.set(first.clone());
     Ok(first)
 }
 
@@ -599,6 +624,12 @@ fn from_the_file() -> Outcome<Option<Zeroizing<String>>> {
 #[cfg(test)]
 pub(crate) fn passphrase_without_a_terminal() -> Outcome<Zeroizing<String>> {
     passphrase(false)
+}
+
+/// Put a passphrase in [`ASKED`], as a run that had a terminal would have.
+#[cfg(test)]
+pub(crate) fn remember_for_test(passphrase: &str) {
+    let _ = ASKED.set(Zeroizing::new(passphrase.to_owned()));
 }
 
 #[cfg(test)]
