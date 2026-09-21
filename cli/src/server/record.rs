@@ -243,15 +243,24 @@ fn save(global: &Path, raw: &RawFile) -> Outcome<()> {
     let text = toml::to_string_pretty(raw)
         .map_err(|error| Failure::usage(format!("could not write {FILE}: {error}")))?;
 
-    std::fs::create_dir_all(global).map_err(|error| {
-        Failure::usage(format!("could not create {}: {error}", global.display()))
-    })?;
+    crate::account::prepare_store(global)?;
     std::fs::write(path(global), text)
-        .map_err(|error| Failure::usage(format!("could not write {FILE}: {error}")))
+        .map_err(|error| Failure::usage(format!("could not write {FILE}: {error}")))?;
+
+    // A machine-wide store is read by accounts that did not write it, and this is the file
+    // saying where the cluster is. `crate::account::share_file` is what decides whether
+    // there is anything to do about that.
+    crate::account::share_file(&path(global));
+    Ok(())
 }
 
 /// Write down what Setup settled, and put the password where this machine keeps secrets.
 pub fn write(global: &Path, server: &Server, password: &Secret) -> Outcome<()> {
+    // **The store before anything is put in it.** The sealed vault is written below, and a
+    // file created before its directory carries the store's group is a file the group cannot
+    // read — which on a machine-wide store is every account but the one that ran Setup.
+    crate::account::prepare_store(global)?;
+
     let route = crate::secret::keep_somewhere(
         credential_key(server),
         password,

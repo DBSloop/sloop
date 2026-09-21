@@ -195,6 +195,39 @@ impl Locations {
 
         Some(super::normalize(&path))
     }
+
+    /// The store a whole machine shares, when this platform has such a place.
+    ///
+    /// **`~/.sloop` cannot be the answer for a machine.** Root's home is `0700` on every
+    /// Linux built this decade, so a store inside it is unreadable to every other account and
+    /// unreachable even to the postmaster sloop starts — which is how `R31` began, with a
+    /// cluster that could not be created under `/root`. `/var/lib/<name>` is where the
+    /// filesystem standard puts state an installed program keeps, and it is where Debian's
+    /// own PostgreSQL keeps its clusters.
+    ///
+    /// **`None` on Windows**, which has no uid to drop to and no refusal to work around, so
+    /// nothing there changes.
+    #[must_use]
+    pub fn machine_dir(&self) -> Option<PathBuf> {
+        let path = match self.platform {
+            Platform::Linux => PathBuf::from("/var/lib/sloop"),
+            Platform::MacOs => PathBuf::from("/Library/Application Support/sloop"),
+            Platform::Windows => return None,
+        };
+
+        Some(super::normalize(&path))
+    }
+}
+
+/// Is this the store a whole machine shares, rather than one account's own?
+///
+/// Asked by the two places that create files in a store and have to know which kind they are
+/// writing into — see [`crate::account::prepare_store`].
+#[must_use]
+pub fn is_machine_store(dir: &Path) -> bool {
+    Locations::from_process()
+        .machine_dir()
+        .is_some_and(|machine| machine == dir)
 }
 
 /// Does this path start at the root, by POSIX rules?
@@ -239,6 +272,49 @@ mod tests {
 
     fn slashes(path: &std::path::Path) -> String {
         path.to_string_lossy().replace('\\', "/")
+    }
+
+    #[test]
+    fn linux_shares_a_machine_at_var_lib() {
+        assert_eq!(
+            Locations::new(Platform::Linux)
+                .machine_dir()
+                .as_deref()
+                .map(slashes),
+            Some("/var/lib/sloop".to_owned())
+        );
+    }
+
+    #[test]
+    fn macos_shares_a_machine_under_library() {
+        // `~/Library/Application Support` is one account's. Without the `~` it is the
+        // machine's, and that difference is the whole of the choice.
+        assert_eq!(
+            Locations::new(Platform::MacOs)
+                .machine_dir()
+                .as_deref()
+                .map(slashes),
+            Some("/Library/Application Support/sloop".to_owned())
+        );
+    }
+
+    #[test]
+    fn windows_shares_nothing_because_nothing_there_refuses_root() {
+        // `None` is what keeps the rest of `R31` off Windows: no relocated store, no service
+        // account, no dropped uid.
+        assert_eq!(Locations::new(Platform::Windows).machine_dir(), None);
+    }
+
+    #[test]
+    fn the_machine_store_does_not_follow_the_home_directory() {
+        // It belongs to the machine, so `HOME` has nothing to say about it. One that moved
+        // with `HOME` would be a different store under `sudo` than under `sudo -H`.
+        assert_eq!(
+            Locations::new(Platform::Linux)
+                .with_home("/home/somebody-else")
+                .machine_dir(),
+            Locations::new(Platform::Linux).machine_dir()
+        );
     }
 
     #[test]

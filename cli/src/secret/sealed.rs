@@ -155,7 +155,13 @@ impl Vault<'_> {
                         Exit::Usage,
                         format!("could not write {}: {error}", path.display()),
                     )
-                })
+                })?;
+
+                // `R31`: in a machine-wide store this is the file every account on the
+                // machine opens, so it carries the store's group. What guards it is the
+                // passphrase and has never been its mode.
+                crate::account::share_file(path);
+                Ok(())
             }
             Self::Rows(rows) => rows.write(blob),
         }

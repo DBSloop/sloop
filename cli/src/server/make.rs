@@ -239,9 +239,29 @@ fn initdb(server: &Server, data: &Path) -> Outcome<()> {
         })?;
     }
 
-    crate::say!("  {} {}", style::label("Creating"), data.display());
+    let service = as_whom()?;
+    if let Some(service) = service.as_ref()
+        && let Some(parent) = data.parent()
+    {
+        // **The parent, and `initdb` makes the rest.** A cluster's own directory has to be
+        // `0700` and owned by the account the postmaster runs as; `initdb` creates it that
+        // way itself, and all it wants from root is somewhere it is allowed to create it.
+        crate::account::give(parent, service)?;
+    }
 
-    let status = Command::new(server.program("initdb"))
+    crate::say!("  {} {}", style::label("Creating"), data.display());
+    if let Some(service) = service.as_ref() {
+        crate::say!(
+            "    {}",
+            style::dim(&format!(
+                "as {}, because PostgreSQL will not run a cluster as root",
+                service.name
+            ))
+        );
+    }
+
+    let mut command = Command::new(server.program("initdb"));
+    command
         .arg("-D")
         .arg(data)
         .args(["-U", &server.superuser])
@@ -252,18 +272,44 @@ fn initdb(server: &Server, data: &Path) -> Outcome<()> {
         .args(["--auth-local", "trust", "--auth-host", "trust"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .status()
+        .stderr(Stdio::piped());
+    if let Some(service) = service.as_ref() {
+        crate::account::run_as(&mut command, service);
+    }
+
+    // **What `initdb` said, not a guess at it.** This hint used to read *the directory has to
+    // be empty and writable*, and the failure it was guessing about was `initdb` refusing to
+    // run as root — on a directory that was both. The sentence the program printed is the
+    // difference between a fix and an afternoon spent reading permissions. `R31`.
+    let done = command
+        .output()
         .map_err(|error| ran_nothing("initdb", &error.to_string()))?;
 
-    if !status.success() {
+    if !done.status.success() {
         return Err(Failure::new(
             Exit::Usage,
             format!("initdb could not create a cluster at {}", data.display()),
         )
-        .hint("the directory has to be empty and writable by the account sloop is running as"));
+        .hint(what_it_said(
+            &String::from_utf8_lossy(&done.stderr),
+            "initdb printed nothing to say why",
+        )));
     }
 
     Ok(())
+}
+
+/// The account a server program runs as, or `None` when this run is not root.
+///
+/// **Root is the whole of the question.** PostgreSQL's three programs refuse uid 0 and
+/// nothing else about them cares who runs them, so a run that is not root resolves nothing,
+/// creates nothing and drops nothing — see `crate::account`.
+fn as_whom() -> Outcome<Option<crate::account::Service>> {
+    if crate::account::is_root() {
+        crate::account::service().map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// Start it, on loopback and on sloop's own port.
@@ -273,7 +319,8 @@ fn start(server: &Server) -> Outcome<()> {
             .hint("`sloop server list` shows the ones it did, and how to reach each")
     })?;
 
-    let status = Command::new(server.program("pg_ctl"))
+    let mut command = Command::new(server.program("pg_ctl"));
+    command
         .arg("-D")
         .arg(data)
         .arg("-o")
@@ -298,7 +345,12 @@ fn start(server: &Server) -> Outcome<()> {
         // not going to stop. The server's own output goes to the log file above, which is
         // where anything worth reading after a failure ends up anyway.
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(service) = as_whom()?.as_ref() {
+        crate::account::run_as(&mut command, service);
+    }
+
+    let status = command
         .status()
         .map_err(|error| ran_nothing("pg_ctl", &error.to_string()))?;
 
@@ -344,9 +396,22 @@ fn last_words(log: &Path) -> String {
         return format!("{} would say why, and could not be read", log.display());
     };
 
-    let tail: Vec<&str> = text.lines().rev().take(8).collect();
+    what_it_said(&text, &format!("{} is empty", log.display()))
+}
+
+/// The last few lines of what a program printed, or `absent` when it printed nothing.
+///
+/// Eight, because a PostgreSQL failure is a sentence, a hint and a line of context, and the
+/// whole of a log would bury all three.
+fn what_it_said(text: &str, absent: &str) -> String {
+    let tail: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .rev()
+        .take(8)
+        .collect();
     if tail.is_empty() {
-        return format!("{} is empty", log.display());
+        return absent.to_owned();
     }
 
     tail.into_iter().rev().collect::<Vec<_>>().join("\n")
@@ -405,12 +470,27 @@ fn require_a_password_from_now_on(server: &Server, data: &Path) -> Outcome<()> {
     std::fs::write(&path, hardened + "\n")
         .map_err(|error| Failure::usage(format!("could not write {}: {error}", path.display())))?;
 
-    let status = Command::new(server.program("pg_ctl"))
+    // **Root wrote it, so root hands it back.** Everything in a data directory belongs to the
+    // account the postmaster runs as; a `pg_hba.conf` left owned by root is a file the server
+    // cannot read, and the cluster that comes back after the next reboot refuses every
+    // connection made to it.
+    let service = as_whom()?;
+    if let Some(service) = service.as_ref() {
+        crate::account::give(&path, service)?;
+    }
+
+    let mut command = Command::new(server.program("pg_ctl"));
+    command
         .arg("-D")
         .arg(data)
         .arg("reload")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::null());
+    if let Some(service) = service.as_ref() {
+        crate::account::run_as(&mut command, service);
+    }
+
+    let status = command
         .status()
         .map_err(|error| ran_nothing("pg_ctl", &error.to_string()))?;
 

@@ -165,7 +165,7 @@ impl Machine {
             },
             &crate::server::own::Choosing::unsupplied(),
         )?;
-        crate::server::announce(&settled.ready);
+        crate::server::announce(&settled.ready, &self.global);
         crate::server::announce_own(&settled);
         Ok(Exit::Success)
     }

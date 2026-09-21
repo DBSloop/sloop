@@ -143,6 +143,46 @@ struct RawRegistry {
     encryption: Option<RawKey>,
 }
 
+/// The failure for a store that is there and shut to this account.
+///
+/// **"This machine has not been set up" is a lie on a shared store**, and the expensive kind:
+/// it sends somebody to run `sloop setup` on a machine that is already set up, which is how
+/// `R31` started in the first place — a true sentence about the wrong thing. What is actually
+/// wrong is one group membership, so that is what it says.
+///
+/// `None` when the record is genuinely absent, which is every machine before Setup.
+fn locked_out(global: &Path) -> Option<Failure> {
+    let record = global.join(crate::server::record::FILE);
+    if !record.exists() {
+        return None;
+    }
+    if std::fs::File::open(&record)
+        .err()
+        .is_none_or(|why| why.kind() != std::io::ErrorKind::PermissionDenied)
+    {
+        return None;
+    }
+
+    let group = crate::account::group_of(global);
+    Some(
+        Failure::new(
+            Exit::Usage,
+            format!(
+                "{} is set up, and this account is not allowed to read it",
+                global.display()
+            ),
+        )
+        .hint(match group {
+            Some(group) => format!(
+                "this store belongs to the {group} group: `sudo usermod -aG {group} $(whoami)`, \
+                 then log in again"
+            ),
+            None => "somebody with root on this machine has to give this account access to it"
+                .to_owned(),
+        }),
+    )
+}
+
 impl Store {
     /// Open sloop's own database, or say the machine has not been set up.
     ///
@@ -167,12 +207,14 @@ impl Store {
     /// The same, but a machine that has not been set up is an error that says what to run.
     pub fn require(global: &Path) -> Outcome<Self> {
         Self::open(global)?.ok_or_else(|| {
-            Failure::new(
-                Exit::Usage,
-                "sloop keeps its registry in its own PostgreSQL, and this machine has not \
-                 been set up",
-            )
-            .hint("run `sloop setup` once — it is safe to run again afterwards")
+            locked_out(global).unwrap_or_else(|| {
+                Failure::new(
+                    Exit::Usage,
+                    "sloop keeps its registry in its own PostgreSQL, and this machine has not \
+                     been set up",
+                )
+                .hint("run `sloop setup` once — it is safe to run again afterwards")
+            })
         })
     }
 

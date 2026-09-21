@@ -613,6 +613,22 @@ fn plural(count: usize, what: &str) -> String {
     }
 }
 
+/// Hand `pg_ctl` the account a root run gave the cluster to.
+///
+/// **`R31`: root cannot stop a cluster either.** `pg_ctl` refuses uid 0 for exactly the same
+/// reason `initdb` does, so a reset run by the account that set the machine up would leave
+/// the postmaster running and then delete the directory underneath it. Best effort, like
+/// everything else on this path: a machine with no service account has nothing to drop to,
+/// and the stop is attempted as whoever is running.
+fn as_the_owner(command: &mut Command) {
+    if !crate::account::is_root() {
+        return;
+    }
+    if let Ok(service) = crate::account::service() {
+        crate::account::run_as(command, &service);
+    }
+}
+
 /// Stop a server `sloop server install` put here, so its directory can actually be deleted.
 ///
 /// **Best effort, and every branch of it.** One that is already stopped, one whose binaries
@@ -622,14 +638,17 @@ fn plural(count: usize, what: &str) -> String {
 fn stop_installed(global: &Path, one: &crate::install::Installed) {
     let stopped = match one.engine {
         // PostgreSQL ships a supervisor that knows how to ask a cluster to close its files.
-        crate::engine::Engine::Postgres => Command::new(one.bin.join("pg_ctl"))
-            .arg("-D")
-            .arg(&one.data)
-            .args(["stop", "-m", "fast", "-w"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success()),
+        crate::engine::Engine::Postgres => {
+            let mut command = Command::new(one.bin.join("pg_ctl"));
+            command
+                .arg("-D")
+                .arg(&one.data)
+                .args(["stop", "-m", "fast", "-w"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            as_the_owner(&mut command);
+            command.status().is_ok_and(|status| status.success())
+        }
 
         // The MySQL family has no supervisor: the server is asked to shut down over its own
         // protocol, as the superuser, which means the password. `MYSQL_PWD` on this child and
@@ -689,14 +708,17 @@ fn stop_the_cluster(server: &server::Server) {
         return;
     };
 
-    let stopped = Command::new(server.program("pg_ctl"))
+    let mut command = Command::new(server.program("pg_ctl"));
+    command
         .arg("-D")
         .arg(data)
         .args(["-m", "immediate", "-w", "stop"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+        .stderr(Stdio::null());
+    as_the_owner(&mut command);
+
+    let stopped = command.status();
 
     if stopped.is_ok_and(|status| status.success()) {
         crate::say!("  {} {}", style::label("Stopped"), data.display());

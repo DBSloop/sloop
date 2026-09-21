@@ -5,6 +5,7 @@
 //! command that will one day read one already resolves which one it would read and says
 //! so, so the order in `registry` is not a thing that only tests can see.
 
+mod account;
 mod backup;
 mod cli;
 mod commands;
@@ -134,7 +135,7 @@ fn run(cli: &Cli) -> Outcome<Exit> {
                     stdin: *db_password_stdin,
                 },
             )?;
-            server::announce(&settled.ready);
+            server::announce(&settled.ready, &global);
             server::announce_own(&settled);
             Ok(Exit::Success)
         }

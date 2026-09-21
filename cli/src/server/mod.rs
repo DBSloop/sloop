@@ -222,6 +222,30 @@ pub struct Settled {
     pub schema: schema::Applied,
 }
 
+/// Say who else this store belongs to, when it is one a whole machine shares.
+///
+/// **Said by Setup, because a group nobody was told about is a group nobody joins.** The
+/// second sentence earns its place as much as the first: a shell that was already open when
+/// the account was added is a shell that does not have the group yet, and the failure that
+/// causes reads as sloop being broken.
+///
+/// Silent everywhere else, which is every per-user store on every platform.
+fn announce_sharing(global: &Path) {
+    if !crate::account::is_root() || !crate::registry::locations::is_machine_store(global) {
+        return;
+    }
+    let Ok(service) = crate::account::service() else {
+        return;
+    };
+
+    crate::say!(
+        "{} {}, for every account on this machine",
+        style::heading("Store:"),
+        global.display()
+    );
+    crate::say!("  {}", style::dim(&crate::account::how_to_join(&service)));
+}
+
 /// Find a PostgreSQL 18 sloop can use, making one if the machine has none.
 ///
 /// **Idempotent, because Setup has to be re-runnable.** A second call finds the record from
@@ -286,8 +310,10 @@ pub fn set_up(
     })
 }
 
-/// Say what `ensure` settled, in the two lines a report wants.
-pub fn announce(ready: &Ready) {
+/// Say what `ensure` settled, in the two lines a report wants — and, on a machine-wide
+/// store, the one line that lets a second account in.
+pub fn announce(ready: &Ready, global: &Path) {
+    announce_sharing(global);
     crate::say!(
         "{} {}",
         style::heading(if ready.made_now {

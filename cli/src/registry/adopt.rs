@@ -27,7 +27,21 @@ use super::locations::Locations;
 /// store while the real one sits at the old path. It costs one `exists` call per run once
 /// the move has happened, because the old directory is gone by then.
 pub fn global(locations: &Locations) -> Outcome<PathBuf> {
-    let target = locations.global_dir()?;
+    let personal = locations.global_dir()?;
+
+    if let Some(machine) = locations.machine_dir()
+        && pick(
+            Found::of(personal.exists(), machine.exists()),
+            crate::account::is_root(),
+        ) == Which::Machine
+    {
+        // **A machine-wide store is never adopted into, and that is the point of returning
+        // here.** `~/.config/sloop` belonged to one account; moving it into a store every
+        // account on the box reads would hand that account's databases to all of them.
+        return Ok(machine);
+    }
+
+    let target = personal;
 
     let Some(old) = locations.legacy_dir().filter(|old| *old != target) else {
         return Ok(target);
@@ -62,6 +76,77 @@ pub fn global(locations: &Locations) -> Outcome<PathBuf> {
     )));
 
     Ok(target)
+}
+
+/// Which of the two stores a run uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Which {
+    /// `~/.sloop`, this account's own.
+    Personal,
+    /// `/var/lib/sloop`, the one every account on the machine reads.
+    Machine,
+}
+
+/// Which store this run works on — `R31`, and the whole of it is these four lines.
+///
+/// **An account that already has its own store keeps it.** That is first for a reason: a
+/// machine-wide store appearing later must never make somebody's registered databases
+/// disappear, and "the one you have been using" is the only rule that cannot do that.
+///
+/// **Then the machine-wide one, if the machine has one.** This is what the owner asked for —
+/// a store root created is the store `ubuntu@` finds afterwards, with nothing to configure.
+///
+/// **Then root makes one and everybody else keeps their own.** A root run has nowhere else
+/// to put a cluster: its home is `0700`, so the postmaster it starts could not read a data
+/// directory inside it even as the account that owns it.
+///
+/// Pure, and takes the two `exists` answers rather than asking, so every branch is checkable
+/// from a machine that is none of these platforms.
+const fn pick(found: Found, root: bool) -> Which {
+    match found {
+        // **An account that already has its own store keeps it.** First for a reason: a
+        // machine-wide store appearing later must never make somebody's registered databases
+        // look as though they had been wiped.
+        Found::Personal | Found::Both => Which::Personal,
+        // **What the owner asked for.** A store root made is the store the next account
+        // finds, with nothing to configure and nothing to be told.
+        Found::Machine => Which::Machine,
+        // **Root has nowhere else to put a cluster.** Its home is `0700`, so the postmaster
+        // could not read a data directory inside it even as the account that owns one.
+        // Anybody else makes their own, exactly as they always did.
+        Found::Neither => {
+            if root {
+                Which::Machine
+            } else {
+                Which::Personal
+            }
+        }
+    }
+}
+
+/// Which of the two stores this machine already has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Found {
+    /// A fresh machine: whoever runs first decides.
+    Neither,
+    /// This account has `~/.sloop`.
+    Personal,
+    /// The machine has a store and this account has never made one.
+    Machine,
+    /// Both, which is a machine somebody used before it was shared.
+    Both,
+}
+
+impl Found {
+    /// From the two questions the disk answers.
+    const fn of(personal: bool, machine: bool) -> Self {
+        match (personal, machine) {
+            (true, true) => Self::Both,
+            (true, false) => Self::Personal,
+            (false, true) => Self::Machine,
+            (false, false) => Self::Neither,
+        }
+    }
 }
 
 /// Does this directory exist and have anything in it?
@@ -239,6 +324,52 @@ mod tests {
 
     fn read(path: &Path) -> String {
         std::fs::read_to_string(path).expect("the file should be there")
+    }
+
+    /// `R31`'s rule, one case each. Pure, so every branch is reachable from a host that is
+    /// none of the platforms it decides for.
+    mod which_store {
+        use super::super::{Found, Which, pick};
+
+        const ROOT: bool = true;
+        const ANYBODY: bool = false;
+
+        #[test]
+        fn a_store_you_already_have_is_the_one_you_keep() {
+            // First, and first for a reason: a machine-wide store appearing later must never
+            // make somebody's registered databases look as though they were wiped.
+            assert_eq!(pick(Found::Both, ROOT), Which::Personal);
+            assert_eq!(pick(Found::Both, ANYBODY), Which::Personal);
+            assert_eq!(pick(Found::Personal, ROOT), Which::Personal);
+            assert_eq!(pick(Found::Personal, ANYBODY), Which::Personal);
+        }
+
+        #[test]
+        fn the_machine_store_is_found_by_an_account_that_never_made_one() {
+            // The whole of what the owner asked for: root sets the machine up, and `ubuntu@`
+            // afterwards sees the same databases with nothing to configure.
+            assert_eq!(pick(Found::Machine, ANYBODY), Which::Machine);
+        }
+
+        #[test]
+        fn root_makes_the_machine_store_rather_than_one_under_slash_root() {
+            // Root's home is 0700, so a cluster inside it cannot be read by the account the
+            // postmaster runs as. This line is why `initdb` stopped refusing.
+            assert_eq!(pick(Found::Neither, ROOT), Which::Machine);
+        }
+
+        #[test]
+        fn everybody_else_keeps_their_own() {
+            assert_eq!(pick(Found::Neither, ANYBODY), Which::Personal);
+        }
+
+        #[test]
+        fn what_is_on_the_disk_reads_the_way_it_is_asked() {
+            assert_eq!(Found::of(false, false), Found::Neither);
+            assert_eq!(Found::of(true, false), Found::Personal);
+            assert_eq!(Found::of(false, true), Found::Machine);
+            assert_eq!(Found::of(true, true), Found::Both);
+        }
     }
 
     #[test]
